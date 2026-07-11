@@ -60,6 +60,13 @@ export interface ApiStore {
   }): void;
 }
 
+export class ActionResultDomainError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'ActionResultDomainError';
+  }
+}
+
 export interface AppAgentService {
   turnDetailed(
     request: AgentTurnRequest,
@@ -207,8 +214,8 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
 
   app.post('/api/sessions/:id/turns', async (request, reply) => {
     const sessionId = parseSessionId(request.params);
-    requireSession(dependencies.store, sessionId);
     const body = parseBody(AgentTurnBodySchema, request.body);
+    requireSession(dependencies.store, sessionId);
     if (activeTurns.has(sessionId)) {
       throw new ApiError(409, 'TURN_IN_PROGRESS', 'A turn is already running for this session');
     }
@@ -264,8 +271,8 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
 
   app.post('/api/sessions/:id/action-results', async (request, reply) => {
     const sessionId = parseSessionId(request.params);
-    requireSession(dependencies.store, sessionId);
     const body = parseBody(ActionResultsRequestSchema, request.body);
+    requireSession(dependencies.store, sessionId);
     const updatedAt = dependencies.clock();
     try {
       dependencies.store.runInTransaction(() => {
@@ -283,6 +290,9 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
         });
       });
     } catch (error) {
+      if (!(error instanceof ActionResultDomainError)) {
+        throw error;
+      }
       throw new ApiError(
         422,
         'ACTION_RESULT_INVALID',

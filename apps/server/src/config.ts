@@ -5,30 +5,24 @@ const booleanStringSchema = z
   .default('false')
   .transform((value) => value === 'true');
 
+const optionalString = (schema: z.ZodString) =>
+  z.preprocess(
+    (value) => typeof value === 'string' && value.trim().length === 0
+      ? undefined
+      : value,
+    schema.optional(),
+  );
+
 const environmentSchema = z
   .object({
     USE_FAKE_LLM: booleanStringSchema,
-    LLM_BASE_URL: z.string().trim().url().optional(),
-    LLM_API_KEY: z.string().trim().min(1).optional(),
-    LLM_MODEL: z.string().trim().min(1).max(200).optional(),
+    LLM_BASE_URL: optionalString(z.string().trim().url()),
+    LLM_API_KEY: optionalString(z.string().trim().min(1)),
+    LLM_MODEL: optionalString(z.string().trim().min(1).max(200)),
     LLM_TEMPERATURE: z.coerce.number().finite().min(0).max(2).default(0.4),
     LLM_TIMEOUT_MS: z.coerce.number().int().min(250).max(120_000).default(15_000),
   })
-  .passthrough()
-  .superRefine((environment, context) => {
-    if (environment.USE_FAKE_LLM) {
-      return;
-    }
-    for (const field of ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL'] as const) {
-      if (environment[field] === undefined) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `${field} is required unless USE_FAKE_LLM=true`,
-          path: [field],
-        });
-      }
-    }
-  });
+  .passthrough();
 
 const runtimeEnvironmentSchema = z
   .object({
@@ -52,8 +46,13 @@ export interface OpenAICompatibleLlmConfig {
   readonly timeoutMs: number;
 }
 
+export interface UnavailableLlmConfig {
+  readonly kind: 'unavailable';
+  readonly reason: 'missing_configuration';
+}
+
 export interface ServerConfig {
-  readonly llm: FakeLlmConfig | OpenAICompatibleLlmConfig;
+  readonly llm: FakeLlmConfig | OpenAICompatibleLlmConfig | UnavailableLlmConfig;
 }
 
 export interface RuntimeServerConfig {
@@ -82,11 +81,23 @@ export function parseServerConfig(
   if (parsed.USE_FAKE_LLM) {
     return { llm: { kind: 'fake' } };
   }
+  if (
+    parsed.LLM_BASE_URL === undefined
+    || parsed.LLM_API_KEY === undefined
+    || parsed.LLM_MODEL === undefined
+  ) {
+    return {
+      llm: {
+        kind: 'unavailable',
+        reason: 'missing_configuration',
+      },
+    };
+  }
 
   const llm = {
     kind: 'openai-compatible',
-    baseURL: requireParsedValue(parsed.LLM_BASE_URL, 'LLM_BASE_URL'),
-    model: requireParsedValue(parsed.LLM_MODEL, 'LLM_MODEL'),
+    baseURL: parsed.LLM_BASE_URL,
+    model: parsed.LLM_MODEL,
     temperature: parsed.LLM_TEMPERATURE,
     timeoutMs: parsed.LLM_TIMEOUT_MS,
   } as OpenAICompatibleLlmConfig;

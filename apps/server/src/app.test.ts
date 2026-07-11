@@ -11,6 +11,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import {
+  ActionResultDomainError,
   buildApp,
   createRequestAbortSignal,
   type ApiStore,
@@ -110,7 +111,7 @@ class MemoryApiStore implements ApiStore {
         && candidate.action.id === result.actionId,
     );
     if (run === undefined || run.action.type !== result.type) {
-      throw new Error(`Action run not found: ${result.actionId}`);
+      throw new ActionResultDomainError(`Action run not found: ${result.actionId}`);
     }
     run.result = result;
   }
@@ -203,6 +204,26 @@ describe('Fastify BFF', () => {
     }));
     expect(unknown.statusCode).toBe(404);
     expect(unknown.json().error.code).toBe('SESSION_NOT_FOUND');
+  });
+
+  it('validates action-result bodies before checking session existence', async () => {
+    const { app } = createHarness();
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/missing/action-results',
+      payload: { world, results: [] },
+    });
+    const validMissing = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/missing/turns',
+      payload: turnPayload(),
+    });
+    await app.close();
+
+    expect(invalid.statusCode).toBe(422);
+    expect(invalid.json().error.code).toBe('VALIDATION_ERROR');
+    expect(validMissing.statusCode).toBe(404);
+    expect(validMissing.json().error.code).toBe('SESSION_NOT_FOUND');
   });
 
   it('runs a turn, persists planned actions, and lists memories', async () => {
@@ -354,6 +375,44 @@ describe('Fastify BFF', () => {
     expect(store.worlds.get(sessionId)?.snapshot).toEqual(world);
     expect(store.events).toHaveLength(1);
     expect(invalid.statusCode).toBe(422);
+  });
+
+  it('maps action domain mismatches to 422 and unexpected persistence faults to 500', async () => {
+    const domain = createHarness();
+    const domainSessionId = await createSession(domain.app);
+    const result: ActionResult = {
+      actionId: 'missing-action',
+      type: 'move_to',
+      status: 'succeeded',
+      completedAt: now,
+    };
+    const mismatch = await domain.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${domainSessionId}/action-results`,
+      payload: { world, results: [result] },
+    });
+    await domain.app.close();
+
+    const internal = createHarness();
+    const internalSessionId = await createSession(internal.app);
+    internal.store.completeActionRun = () => {
+      throw new Error('database unavailable with sensitive detail');
+    };
+    const failed = await internal.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${internalSessionId}/action-results`,
+      payload: { world, results: [result] },
+    });
+    await internal.app.close();
+
+    expect(mismatch.statusCode).toBe(422);
+    expect(mismatch.json().error.code).toBe('ACTION_RESULT_INVALID');
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json().error).toEqual(expect.objectContaining({
+      code: 'INTERNAL_ERROR',
+      message: 'The request could not be completed',
+    }));
+    expect(JSON.stringify(failed.json())).not.toContain('sensitive detail');
   });
 
   it('only emits CORS headers for the configured web origin', async () => {

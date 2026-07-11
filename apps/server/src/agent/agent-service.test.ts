@@ -604,14 +604,35 @@ describe('provider configuration', () => {
     });
   });
 
-  it('requires base URL, API key, and model in real mode', () => {
-    expect(() => parseServerConfig({})).toThrow(/LLM_BASE_URL/i);
-    expect(() =>
-      parseServerConfig({
-        LLM_BASE_URL: 'https://llm.example.test/v1',
-        LLM_API_KEY: 'secret',
-      }),
-    ).toThrow(/LLM_MODEL/i);
+  it('uses a degraded unavailable provider when credentials are absent', () => {
+    expect(parseServerConfig({}).llm).toEqual({
+      kind: 'unavailable',
+      reason: 'missing_configuration',
+    });
+  });
+
+  it('treats empty or partial credentials as unavailable', () => {
+    expect(parseServerConfig({
+      LLM_BASE_URL: 'https://llm.example.test/v1',
+      LLM_API_KEY: '',
+      LLM_MODEL: 'cat-model',
+    }).llm).toEqual({
+      kind: 'unavailable',
+      reason: 'missing_configuration',
+    });
+    expect(parseServerConfig({
+      LLM_BASE_URL: 'https://llm.example.test/v1',
+      LLM_API_KEY: 'secret',
+    }).llm).toEqual({
+      kind: 'unavailable',
+      reason: 'missing_configuration',
+    });
+  });
+
+  it('rejects malformed provided provider values', () => {
+    expect(() => parseServerConfig({ LLM_BASE_URL: 'not-a-url' })).toThrow(
+      /LLM_BASE_URL/i,
+    );
   });
 
   it('parses a bounded real-provider configuration', () => {

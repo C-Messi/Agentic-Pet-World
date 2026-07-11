@@ -12,7 +12,7 @@ import {
 } from '@cat-house/shared';
 import { z } from 'zod';
 
-import type { ApiStore } from '../app.js';
+import { ActionResultDomainError, type ApiStore } from '../app.js';
 import type { StorageDatabase } from './database.js';
 import {
   ActionRunRepository,
@@ -121,9 +121,20 @@ export class StorageApiStore implements ApiStore {
       )
       .get(sessionId, result.actionId) as { id: string } | undefined;
     if (row === undefined) {
-      throw new Error(`Active action run not found: ${result.actionId}`);
+      throw new ActionResultDomainError(
+        `Active action run not found: ${result.actionId}`,
+      );
     }
-    this.actionRuns.complete(row.id, result, updatedAt);
+    try {
+      this.actionRuns.complete(row.id, result, updatedAt);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new ActionResultDomainError(
+          `Action result does not match active run: ${result.actionId}`,
+        );
+      }
+      throw error;
+    }
   }
 
   public createActionResultsEvent(event: {
