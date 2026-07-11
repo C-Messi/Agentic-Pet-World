@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/index.ts",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "build": "tsc -b && tsup src/index.ts --format esm --dts --clean --no-external @cat-house/shared",
+    "build": "tsc -b && tsup",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint ."

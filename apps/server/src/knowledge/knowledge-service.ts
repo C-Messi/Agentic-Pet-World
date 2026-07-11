@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { WorldObjectIdSchema, type WorldObjectId } from '@cat-house/shared';
 import matter from 'gray-matter';
@@ -20,6 +21,16 @@ export const KNOWLEDGE_DOCUMENT_IDS = [
 
 export type KnowledgeDocumentId = (typeof KNOWLEDGE_DOCUMENT_IDS)[number];
 export type ObjectKnowledgeDocumentId = `object:${WorldObjectId}`;
+
+export const MAX_KNOWLEDGE_FRONTMATTER_CHARACTERS = 1_000;
+export const MAX_KNOWLEDGE_FILE_CHARACTERS = 3_100;
+export const MAX_KNOWLEDGE_CONTENT_CHARACTERS = Object.freeze({
+  character: 1_600,
+  world: 2_000,
+  object: 800,
+  minigame: 800,
+});
+export const MAX_TOTAL_KNOWLEDGE_CHARACTERS = 10_000;
 
 const KnowledgeDocumentIdSchema = z.enum(KNOWLEDGE_DOCUMENT_IDS);
 const BaseMetadataSchema = z.object({
@@ -123,7 +134,20 @@ export class KnowledgeService {
     const documents = new Map<KnowledgeDocumentId, KnowledgeDocument>();
 
     for (const sourcePath of listMarkdownFiles(this.contentDirectory)) {
-      const parsed = matter(readFileSync(sourcePath, 'utf8'));
+      const source = readFileSync(sourcePath, 'utf8');
+      if (countCharacters(source) > MAX_KNOWLEDGE_FILE_CHARACTERS) {
+        throw new Error(
+          `Knowledge file exceeds ${MAX_KNOWLEDGE_FILE_CHARACTERS} characters: ${sourcePath}`,
+        );
+      }
+      const frontmatterCharacters = countFrontmatterCharacters(source);
+      if (frontmatterCharacters > MAX_KNOWLEDGE_FRONTMATTER_CHARACTERS) {
+        throw new Error(
+          'Knowledge frontmatter exceeds '
+            + `${MAX_KNOWLEDGE_FRONTMATTER_CHARACTERS} characters: ${sourcePath}`,
+        );
+      }
+      const parsed = matter(source);
       const rawId = parsed.data.id;
       const idResult = KnowledgeDocumentIdSchema.safeParse(rawId);
       if (!idResult.success) {
@@ -143,6 +167,13 @@ export class KnowledgeService {
       if (content.length === 0) {
         throw new Error(`Knowledge document content is empty: ${sourcePath}`);
       }
+      const contentLimit = MAX_KNOWLEDGE_CONTENT_CHARACTERS[metadataResult.data.kind];
+      if (countCharacters(content) > contentLimit) {
+        throw new Error(
+          `Knowledge content exceeds ${contentLimit} characters for `
+            + `${metadataResult.data.kind}: ${sourcePath}`,
+        );
+      }
 
       documents.set(
         idResult.data,
@@ -155,8 +186,29 @@ export class KnowledgeService {
       );
     }
 
+    const missingIds = KNOWLEDGE_DOCUMENT_IDS.filter((id) => !documents.has(id));
+    if (missingIds.length > 0) {
+      throw new Error(`Missing knowledge documents: ${missingIds.join(', ')}`);
+    }
+    const totalCharacters = [...documents.values()].reduce(
+      (total, document) => total + countCharacters(document.content),
+      0,
+    );
+    if (totalCharacters > MAX_TOTAL_KNOWLEDGE_CHARACTERS) {
+      throw new Error(
+        `Total knowledge content exceeds ${MAX_TOTAL_KNOWLEDGE_CHARACTERS} characters`,
+      );
+    }
+
     return documents;
   }
+}
+
+export function resolveContentDirectory(moduleUrl = import.meta.url): string {
+  const moduleDirectory = dirname(fileURLToPath(moduleUrl));
+  return basename(moduleDirectory) === 'dist'
+    ? join(moduleDirectory, 'content')
+    : join(moduleDirectory, '../../content');
 }
 
 function listMarkdownFiles(directory: string): readonly string[] {
@@ -168,5 +220,24 @@ function listMarkdownFiles(directory: string): readonly string[] {
       }
       return entry.isFile() && entry.name.endsWith('.md') ? [path] : [];
     })
-    .sort((left, right) => left.localeCompare(right));
+    .sort(compareOrdinal);
+}
+
+function countFrontmatterCharacters(source: string): number {
+  if (!source.startsWith('---')) {
+    return 0;
+  }
+  const closingDelimiter = source.indexOf('\n---', 3);
+  const frontmatter = closingDelimiter === -1
+    ? source
+    : source.slice(3, closingDelimiter);
+  return countCharacters(frontmatter);
+}
+
+function countCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
+function compareOrdinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

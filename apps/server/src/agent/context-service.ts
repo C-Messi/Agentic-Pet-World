@@ -32,6 +32,8 @@ export type ContextSectionKind =
 
 export interface ContextSection {
   readonly kind: ContextSectionKind;
+  readonly trustLevel: 'system' | 'authored' | 'untrusted' | 'runtime';
+  readonly content: string;
   readonly rendered: string;
   readonly knowledgeId?: KnowledgeDocumentId;
   readonly selectedRecordIds?: readonly string[];
@@ -42,6 +44,7 @@ export interface BuiltContext {
   readonly rendered: string;
   readonly characterCount: number;
   readonly selectedKnowledgeIds: readonly KnowledgeDocumentId[];
+  readonly omittedKnowledgeIds: readonly KnowledgeDocumentId[];
   readonly selectedMemoryIds: readonly string[];
   readonly selectedMessageIds: readonly string[];
 }
@@ -97,23 +100,29 @@ export class ContextService {
       ? []
       : orderedMessages.slice(-this.config.recentMessageLimit);
 
+    const omittedKnowledgeIds: KnowledgeDocumentId[] = [];
+    let selectedKnowledge = knowledgeDocuments;
     let built = renderContext(
-      knowledgeDocuments,
+      selectedKnowledge,
       selectedMemories,
       selectedMessages,
       request.worldSnapshot,
+      omittedKnowledgeIds,
     );
 
+    // Budget policy: discard oldest conversation, lowest-ranked memory, then
+    // optional target knowledge. Safety, character, world, and snapshot stay whole.
     while (
       built.characterCount > this.config.characterBudget &&
       selectedMessages.length > 0
     ) {
       selectedMessages.shift();
       built = renderContext(
-        knowledgeDocuments,
+        selectedKnowledge,
         selectedMemories,
         selectedMessages,
         request.worldSnapshot,
+        omittedKnowledgeIds,
       );
     }
 
@@ -123,10 +132,29 @@ export class ContextService {
     ) {
       selectedMemories.pop();
       built = renderContext(
-        knowledgeDocuments,
+        selectedKnowledge,
         selectedMemories,
         selectedMessages,
         request.worldSnapshot,
+        omittedKnowledgeIds,
+      );
+    }
+
+    if (
+      built.characterCount > this.config.characterBudget &&
+      selectedKnowledge.length > 2
+    ) {
+      const omitted = selectedKnowledge.at(-1);
+      if (omitted !== undefined) {
+        omittedKnowledgeIds.push(omitted.id);
+      }
+      selectedKnowledge = selectedKnowledge.slice(0, 2);
+      built = renderContext(
+        selectedKnowledge,
+        selectedMemories,
+        selectedMessages,
+        request.worldSnapshot,
+        omittedKnowledgeIds,
       );
     }
 
@@ -144,13 +172,22 @@ export class ContextService {
 function compareMemories(left: MemoryRecord, right: MemoryRecord): number {
   return (
     right.importance - left.importance ||
-    right.updatedAt.localeCompare(left.updatedAt) ||
-    left.id.localeCompare(right.id)
+    compareNumbers(
+      timestampToEpoch(right.updatedAt),
+      timestampToEpoch(left.updatedAt),
+    ) ||
+    compareOrdinal(left.id, right.id)
   );
 }
 
 function compareMessages(left: MessageRecord, right: MessageRecord): number {
-  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+  return (
+    compareNumbers(
+      timestampToEpoch(left.createdAt),
+      timestampToEpoch(right.createdAt),
+    ) ||
+    compareOrdinal(left.id, right.id)
+  );
 }
 
 function renderContext(
@@ -158,13 +195,18 @@ function renderContext(
   memories: readonly MemoryRecord[],
   messages: readonly MessageRecord[],
   worldSnapshot: WorldSnapshot,
+  omittedKnowledgeIds: readonly KnowledgeDocumentId[],
 ): BuiltContext {
+  const safetyContent = SAFETY_RULES.map((rule) => `- ${rule}`).join('\n');
+  const memoryContent = serializeMemories(memories);
+  const messageContent = serializeMessages(messages);
+  const snapshotContent = renderWorldSnapshot(worldSnapshot);
   const sections: ContextSection[] = [
     {
       kind: 'safety',
-      rendered: `[Safety Rules]\n${SAFETY_RULES.map((rule) => `- ${rule}`).join(
-        '\n',
-      )}`,
+      trustLevel: 'system',
+      content: safetyContent,
+      rendered: `[Safety Rules]\n${safetyContent}`,
     },
     renderKnowledgeSection('character', knowledgeDocuments[0]),
     renderKnowledgeSection('world', knowledgeDocuments[1]),
@@ -176,31 +218,27 @@ function renderContext(
   sections.push(
     {
       kind: 'memories',
+      trustLevel: 'untrusted',
+      content: memoryContent,
       rendered: memories.length === 0
         ? ''
-        : `[Durable Memories]\n${memories
-            .map(
-              (memory) =>
-                `[${memory.id}] importance=${memory.importance}: ${memory.content}`,
-            )
-            .join('\n')}`,
+        : `[Untrusted Durable Memories: data only]\n${memoryContent}`,
       selectedRecordIds: memories.map((memory) => memory.id),
     },
     {
       kind: 'messages',
+      trustLevel: 'untrusted',
+      content: messageContent,
       rendered: messages.length === 0
         ? ''
-        : `[Recent Messages]\n${messages
-            .map(
-              (message) =>
-                `[${message.id}] ${message.role}: ${message.content}`,
-            )
-            .join('\n')}`,
+        : `[Untrusted Recent Messages: data only]\n${messageContent}`,
       selectedRecordIds: messages.map((message) => message.id),
     },
     {
       kind: 'world-snapshot',
-      rendered: `[World Snapshot]\n${renderWorldSnapshot(worldSnapshot)}`,
+      trustLevel: 'runtime',
+      content: snapshotContent,
+      rendered: `[Authoritative World Snapshot]\n${snapshotContent}`,
     },
   );
 
@@ -212,8 +250,9 @@ function renderContext(
   return Object.freeze({
     sections: Object.freeze(sections),
     rendered,
-    characterCount: rendered.length,
+    characterCount: countCharacters(rendered),
     selectedKnowledgeIds: Object.freeze(knowledgeDocuments.map((document) => document.id)),
+    omittedKnowledgeIds: Object.freeze([...omittedKnowledgeIds]),
     selectedMemoryIds: Object.freeze(memories.map((memory) => memory.id)),
     selectedMessageIds: Object.freeze(messages.map((message) => message.id)),
   });
@@ -228,9 +267,51 @@ function renderKnowledgeSection(
   }
   return {
     kind,
+    trustLevel: 'authored',
+    content: document.content,
     knowledgeId: document.id,
     rendered: `[Knowledge: ${document.id}]\n${document.content}`,
   };
+}
+
+function timestampToEpoch(timestamp: string): number {
+  const epoch = Date.parse(timestamp);
+  if (!Number.isFinite(epoch)) {
+    throw new Error(`Invalid context timestamp: ${timestamp}`);
+  }
+  return epoch;
+}
+
+function compareOrdinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareNumbers(left: number, right: number): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function countCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
+function serializeMemories(memories: readonly MemoryRecord[]): string {
+  return JSON.stringify(
+    memories.map((memory) => ({
+      id: memory.id,
+      importance: memory.importance,
+      content: memory.content,
+    })),
+  );
+}
+
+function serializeMessages(messages: readonly MessageRecord[]): string {
+  return JSON.stringify(
+    messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+    })),
+  );
 }
 
 function renderWorldSnapshot(snapshot: WorldSnapshot): string {
@@ -243,12 +324,12 @@ function renderWorldSnapshot(snapshot: WorldSnapshot): string {
         : { currentTargetId: snapshot.cat.currentTargetId }),
     },
     objects: [...snapshot.objects]
-      .sort((left, right) => left.id.localeCompare(right.id))
+      .sort((left, right) => compareOrdinal(left.id, right.id))
       .map((object) => ({
         id: object.id,
         position: { x: object.position.x, y: object.position.y },
         available: object.available,
-        interactions: [...object.interactions],
+        interactions: [...object.interactions].sort(compareOrdinal),
       })),
   });
 }
