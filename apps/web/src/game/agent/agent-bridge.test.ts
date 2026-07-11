@@ -171,6 +171,7 @@ describe('AgentBridge', () => {
     const failures: ActionResult[] = [];
     events.on('action-failed', ({ result }) => failures.push(result));
     const runner = new ActionRunner(port, events);
+    const delivered: Array<{ result: CorrelatedActionResult; signal: AbortSignal | undefined }> = [];
     const api = {
       sendTurn: vi.fn(async () => ({
         decision: {
@@ -181,7 +182,14 @@ describe('AgentBridge', () => {
         degraded: false,
         correlationId: 'turn-wait',
       })),
-      postActionResult: vi.fn(async () => undefined),
+      postActionResult: vi.fn(async (
+        _sessionId: string,
+        result: CorrelatedActionResult,
+        _snapshot: WorldSnapshot,
+        signal?: AbortSignal,
+      ) => {
+        delivered.push({ result, signal });
+      }),
     };
     const bridge = new AgentBridge(api, runner, events, () => world);
     bridge.replaceSession('session-1');
@@ -193,8 +201,118 @@ describe('AgentBridge', () => {
     await turn;
 
     expect(failures[0]?.status).toBe('cancelled');
+    expect(delivered[0]?.result.result.status).toBe('cancelled');
+    expect(delivered[0]?.signal?.aborted).toBe(false);
     expect(ambientSuspended).toBe(false);
     expect(runner.currentAction).toBeUndefined();
+  });
+
+  it('bounds terminal result delivery timeout and emits offline status without another turn', async () => {
+    vi.useFakeTimers();
+    const terminalResult: CorrelatedActionResult = {
+      turnCorrelationId: 'turn-result-timeout',
+      result: {
+        actionId: 'speak',
+        type: 'speak',
+        status: 'succeeded',
+        completedAt: '2026-07-12T00:00:00.000Z',
+      },
+    };
+    let deliverySignal: AbortSignal | undefined;
+    const api = {
+      sendTurn: vi.fn(async () => ({ decision, degraded: false, correlationId: 'turn-result-timeout' })),
+      postActionResult: vi.fn((
+        _sessionId: string,
+        _result: CorrelatedActionResult,
+        _snapshot: WorldSnapshot,
+        signal?: AbortSignal,
+      ) => {
+        deliverySignal = signal;
+        return new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('delivery timeout', 'AbortError')),
+            { once: true },
+          );
+        });
+      }),
+    };
+    const runner = {
+      run: vi.fn(async (
+        _decision: AgentDecision,
+        _correlation: string,
+        options?: ActionRunOptions,
+      ) => {
+        await options?.onResult?.(terminalResult, world);
+        return [terminalResult];
+      }),
+      cancel: vi.fn(),
+      currentAction: undefined,
+    } as unknown as ActionRunner;
+    const events = new GameEventBus();
+    const statuses: Array<{ status: string; message?: string }> = [];
+    events.on('connection-status', (status) => statuses.push(status));
+    const bridge = new AgentBridge(api, runner, events, () => world, {
+      resultDeliveryTimeoutMs: 250,
+    });
+    bridge.replaceSession('session-1');
+
+    const turn = bridge.sendPlayerMessage('Hello.');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deliverySignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    await turn;
+
+    expect(deliverySignal?.aborted).toBe(true);
+    expect(statuses).toContainEqual({
+      status: 'offline',
+      message: 'Action result delivery timed out',
+    });
+    expect(statuses.at(-1)?.status).toBe('offline');
+    expect(api.sendTurn).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('emits offline delivery failure status without recursively starting a turn', async () => {
+    const terminalResult: CorrelatedActionResult = {
+      turnCorrelationId: 'turn-result-failure',
+      result: {
+        actionId: 'move',
+        type: 'move_to',
+        status: 'failed',
+        errorCode: 'MOVEMENT_FAILED',
+        message: 'Blocked',
+        completedAt: '2026-07-12T00:00:00.000Z',
+      },
+    };
+    const api = {
+      sendTurn: vi.fn(async () => ({ decision, degraded: false, correlationId: 'turn-result-failure' })),
+      postActionResult: vi.fn(async () => { throw new TypeError('delivery offline'); }),
+    };
+    const runner = {
+      run: vi.fn(async (
+        _decision: AgentDecision,
+        _correlation: string,
+        options?: ActionRunOptions,
+      ) => {
+        await options?.onResult?.(terminalResult, world);
+        return [terminalResult];
+      }),
+      cancel: vi.fn(),
+      currentAction: undefined,
+    } as unknown as ActionRunner;
+    const events = new GameEventBus();
+    const statuses: string[] = [];
+    events.on('connection-status', ({ status }) => statuses.push(status));
+    const bridge = new AgentBridge(api, runner, events, () => world);
+    bridge.replaceSession('session-1');
+
+    const outcome = await bridge.sendPlayerMessage('Move.');
+
+    expect(outcome.source).toBe('server');
+    expect(statuses.at(-1)).toBe('offline');
+    expect(api.sendTurn).toHaveBeenCalledTimes(1);
   });
 
   it('includes world, current action, and recent results in the next turn request', async () => {

@@ -146,19 +146,27 @@ export interface AgentBridgeTurnOutcome {
   fallbackReason?: AgentTurnResponse['fallbackReason'] | 'network_error';
 }
 
+export interface AgentBridgeOptions {
+  resultDeliveryTimeoutMs?: number;
+}
+
 export class AgentBridge {
   private activeController: AbortController | undefined;
   private activeSessionId: string | undefined;
   private readonly deliveredResults: ActionResult[] = [];
   private readonly executedDecisions = new Set<string>();
   private offlineSequence = 0;
+  private readonly resultDeliveryTimeoutMs: number;
 
   constructor(
     private readonly api: AgentBridgeApi,
     private readonly runner: ActionRunner,
     private readonly events: GameEventBus,
     private readonly getSnapshot: () => WorldSnapshot,
-  ) {}
+    options: AgentBridgeOptions = {},
+  ) {
+    this.resultDeliveryTimeoutMs = options.resultDeliveryTimeoutMs ?? 5_000;
+  }
 
   get sessionId(): string | undefined {
     return this.activeSessionId;
@@ -228,6 +236,7 @@ export class AgentBridge {
       recentActionResults: this.deliveredResults.slice(-12),
     });
     let responseReceived = false;
+    let resultDeliveryFailed = false;
 
     try {
       const response = await this.api.sendTurn(request, controller.signal);
@@ -245,15 +254,13 @@ export class AgentBridge {
           onResult: async (result, snapshot) => {
             this.deliveredResults.push(result.result);
             if (this.deliveredResults.length > 12) this.deliveredResults.shift();
-            try {
-              await this.api.postActionResult(sessionId, result, snapshot, controller.signal);
-            } catch (error) {
-              this.emitRequestError(error);
+            if (!(await this.deliverResult(sessionId, result, snapshot))) {
+              resultDeliveryFailed = true;
             }
           },
         });
       }
-      if (!response.degraded && !controller.signal.aborted) {
+      if (!response.degraded && !controller.signal.aborted && !resultDeliveryFailed) {
         this.events.emit('connection-status', { status: 'ready' });
       }
       return { ...response, source: 'server' };
@@ -296,6 +303,43 @@ export class AgentBridge {
     this.events.emit('bubble-changed', { kind: 'speech', text: decision.speech });
     if (decision.thought) {
       this.events.emit('bubble-changed', { kind: 'thought', text: decision.thought });
+    }
+  }
+
+  private async deliverResult(
+    sessionId: string,
+    result: CorrelatedActionResult,
+    snapshot: WorldSnapshot,
+  ): Promise<boolean> {
+    const controller = new AbortController();
+    let timedOut = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new Error('Action result delivery timed out'));
+      }, this.resultDeliveryTimeoutMs);
+    });
+
+    try {
+      await Promise.race([
+        this.api.postActionResult(sessionId, result, snapshot, controller.signal),
+        timeout,
+      ]);
+      return true;
+    } catch (error) {
+      if (timedOut) {
+        this.events.emit('connection-status', {
+          status: 'offline',
+          message: 'Action result delivery timed out',
+        });
+      } else {
+        this.emitRequestError(error);
+      }
+      return false;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
 
