@@ -16,7 +16,7 @@ import {
   type GridPoint,
 } from '../world/object-registry';
 import { WorldRuntimeState } from './world-runtime-state';
-import { layoutBubble, positionBubble, type BubbleLayout } from './bubble-layout';
+import { fitBubbleText, positionBubble, type BubbleLayout, type RenderedTextMeasurement } from './bubble-layout';
 
 const DISPLAY_SCALE = 2;
 const DISPLAY_TILE_SIZE = ROOM_GRID.tileSize * DISPLAY_SCALE;
@@ -49,6 +49,7 @@ export class WorldScene extends Phaser.Scene {
   private bubble: Phaser.GameObjects.Container | undefined;
   private bubbleBackground: Phaser.GameObjects.Graphics | undefined;
   private bubbleText: Phaser.GameObjects.Text | undefined;
+  private bubbleMask: Phaser.Display.Masks.GeometryMask | undefined;
   private removeBubbleListener: (() => void) | undefined;
   private bubbleLayout: BubbleLayout | undefined;
   private bubbleOwnerId: string | undefined;
@@ -384,6 +385,8 @@ export class WorldScene extends Phaser.Scene {
     this.bubble = undefined;
     this.bubbleBackground = undefined;
     this.bubbleText = undefined;
+    this.bubbleMask?.destroy();
+    this.bubbleMask = undefined;
     this.bubbleLayout = undefined;
     this.bubbleOwnerId = undefined;
   }
@@ -395,8 +398,11 @@ export class WorldScene extends Phaser.Scene {
       fontFamily: '"Courier New", monospace',
       fontSize: '14px',
       lineSpacing: 2,
+      wordWrap: { width: 196, useAdvancedWrap: false },
       align: 'center',
     }).setOrigin(0.5);
+    this.bubbleMask = this.bubbleBackground.createGeometryMask();
+    this.bubbleText.setMask(this.bubbleMask);
     this.bubble = this.add.container(0, 0, [this.bubbleBackground, this.bubbleText])
       .setDepth(20_000)
       .setVisible(false);
@@ -420,7 +426,7 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     this.bubbleOwnerId = ownerId;
-    const layout = layoutBubble(text);
+    const layout = fitBubbleText(text, this.measureBubbleText);
     this.bubbleLayout = layout;
     const fill = kind === 'thought' ? 0xdce8df : 0xfff4d6;
     const border = kind === 'thought' ? 0x72947e : 0x8e665a;
@@ -433,6 +439,17 @@ export class WorldScene extends Phaser.Scene {
     this.bubbleText.setPosition(0, -14 - layout.height / 2).setText(layout.text);
     this.bubble.setVisible(true);
     this.positionBubble();
+  };
+
+  private readonly measureBubbleText = (text: string): RenderedTextMeasurement => {
+    if (!this.bubbleText) return { width: 0, height: 0, lines: 0 };
+    const wrappedLines = text.split('\n').flatMap((line) => this.bubbleText?.getWrappedText(line) ?? []);
+    this.bubbleText.setText(wrappedLines);
+    return {
+      width: this.bubbleText.width,
+      height: this.bubbleText.height,
+      lines: wrappedLines.length,
+    };
   };
 
   private positionBubble(): void {
