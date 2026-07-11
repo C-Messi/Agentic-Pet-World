@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   AgentDecisionSchema,
   type AgentDecision,
@@ -156,8 +158,16 @@ export class AgentService {
       }
 
       const decision = outcome.decision;
-      const playerMessageId = turnRecordId(correlationId, 'message:player');
-      const agentMessageId = turnRecordId(correlationId, 'message:agent');
+      const playerMessageId = turnRecordId(
+        request.sessionId,
+        correlationId,
+        'mp',
+      );
+      const agentMessageId = turnRecordId(
+        request.sessionId,
+        correlationId,
+        'ma',
+      );
       const createdAt = this.dependencies.clock();
       this.dependencies.persistence.createMessage({
         id: playerMessageId,
@@ -167,7 +177,7 @@ export class AgentService {
         createdAt,
       });
       this.dependencies.persistence.createEvent({
-        id: turnRecordId(correlationId, 'event:started'),
+        id: turnRecordId(request.sessionId, correlationId, 'es'),
         sessionId: request.sessionId,
         type: 'agent.turn.started',
         payload: { phase: 'started', correlationId, playerMessageId },
@@ -182,7 +192,7 @@ export class AgentService {
       });
       for (const [index, candidate] of (decision.memoryCandidates ?? []).entries()) {
         this.dependencies.persistence.createMemory({
-          id: turnRecordId(correlationId, `memory:${index}`),
+          id: turnRecordId(request.sessionId, correlationId, `m${index}`),
           sessionId: request.sessionId,
           content: candidate.content,
           importance: candidate.importance,
@@ -192,7 +202,7 @@ export class AgentService {
         });
       }
       this.dependencies.persistence.createEvent({
-        id: turnRecordId(correlationId, 'event:completed'),
+        id: turnRecordId(request.sessionId, correlationId, 'ec'),
         sessionId: request.sessionId,
         type: 'agent.turn.completed',
         payload: {
@@ -316,8 +326,16 @@ function validateCorrelationId(correlationId: string): string {
   return correlationId;
 }
 
-function turnRecordId(correlationId: string, suffix: string): string {
-  return `${correlationId}:${suffix}`;
+function turnRecordId(
+  sessionId: string,
+  correlationId: string,
+  suffix: string,
+): string {
+  const sessionScope = createHash('sha256')
+    .update(sessionId)
+    .digest('hex')
+    .slice(0, 16);
+  return `${sessionScope}:${correlationId}:${suffix}`;
 }
 
 interface DecisionOutcome {

@@ -140,15 +140,24 @@ class TransactionalTurnPersistence implements TurnPersistence {
   }
 
   public createMessage(record: MessageRecord): void {
-    this.write(() => this.messages.push(record));
+    this.write(() => {
+      assertUniqueRecordId(this.messages, record.id);
+      this.messages.push(record);
+    });
   }
 
   public createMemory(record: MemoryRecord): void {
-    this.write(() => this.memories.push(record));
+    this.write(() => {
+      assertUniqueRecordId(this.memories, record.id);
+      this.memories.push(record);
+    });
   }
 
   public createEvent(record: EventRecord<AgentTurnEventPayload>): void {
-    this.write(() => this.events.push(record));
+    this.write(() => {
+      assertUniqueRecordId(this.events, record.id);
+      this.events.push(record);
+    });
   }
 
   public failAtWrite(writeNumber: number): void {
@@ -161,6 +170,15 @@ class TransactionalTurnPersistence implements TurnPersistence {
       throw new Error('simulated persistence failure');
     }
     operation();
+  }
+}
+
+function assertUniqueRecordId(
+  records: readonly { readonly id: string }[],
+  id: string,
+): void {
+  if (records.some((record) => record.id === id)) {
+    throw new Error(`duplicate primary key: ${id}`);
   }
 }
 
@@ -286,8 +304,34 @@ describe('AgentService', () => {
         ...harness.persistence.messages,
         ...harness.persistence.memories,
         ...harness.persistence.events,
-      ].every((record) => record.id.startsWith('turn-idempotent:')),
+      ].every((record) => record.id.includes(':turn-idempotent:')),
     ).toBe(true);
+  });
+
+  it('scopes deterministic record IDs by session when correlations are reused', async () => {
+    const provider = new StubProvider([validDecision, validDecision]);
+    const harness = createHarness({ provider });
+    const options = { correlationId: 'shared-correlation' } as const;
+
+    await harness.service.turn(request('First session turn.'), options);
+    await harness.service.turn(
+      {
+        ...request('Second session turn.'),
+        sessionId: 'session-2',
+      },
+      options,
+    );
+
+    expect(provider.requests).toHaveLength(2);
+    const firstSessionIds = harness.persistence.messages
+      .filter((message) => message.sessionId === 'session-1')
+      .map((message) => message.id);
+    const secondSessionIds = harness.persistence.messages
+      .filter((message) => message.sessionId === 'session-2')
+      .map((message) => message.id);
+    expect(firstSessionIds).toHaveLength(2);
+    expect(secondSessionIds).toHaveLength(2);
+    expect(secondSessionIds.some((id) => firstSessionIds.includes(id))).toBe(false);
   });
 
   it.each([

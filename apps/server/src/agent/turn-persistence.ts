@@ -32,17 +32,14 @@ export class StorageTurnPersistence implements TurnPersistence {
     sessionId: string,
     correlationId: string,
   ): AgentDecision | undefined {
-    const events = this.events.listForSession(sessionId);
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      if (
-        event?.payload.phase === 'completed'
-        && event.payload.correlationId === correlationId
-      ) {
-        return event.payload.decision;
-      }
-    }
-    return undefined;
+    const event = this.events.findLatestForSessionByTypeAndCorrelation(
+      sessionId,
+      'agent.turn.completed',
+      correlationId,
+    );
+    return event?.payload.phase === 'completed'
+      ? event.payload.decision
+      : undefined;
   }
 
   public createMessage(record: MessageRecord): void {

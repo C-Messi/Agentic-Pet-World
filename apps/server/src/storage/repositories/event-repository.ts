@@ -10,6 +10,8 @@ import {
   TimestampSchema,
 } from '../validation.js';
 
+const EventTypeSchema = z.string().trim().min(1).max(128);
+
 interface EventRow {
   id: string;
   session_id: string;
@@ -29,7 +31,7 @@ export class EventRepository<TPayload> {
       .object({
         id: IdentifierSchema,
         sessionId: IdentifierSchema,
-        type: z.string().trim().min(1).max(128),
+        type: EventTypeSchema,
         payload: payloadSchema,
         createdAt: TimestampSchema,
       })
@@ -62,6 +64,32 @@ export class EventRepository<TPayload> {
       )
       .all(sessionId) as EventRow[];
 
+    return this.parseRows(rows);
+  }
+
+  public findLatestForSessionByTypeAndCorrelation(
+    sessionId: string,
+    type: string,
+    correlationId: string,
+  ): EventRecord<TPayload> | undefined {
+    const eventType = EventTypeSchema.parse(type);
+    const correlation = IdentifierSchema.parse(correlationId);
+    const row = this.database
+      .prepare(
+        `SELECT id, session_id, type, payload_json, created_at
+         FROM events
+         WHERE session_id = ?
+           AND type = ?
+           AND json_extract(payload_json, '$.correlationId') = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(sessionId, eventType, correlation) as EventRow | undefined;
+
+    return row === undefined ? undefined : this.parseRows([row])[0];
+  }
+
+  private parseRows(rows: readonly EventRow[]): readonly EventRecord<TPayload>[] {
     return rows.map((row) =>
       this.recordSchema.parse({
         id: row.id,
