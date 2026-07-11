@@ -1,8 +1,9 @@
-import type { Emotion, WorldObjectId, WorldSnapshot } from '@cat-house/shared';
+import type { Emotion, Interaction, WorldObjectId, WorldSnapshot } from '@cat-house/shared';
 import Phaser from 'phaser';
 
 import { AmbientBehaviorSystem, type AmbientAction } from '../behavior/ambient-behavior';
 import { evaluateAmbientBehavior } from '../behavior/ambient-evaluation';
+import { gameEvents } from '../events';
 import { NavigationSystem } from '../navigation/navigation-system';
 import { bottomDepthFromCenter, bottomDepthFromTopLeft } from '../render/render-depth';
 import {
@@ -54,6 +55,9 @@ export class WorldScene extends Phaser.Scene {
     cooldownMs: 7_000,
   });
   private readonly runtime = new WorldRuntimeState();
+  private movementCompletion:
+    | { resolve: () => void; reject: (error: Error) => void; removeAbortListener: () => void }
+    | undefined;
 
   constructor() {
     super(WorldScene.key);
@@ -103,7 +107,7 @@ export class WorldScene extends Phaser.Scene {
       .setScale(DISPLAY_SCALE)
       .setDepth(bottomDepthFromCenter(start.y, 32 * DISPLAY_SCALE));
     this.playEmotion('idle');
-    this.game.events.emit('world-ready', this.getSnapshot());
+    gameEvents.emit('world-ready', this.getSnapshot());
   }
 
   update(_time: number, delta: number): void {
@@ -138,6 +142,87 @@ export class WorldScene extends Phaser.Scene {
   setAgentBusy(busy: boolean): void {
     this.runtime.agentBusy = busy;
     if (busy && this.runtime.movementOwner === 'ambient') this.cancelMovement('ambient');
+  }
+
+  hasActionTarget(targetId: WorldObjectId): boolean {
+    return ROOM_OBJECTS.some(({ id }) => id === targetId);
+  }
+
+  async moveToActionTarget(targetId: WorldObjectId, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    if (!this.hasActionTarget(targetId)) throw new Error(`Unknown target: ${targetId}`);
+    if (!this.moveCatTo(targetId, 'agent', 'idle')) {
+      throw new Error(`Unable to reach target: ${targetId}`);
+    }
+    if (this.runtime.movementOwner !== 'agent') return;
+
+    await new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        this.cancelMovement('agent');
+        reject(abortError());
+        return;
+      }
+      const abort = () => {
+        this.cancelMovement('agent');
+        reject(abortError());
+      };
+      signal.addEventListener('abort', abort, { once: true });
+      this.movementCompletion = {
+        resolve,
+        reject,
+        removeAbortListener: () => signal.removeEventListener('abort', abort),
+      };
+    });
+  }
+
+  async interactWithActionTarget(
+    targetId: WorldObjectId,
+    interaction: Interaction,
+    signal: AbortSignal,
+  ): Promise<void> {
+    throwIfAborted(signal);
+    const target = getWorldObject(targetId);
+    if (this.runtime.currentTargetId !== targetId) {
+      throw new Error(`Cat is not at target: ${targetId}`);
+    }
+    if (!target.interactions.includes(interaction)) {
+      throw new Error(`${targetId} does not support ${interaction}`);
+    }
+    const emotion: Emotion =
+      interaction === 'rest'
+        ? targetId === 'bed'
+          ? 'sleep'
+          : 'sit'
+        : interaction === 'eat' || interaction === 'play'
+          ? 'happy'
+          : 'curious';
+    this.playEmotion(emotion);
+    gameEvents.emit('world-snapshot', this.getSnapshot());
+  }
+
+  async emoteForAction(
+    emotion: Emotion,
+    durationMs: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    throwIfAborted(signal);
+    this.playEmotion(emotion);
+    await abortableDelay(durationMs, signal);
+    this.playEmotion('idle');
+    gameEvents.emit('world-snapshot', this.getSnapshot());
+  }
+
+  waitForAction(durationMs: number, signal: AbortSignal): Promise<void> {
+    return abortableDelay(durationMs, signal);
+  }
+
+  async speakForAction(text: string, signal: AbortSignal): Promise<void> {
+    gameEvents.emit('bubble-changed', { kind: 'speech', text });
+    try {
+      await abortableDelay(Math.min(2_500, Math.max(600, text.length * 35)), signal);
+    } finally {
+      gameEvents.emit('bubble-changed', { kind: 'speech' });
+    }
   }
 
   moveCatTo(targetId: WorldObjectId, owner = 'agent', arrivalEmotion: Emotion = 'idle'): boolean {
@@ -252,7 +337,8 @@ export class WorldScene extends Phaser.Scene {
     this.runtime.movementOwner = null;
     this.playEmotion(this.runtime.pendingEmotion);
     if (wasAmbient) this.runtime.ambientSettledUntil = this.time.now + 2_500;
-    this.game.events.emit('world-snapshot', this.getSnapshot());
+    this.resolveMovementCompletion();
+    gameEvents.emit('world-snapshot', this.getSnapshot());
   }
 
   private cancelMovement(owner: string): void {
@@ -261,6 +347,7 @@ export class WorldScene extends Phaser.Scene {
     this.runtime.movementOwner = null;
     this.runtime.currentTargetId = undefined;
     this.playEmotion('idle');
+    if (owner === 'agent') this.rejectMovementCompletion(abortError());
   }
 
   private getCatTile(): GridPoint {
@@ -272,6 +359,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private resetSceneState(): void {
+    this.rejectMovementCompletion(new Error('World scene reset'));
     this.cat?.stop();
     this.runtime.reset(this.navigation, this.ambient);
   }
@@ -280,4 +368,41 @@ export class WorldScene extends Phaser.Scene {
     this.resetSceneState();
     this.cat = undefined;
   }
+
+  private resolveMovementCompletion(): void {
+    const completion = this.movementCompletion;
+    this.movementCompletion = undefined;
+    completion?.removeAbortListener();
+    completion?.resolve();
+  }
+
+  private rejectMovementCompletion(error: Error): void {
+    const completion = this.movementCompletion;
+    this.movementCompletion = undefined;
+    completion?.removeAbortListener();
+    completion?.reject(error);
+  }
+}
+
+function abortableDelay(durationMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    throwIfAborted(signal);
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, durationMs);
+    const abort = () => {
+      clearTimeout(timeoutId);
+      reject(abortError());
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError();
+}
+
+function abortError(): DOMException {
+  return new DOMException('World action cancelled', 'AbortError');
 }
