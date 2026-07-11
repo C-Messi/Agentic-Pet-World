@@ -1,8 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import type { StorageDatabase } from './database.js';
+import { initialMigrationSql } from './migrations/001-initial.js';
 
 interface Migration {
   version: number;
@@ -10,40 +7,21 @@ interface Migration {
   sql: string;
 }
 
-const migrationFilePattern = /^(\d+)_([a-z0-9_]+)\.sql$/;
-const defaultMigrationsDirectory = fileURLToPath(
-  new URL('./migrations', import.meta.url),
-);
+const migrations: readonly Migration[] = [
+  {
+    version: 1,
+    name: 'initial',
+    sql: initialMigrationSql,
+  },
+];
 
-export function loadMigrations(
-  directory = defaultMigrationsDirectory,
-): readonly Migration[] {
-  return readdirSync(directory)
-    .filter((filename) => filename.endsWith('.sql'))
-    .map((filename) => {
-      const match = migrationFilePattern.exec(filename);
-      if (match === null) {
-        throw new Error(`Invalid migration filename: ${filename}`);
-      }
-
-      const versionText = match[1];
-      const name = match[2];
-      if (versionText === undefined || name === undefined) {
-        throw new Error(`Invalid migration filename: ${filename}`);
-      }
-
-      return {
-        version: Number.parseInt(versionText, 10),
-        name,
-        sql: readFileSync(join(directory, filename), 'utf8'),
-      };
-    })
-    .sort((left, right) => left.version - right.version);
+export function loadMigrations(): readonly Migration[] {
+  return migrations;
 }
 
 export function runMigrations(
   database: StorageDatabase,
-  migrations = loadMigrations(),
+  pendingMigrations = loadMigrations(),
 ): void {
   database.transaction(() => {
     database.exec(`
@@ -72,7 +50,7 @@ export function runMigrations(
       .run(migration.version, migration.name, new Date().toISOString());
   });
 
-  for (const migration of migrations) {
+  for (const migration of pendingMigrations) {
     if (!appliedVersions.has(migration.version)) {
       applyMigration(migration);
     }

@@ -4,6 +4,7 @@ import {
 } from '@cat-house/shared';
 
 import type { StorageDatabase } from '../database.js';
+import { normalizeTimestamp } from '../validation.js';
 
 interface MemoryRow {
   id: string;
@@ -32,8 +33,8 @@ export class MemoryRepository {
         memory.content,
         memory.importance,
         memory.sourceMessageId ?? null,
-        memory.createdAt,
-        memory.updatedAt,
+        normalizeTimestamp(memory.createdAt),
+        normalizeTimestamp(memory.updatedAt),
       );
   }
 

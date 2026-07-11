@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 import type { StorageDatabase } from '../database.js';
 import type { SessionRecord } from '../types.js';
-import { IdentifierSchema, TimestampSchema } from '../validation.js';
+import {
+  IdentifierSchema,
+  normalizeTimestamp,
+  TimestampSchema,
+} from '../validation.js';
 
 const SessionRecordSchema = z
   .object({
@@ -28,7 +32,11 @@ export class SessionRepository {
         `INSERT INTO sessions (id, created_at, updated_at)
          VALUES (?, ?, ?)`,
       )
-      .run(session.id, session.createdAt, session.updatedAt);
+      .run(
+        session.id,
+        normalizeTimestamp(session.createdAt),
+        normalizeTimestamp(session.updatedAt),
+      );
   }
 
   public get(id: string): SessionRecord | undefined {

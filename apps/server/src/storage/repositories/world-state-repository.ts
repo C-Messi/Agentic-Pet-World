@@ -6,7 +6,12 @@ import { z } from 'zod';
 
 import type { StorageDatabase } from '../database.js';
 import type { WorldStateRecord } from '../types.js';
-import { IdentifierSchema, parseJson, TimestampSchema } from '../validation.js';
+import {
+  IdentifierSchema,
+  normalizeTimestamp,
+  parseJson,
+  TimestampSchema,
+} from '../validation.js';
 
 const WorldStateRecordSchema = z
   .object({
@@ -42,7 +47,7 @@ export class WorldStateRepository {
       .run(
         worldState.sessionId,
         JSON.stringify(worldState.snapshot),
-        worldState.updatedAt,
+        normalizeTimestamp(worldState.updatedAt),
       );
   }
 

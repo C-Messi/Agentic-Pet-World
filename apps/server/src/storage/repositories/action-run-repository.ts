@@ -7,7 +7,12 @@ import { z } from 'zod';
 
 import type { StorageDatabase } from '../database.js';
 import type { ActionRunRecord } from '../types.js';
-import { IdentifierSchema, parseJson, TimestampSchema } from '../validation.js';
+import {
+  IdentifierSchema,
+  normalizeTimestamp,
+  parseJson,
+  TimestampSchema,
+} from '../validation.js';
 
 const ActionRunStatusSchema = z.enum([
   'pending',
@@ -67,6 +72,13 @@ export class ActionRunRepository {
 
   public create(record: ActionRunRecord): void {
     const run = ActionRunRecordSchema.parse(record);
+    const result =
+      run.result === undefined
+        ? undefined
+        : {
+            ...run.result,
+            completedAt: normalizeTimestamp(run.result.completedAt),
+          };
     this.database
       .prepare(
         `INSERT INTO action_runs (
@@ -78,15 +90,19 @@ export class ActionRunRepository {
         run.sessionId,
         JSON.stringify(run.action),
         run.status,
-        run.result === undefined ? null : JSON.stringify(run.result),
-        run.createdAt,
-        run.updatedAt,
+        result === undefined ? null : JSON.stringify(result),
+        normalizeTimestamp(run.createdAt),
+        normalizeTimestamp(run.updatedAt),
       );
   }
 
   public complete(id: string, result: ActionResult, updatedAt: string): void {
     const actionResult = ActionResultSchema.parse(result);
-    TimestampSchema.parse(updatedAt);
+    const normalizedResult = {
+      ...actionResult,
+      completedAt: normalizeTimestamp(actionResult.completedAt),
+    };
+    const normalizedUpdatedAt = normalizeTimestamp(updatedAt);
     this.database.transaction(() => {
       const update = this.database
         .prepare(
@@ -95,9 +111,9 @@ export class ActionRunRepository {
            WHERE id = ? AND status IN ('pending', 'running')`,
         )
         .run(
-          actionResult.status,
-          JSON.stringify(actionResult),
-          updatedAt,
+          normalizedResult.status,
+          JSON.stringify(normalizedResult),
+          normalizedUpdatedAt,
           id,
         );
       if (update.changes !== 1) {

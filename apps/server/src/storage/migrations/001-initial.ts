@@ -1,3 +1,4 @@
+export const initialMigrationSql = `
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,
@@ -72,3 +73,4 @@ CREATE TABLE action_runs (
 
 CREATE INDEX action_runs_session_status_idx
   ON action_runs(session_id, status, created_at, id);
+`;

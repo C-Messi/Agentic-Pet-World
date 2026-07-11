@@ -2,7 +2,13 @@ import { z } from 'zod';
 
 import type { StorageDatabase } from '../database.js';
 import type { EventRecord } from '../types.js';
-import { IdentifierSchema, parseJson, TimestampSchema } from '../validation.js';
+import {
+  IdentifierSchema,
+  normalizeTimestamp,
+  parseJsonCompatible,
+  serializeJsonCompatible,
+  TimestampSchema,
+} from '../validation.js';
 
 interface EventRow {
   id: string;
@@ -41,8 +47,8 @@ export class EventRepository<TPayload> {
         event.id,
         event.sessionId,
         event.type,
-        JSON.stringify(event.payload),
-        event.createdAt,
+        serializeJsonCompatible(event.payload, this.payloadSchema),
+        normalizeTimestamp(event.createdAt),
       );
   }
 
@@ -61,7 +67,7 @@ export class EventRepository<TPayload> {
         id: row.id,
         sessionId: row.session_id,
         type: row.type,
-        payload: parseJson(row.payload_json, this.payloadSchema),
+        payload: parseJsonCompatible(row.payload_json, this.payloadSchema),
         createdAt: row.created_at,
       }),
     );

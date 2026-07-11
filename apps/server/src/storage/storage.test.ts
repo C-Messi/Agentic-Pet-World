@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase, type StorageDatabase } from './database.js';
+import { loadMigrations } from './migrations.js';
 import {
   ActionRunRepository,
   EventRepository,
@@ -59,6 +60,13 @@ describe('SQLite storage', () => {
   });
 
   it('applies migrations once and tracks them', () => {
+    expect(loadMigrations()).toEqual([
+      expect.objectContaining({
+        version: 1,
+        name: 'initial',
+        sql: expect.stringContaining('CREATE TABLE sessions'),
+      }),
+    ]);
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
     ).toEqual([{ version: 1 }]);
@@ -151,6 +159,44 @@ describe('SQLite storage', () => {
     });
   });
 
+  it('normalizes timestamp offsets before ordering records', () => {
+    const sessions = new SessionRepository(database);
+    const messages = new MessageRepository(database);
+    sessions.create({
+      id: 'session-1',
+      createdAt: '2026-07-12T09:00:00+08:00',
+      updatedAt: '2026-07-12T09:00:00+08:00',
+    });
+
+    messages.create({
+      id: 'message-first',
+      sessionId: 'session-1',
+      role: 'player',
+      content: 'This instant is earlier despite its larger local hour.',
+      createdAt: '2026-07-12T09:00:00+08:00',
+    });
+    messages.create({
+      id: 'message-second',
+      sessionId: 'session-1',
+      role: 'agent',
+      content: 'This instant is one hour later.',
+      createdAt: '2026-07-12T02:00:00Z',
+    });
+
+    expect(sessions.get('session-1')).toEqual({
+      id: 'session-1',
+      createdAt: '2026-07-12T01:00:00.000Z',
+      updatedAt: '2026-07-12T01:00:00.000Z',
+    });
+    expect(messages.listForSession('session-1').map((message) => message.id)).toEqual([
+      'message-first',
+      'message-second',
+    ]);
+    expect(
+      messages.listForSession('session-1').map((message) => message.createdAt),
+    ).toEqual(['2026-07-12T01:00:00.000Z', '2026-07-12T02:00:00.000Z']);
+  });
+
   it('stores memory and typed event records', () => {
     const sessions = new SessionRepository(database);
     const memories = new MemoryRepository(database);
@@ -178,6 +224,91 @@ describe('SQLite storage', () => {
 
     expect(memories.listForSession('session-1')).toEqual([memory]);
     expect(events.listForSession('session-1')).toEqual([event]);
+  });
+
+  it('rejects memories sourced from another session', () => {
+    const sessions = new SessionRepository(database);
+    const messages = new MessageRepository(database);
+    const memories = new MemoryRepository(database);
+    sessions.create({ id: 'session-1', createdAt: timestamp, updatedAt: timestamp });
+    sessions.create({ id: 'session-2', createdAt: timestamp, updatedAt: timestamp });
+    messages.create({
+      id: 'message-1',
+      sessionId: 'session-1',
+      role: 'player',
+      content: 'Remember this.',
+      createdAt: timestamp,
+    });
+
+    expect(() =>
+      memories.create({
+        id: 'memory-1',
+        sessionId: 'session-2',
+        content: 'This must not cross session boundaries.',
+        importance: 0.5,
+        sourceMessageId: 'message-1',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }),
+    ).toThrow(/FOREIGN KEY constraint failed/);
+  });
+
+  it('clears deleted source messages and cascades deleted sessions', () => {
+    const sessions = new SessionRepository(database);
+    const messages = new MessageRepository(database);
+    const memories = new MemoryRepository(database);
+    sessions.create({ id: 'session-1', createdAt: timestamp, updatedAt: timestamp });
+    messages.create({
+      id: 'message-1',
+      sessionId: 'session-1',
+      role: 'agent',
+      content: 'A durable observation.',
+      createdAt: timestamp,
+    });
+    memories.create({
+      id: 'memory-1',
+      sessionId: 'session-1',
+      content: 'The observation remains after its source is removed.',
+      importance: 0.7,
+      sourceMessageId: 'message-1',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    database.prepare('DELETE FROM messages WHERE id = ?').run('message-1');
+    expect(memories.listForSession('session-1')).toEqual([
+      {
+        id: 'memory-1',
+        sessionId: 'session-1',
+        content: 'The observation remains after its source is removed.',
+        importance: 0.7,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ]);
+
+    database.prepare('DELETE FROM sessions WHERE id = ?').run('session-1');
+    expect(
+      database.prepare('SELECT count(*) AS count FROM memories').get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it('rejects event payloads that are not stable JSON values', () => {
+    const sessions = new SessionRepository(database);
+    const datePayloadSchema = z.object({ occurredAt: z.date() }).strict();
+    const events = new EventRepository(database, datePayloadSchema);
+    sessions.create({ id: 'session-1', createdAt: timestamp, updatedAt: timestamp });
+
+    expect(() =>
+      events.create({
+        id: 'event-1',
+        sessionId: 'session-1',
+        type: 'agent.non-json',
+        payload: { occurredAt: new Date(timestamp) },
+        createdAt: timestamp,
+      }),
+    ).toThrow();
+    expect(events.listForSession('session-1')).toEqual([]);
   });
 
   it('tracks an action run from pending to completion', () => {

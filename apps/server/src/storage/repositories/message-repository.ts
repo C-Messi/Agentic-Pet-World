@@ -4,6 +4,7 @@ import {
 } from '@cat-house/shared';
 
 import type { StorageDatabase } from '../database.js';
+import { normalizeTimestamp } from '../validation.js';
 
 interface MessageRow {
   id: string;
@@ -28,7 +29,7 @@ export class MessageRepository {
         message.sessionId,
         message.role,
         message.content,
-        message.createdAt,
+        normalizeTimestamp(message.createdAt),
       );
   }
 
