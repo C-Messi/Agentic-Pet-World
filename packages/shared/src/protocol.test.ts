@@ -5,6 +5,7 @@ import {
   AgentActionSchema,
   AgentDecisionSchema,
   AgentTurnRequestSchema,
+  EmotionSchema,
   MemoryCandidateSchema,
   WorldSnapshotSchema,
 } from './index.js';
@@ -45,6 +46,20 @@ const validResult = {
   completedAt: '2026-07-12T08:30:00.000Z',
 };
 
+describe('emotions', () => {
+  it('exposes exactly the planned sprite states', () => {
+    expect(EmotionSchema.options).toEqual([
+      'idle',
+      'walk',
+      'sit',
+      'sleep',
+      'happy',
+      'curious',
+      'confused',
+    ]);
+  });
+});
+
 describe('agent decisions', () => {
   it('accepts a bounded decision with known actions', () => {
     expect(AgentDecisionSchema.parse(validDecision)).toEqual(validDecision);
@@ -53,7 +68,7 @@ describe('agent decisions', () => {
   it('accepts omitted thought and memory candidates', () => {
     const decision = {
       speech: 'I will stay here.',
-      emotion: 'neutral',
+      emotion: 'idle',
       actions: [],
     };
 

@@ -26,11 +26,13 @@ export const WorldObjectIdSchema = z.enum([
 export type WorldObjectId = z.infer<typeof WorldObjectIdSchema>;
 
 export const EmotionSchema = z.enum([
-  'neutral',
+  'idle',
+  'walk',
+  'sit',
+  'sleep',
   'happy',
   'curious',
   'confused',
-  'sleepy',
 ]);
 export type Emotion = z.infer<typeof EmotionSchema>;
 
