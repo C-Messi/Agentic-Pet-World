@@ -35,6 +35,7 @@ export interface ActionRunOptions {
 export interface ActionRunnerOptions {
   defaultTimeoutMs?: number;
   failureEmoteDurationMs?: number;
+  failureEmoteTimeoutMs?: number;
   now?: () => Date;
 }
 
@@ -53,6 +54,7 @@ class ActionTimeoutError extends Error {}
 export class ActionRunner {
   private readonly defaultTimeoutMs: number;
   private readonly failureEmoteDurationMs: number;
+  private readonly failureEmoteTimeoutMs: number;
   private readonly now: () => Date;
   private activeController: AbortController | undefined;
   private activeAction: AgentAction | undefined;
@@ -64,6 +66,7 @@ export class ActionRunner {
   ) {
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 15_000;
     this.failureEmoteDurationMs = options.failureEmoteDurationMs ?? 1_200;
+    this.failureEmoteTimeoutMs = options.failureEmoteTimeoutMs ?? 2_000;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -90,20 +93,38 @@ export class ActionRunner {
     this.events.emit('agent-busy', { busy: true });
 
     try {
-      for (const action of decision.actions) {
-        if (controller.signal.aborted) break;
+      for (const [index, action] of decision.actions.entries()) {
+        if (controller.signal.aborted) {
+          await this.cancelRemaining(
+            decision.actions.slice(index),
+            turnCorrelationId,
+            results,
+            options,
+            'ACTION_CANCELLED',
+            'Action sequence cancelled',
+          );
+          break;
+        }
         this.activeAction = action;
         this.events.emit('action-started', { turnCorrelationId, action });
         const result = await this.execute(action, controller.signal);
         const correlated = { turnCorrelationId, result };
-        results.push(correlated);
-        this.events.emit(
-          result.status === 'succeeded' ? 'action-completed' : 'action-failed',
-          correlated,
-        );
-        await options.onResult?.(correlated, this.world.getSnapshot());
+        await this.publishResult(correlated, results, options);
         if (result.status !== 'succeeded') {
-          if (result.status !== 'cancelled') await this.showFailureEmote();
+          const remaining = decision.actions.slice(index + 1);
+          await this.cancelRemaining(
+            remaining,
+            turnCorrelationId,
+            results,
+            options,
+            result.status === 'cancelled' ? 'ACTION_CANCELLED' : 'QUEUE_STOPPED',
+            result.status === 'cancelled'
+              ? 'Action sequence cancelled'
+              : `Skipped because action ${action.id} ${result.status}`,
+          );
+          if (result.status !== 'cancelled') {
+            await this.showFailureEmote(controller, controller.signal);
+          }
           break;
         }
       }
@@ -192,15 +213,66 @@ export class ActionRunner {
     };
   }
 
-  private async showFailureEmote(): Promise<void> {
-    try {
-      await this.world.emote(
-        'confused',
-        this.failureEmoteDurationMs,
-        new AbortController().signal,
+  private async publishResult(
+    correlated: CorrelatedActionResult,
+    results: CorrelatedActionResult[],
+    options: ActionRunOptions,
+  ): Promise<void> {
+    results.push(correlated);
+    this.events.emit(
+      correlated.result.status === 'succeeded' ? 'action-completed' : 'action-failed',
+      correlated,
+    );
+    await options.onResult?.(correlated, this.world.getSnapshot());
+  }
+
+  private async cancelRemaining(
+    actions: readonly AgentAction[],
+    turnCorrelationId: string,
+    results: CorrelatedActionResult[],
+    options: ActionRunOptions,
+    errorCode: 'ACTION_CANCELLED' | 'QUEUE_STOPPED',
+    message: string,
+  ): Promise<void> {
+    for (const action of actions) {
+      await this.publishResult(
+        {
+          turnCorrelationId,
+          result: this.result(action, 'cancelled', message, errorCode),
+        },
+        results,
+        options,
       );
+    }
+  }
+
+  private async showFailureEmote(
+    owner: AbortController,
+    ownerSignal: AbortSignal,
+  ): Promise<void> {
+    if (this.activeController !== owner || ownerSignal.aborted) return;
+    const feedbackController = new AbortController();
+    const unlink = linkAbortSignal(ownerSignal, feedbackController);
+    const cancellation = abortRace(ownerSignal);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        feedbackController.abort();
+        reject(new ActionTimeoutError('Failure feedback timed out'));
+      }, this.failureEmoteTimeoutMs);
+    });
+    try {
+      await Promise.race([
+        this.world.emote('confused', this.failureEmoteDurationMs, feedbackController.signal),
+        cancellation.promise,
+        timeout,
+      ]);
     } catch {
       // The original action result remains authoritative if recovery feedback also fails.
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      cancellation.cleanup();
+      unlink();
     }
   }
 }

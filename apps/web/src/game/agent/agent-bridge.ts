@@ -150,8 +150,15 @@ export interface AgentBridgeOptions {
   resultDeliveryTimeoutMs?: number;
 }
 
+interface OperationToken {
+  controller: AbortController;
+  generation: number;
+}
+
 export class AgentBridge {
   private activeController: AbortController | undefined;
+  private operationGeneration = 0;
+  private sessionGeneration = 0;
   private activeSessionId: string | undefined;
   private readonly deliveredResults: ActionResult[] = [];
   private readonly executedDecisions = new Set<string>();
@@ -175,57 +182,59 @@ export class AgentBridge {
   async createSession(): Promise<CreateSessionResponse> {
     if (!this.api.createSession) throw new Error('Session creation is unavailable');
     this.events.emit('connection-status', { status: 'connecting' });
-    const controller = this.replaceActiveController();
+    const operation = this.replaceActiveController();
     try {
-      const response = await this.api.createSession(controller.signal);
-      this.replaceSession(response.session.id);
+      const response = await this.api.createSession(operation.controller.signal);
+      this.assertOperationCurrent(operation);
+      this.commitSession(response.session.id);
+      this.assertOperationCurrent(operation);
       this.events.emit('connection-status', { status: 'ready' });
       return response;
     } catch (error) {
+      if (!this.isOperationCurrent(operation)) throw staleOperationError();
       this.emitRequestError(error);
       throw error;
     } finally {
-      if (this.activeController === controller) this.activeController = undefined;
+      this.finishOperation(operation);
     }
   }
 
   async loadSession(sessionId: string): Promise<SessionResponse> {
     if (!this.api.loadSession) throw new Error('Session loading is unavailable');
     this.events.emit('connection-status', { status: 'connecting' });
-    const controller = this.replaceActiveController();
+    const operation = this.replaceActiveController();
     try {
-      const response = await this.api.loadSession(sessionId, controller.signal);
-      this.replaceSession(response.session.id);
+      const response = await this.api.loadSession(sessionId, operation.controller.signal);
+      this.assertOperationCurrent(operation);
+      this.commitSession(response.session.id);
+      this.assertOperationCurrent(operation);
       this.events.emit('connection-status', { status: 'ready' });
       return response;
     } catch (error) {
+      if (!this.isOperationCurrent(operation)) throw staleOperationError();
       this.emitRequestError(error);
       throw error;
     } finally {
-      if (this.activeController === controller) this.activeController = undefined;
+      this.finishOperation(operation);
     }
   }
 
   replaceSession(sessionId: string): void {
     if (this.activeSessionId === sessionId) return;
-    this.activeController?.abort();
-    this.activeController = undefined;
-    this.runner.cancel();
-    this.activeSessionId = sessionId;
-    this.deliveredResults.length = 0;
-    this.executedDecisions.clear();
+    this.invalidateOperation();
+    this.commitSession(sessionId);
   }
 
   cancel(): void {
-    this.activeController?.abort();
-    this.runner.cancel();
+    this.invalidateOperation();
     this.events.emit('connection-status', { status: 'cancelled' });
   }
 
   async sendPlayerMessage(playerMessage: string): Promise<AgentBridgeTurnOutcome> {
     const sessionId = this.activeSessionId;
     if (!sessionId) throw new Error('No active session');
-    const controller = this.replaceActiveController();
+    const operation = this.replaceActiveController();
+    const capturedSessionGeneration = this.sessionGeneration;
     this.events.emit('connection-status', { status: 'thinking' });
     const currentAction = this.runner.currentAction;
     const request = AgentTurnRequestSchema.parse({
@@ -239,7 +248,8 @@ export class AgentBridge {
     let resultDeliveryFailed = false;
 
     try {
-      const response = await this.api.sendTurn(request, controller.signal);
+      const response = await this.api.sendTurn(request, operation.controller.signal);
+      this.assertOwnership(operation, capturedSessionGeneration);
       responseReceived = true;
       this.emitDecisionBubbles(response.decision);
       this.events.emit('connection-status', {
@@ -249,43 +259,61 @@ export class AgentBridge {
       const decisionKey = `${response.correlationId}:${stableDecision(response.decision)}`;
       if (!this.executedDecisions.has(decisionKey)) {
         this.executedDecisions.add(decisionKey);
+        this.assertOwnership(operation, capturedSessionGeneration);
         await this.runner.run(response.decision, response.correlationId, {
-          signal: controller.signal,
+          signal: operation.controller.signal,
           onResult: async (result, snapshot) => {
-            this.deliveredResults.push(result.result);
-            if (this.deliveredResults.length > 12) this.deliveredResults.shift();
-            if (!(await this.deliverResult(sessionId, result, snapshot))) {
+            if (this.sessionGeneration === capturedSessionGeneration) {
+              this.deliveredResults.push(result.result);
+              if (this.deliveredResults.length > 12) this.deliveredResults.shift();
+            }
+            const delivered = await this.deliverResult(
+              sessionId,
+              result,
+              snapshot,
+              operation,
+              capturedSessionGeneration,
+            );
+            if (!this.hasOwnership(operation, capturedSessionGeneration)) return;
+            if (!delivered) {
               resultDeliveryFailed = true;
             }
           },
         });
+        this.assertOwnership(operation, capturedSessionGeneration);
       }
-      if (!response.degraded && !controller.signal.aborted && !resultDeliveryFailed) {
+      this.assertOwnership(operation, capturedSessionGeneration);
+      if (!response.degraded && !resultDeliveryFailed) {
         this.events.emit('connection-status', { status: 'ready' });
       }
       return { ...response, source: 'server' };
     } catch (error) {
+      if (!this.hasOwnership(operation, capturedSessionGeneration)) {
+        throw staleOperationError();
+      }
       this.emitRequestError(error);
       if (!responseReceived && isNetworkError(error)) {
         const fallback = this.localOfflineFallback();
         this.emitDecisionBubbles(fallback.decision);
         await this.runner.run(fallback.decision, fallback.correlationId, {
-          signal: controller.signal,
+          signal: operation.controller.signal,
         });
+        this.assertOwnership(operation, capturedSessionGeneration);
         return fallback;
       }
       throw error;
     } finally {
-      if (this.activeController === controller) this.activeController = undefined;
+      this.finishOperation(operation);
     }
   }
 
-  private replaceActiveController(): AbortController {
+  private replaceActiveController(): OperationToken {
     this.activeController?.abort();
     this.runner.cancel();
     const controller = new AbortController();
+    this.operationGeneration += 1;
     this.activeController = controller;
-    return controller;
+    return { controller, generation: this.operationGeneration };
   }
 
   private emitRequestError(error: unknown): void {
@@ -310,6 +338,8 @@ export class AgentBridge {
     sessionId: string,
     result: CorrelatedActionResult,
     snapshot: WorldSnapshot,
+    operation: OperationToken,
+    capturedSessionGeneration: number,
   ): Promise<boolean> {
     const controller = new AbortController();
     let timedOut = false;
@@ -329,6 +359,7 @@ export class AgentBridge {
       ]);
       return true;
     } catch (error) {
+      if (!this.hasOwnership(operation, capturedSessionGeneration)) return false;
       if (timedOut) {
         this.events.emit('connection-status', {
           status: 'offline',
@@ -341,6 +372,47 @@ export class AgentBridge {
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
+  }
+
+  private commitSession(sessionId: string): void {
+    this.sessionGeneration += 1;
+    this.activeSessionId = sessionId;
+    this.deliveredResults.length = 0;
+    this.executedDecisions.clear();
+  }
+
+  private invalidateOperation(): void {
+    this.activeController?.abort();
+    this.activeController = undefined;
+    this.operationGeneration += 1;
+    this.runner.cancel();
+  }
+
+  private finishOperation(operation: OperationToken): void {
+    if (this.isOperationCurrent(operation)) this.activeController = undefined;
+  }
+
+  private isOperationCurrent(operation: OperationToken): boolean {
+    return (
+      this.activeController === operation.controller &&
+      this.operationGeneration === operation.generation &&
+      !operation.controller.signal.aborted
+    );
+  }
+
+  private hasOwnership(operation: OperationToken, capturedSessionGeneration: number): boolean {
+    return (
+      this.isOperationCurrent(operation) &&
+      this.sessionGeneration === capturedSessionGeneration
+    );
+  }
+
+  private assertOperationCurrent(operation: OperationToken): void {
+    if (!this.isOperationCurrent(operation)) throw staleOperationError();
+  }
+
+  private assertOwnership(operation: OperationToken, capturedSessionGeneration: number): void {
+    if (!this.hasOwnership(operation, capturedSessionGeneration)) throw staleOperationError();
   }
 
   private localOfflineFallback(): AgentBridgeTurnOutcome {
@@ -388,6 +460,10 @@ function isAbortError(error: unknown): boolean {
 
 function isNetworkError(error: unknown): boolean {
   return error instanceof TypeError;
+}
+
+function staleOperationError(): DOMException {
+  return new DOMException('Operation superseded', 'AbortError');
 }
 
 function stableDecision(decision: AgentTurnResponse['decision']): string {

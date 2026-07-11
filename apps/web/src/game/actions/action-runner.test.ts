@@ -145,8 +145,13 @@ describe('ActionRunner', () => {
     await vi.advanceTimersByTimeAsync(250);
 
     const results = await run;
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(2);
     expect(results[0]?.result).toMatchObject({ status: 'timed_out', errorCode: 'ACTION_TIMEOUT' });
+    expect(results[1]?.result).toMatchObject({
+      actionId: 'talk',
+      status: 'cancelled',
+      errorCode: 'QUEUE_STOPPED',
+    });
     expect(port.calls).not.toContain('speak:Never reached.');
     expect(port.calls).toContain('emote:confused');
     vi.useRealTimers();
@@ -166,6 +171,33 @@ describe('ActionRunner', () => {
     controller.abort();
 
     expect((await run)[0]?.result.status).toBe('cancelled');
+  });
+
+  it('delivers cancelled results for every action when cancelled before the first action', async () => {
+    const port = new FakeWorld();
+    const runner = new ActionRunner(port, new GameEventBus());
+    const controller = new AbortController();
+    const delivered: string[] = [];
+    controller.abort();
+
+    const results = await runner.run(
+      decision([
+        { id: 'move', type: 'move_to', targetId: 'window', timeoutMs: 1_000 },
+        { id: 'talk', type: 'speak', text: 'Never started.' },
+      ]),
+      'turn-pre-cancelled',
+      {
+        signal: controller.signal,
+        onResult: ({ result }) => delivered.push(result.actionId),
+      },
+    );
+
+    expect(results.map(({ result }) => [result.actionId, result.status, result.errorCode])).toEqual([
+      ['move', 'cancelled', 'ACTION_CANCELLED'],
+      ['talk', 'cancelled', 'ACTION_CANCELLED'],
+    ]);
+    expect(results.every(({ result }) => result.message === 'Action sequence cancelled')).toBe(true);
+    expect(delivered).toEqual(['move', 'talk']);
   });
 
   it('keeps ambient suspended and busy while a replacement run still owns execution', async () => {
@@ -239,8 +271,14 @@ describe('ActionRunner', () => {
       'turn-failure',
     );
 
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(2);
     expect(results[0]?.result.errorCode).toBe('INTERACTION_FAILED');
+    expect(results[1]?.result).toMatchObject({
+      actionId: 'talk',
+      status: 'cancelled',
+      errorCode: 'QUEUE_STOPPED',
+      message: 'Skipped because action open failed',
+    });
     expect(port.calls.at(-1)).toBe('ambient:false');
   });
 
@@ -290,5 +328,44 @@ describe('ActionRunner', () => {
       result: { type: action.type, status: 'failed', errorCode: 'ADAPTER_FAILED' },
     });
     expect(failures).toEqual([results[0]]);
+  });
+
+  it('stops failure feedback when a replacement run takes animation ownership', async () => {
+    const port = new FakeWorld();
+    let animation: Emotion = 'idle';
+    let feedbackStarted: (() => void) | undefined;
+    const feedback = new Promise<void>((resolve) => { feedbackStarted = resolve; });
+    port.interact = async () => {
+      throw new ActionExecutionError('INTERACTION_FAILED', 'failed');
+    };
+    port.emote = async (emotion: Emotion, _duration: number, signal: AbortSignal) => {
+      animation = emotion;
+      if (emotion !== 'confused') return;
+      feedbackStarted?.();
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('cancelled', 'AbortError')),
+          { once: true },
+        );
+      });
+    };
+    const runner = new ActionRunner(port, new GameEventBus(), {
+      failureEmoteDurationMs: 10_000,
+      failureEmoteTimeoutMs: 10_000,
+    });
+
+    const first = runner.run(
+      decision([{ id: 'inspect', type: 'interact', targetId: 'window', interaction: 'inspect' }]),
+      'turn-feedback',
+    );
+    await feedback;
+    const second = runner.run(
+      decision([{ id: 'happy', type: 'emote', emotion: 'happy', durationMs: 100 }]),
+      'turn-replacement',
+    );
+
+    await Promise.all([first, second]);
+    expect(animation).toBe('happy');
   });
 });

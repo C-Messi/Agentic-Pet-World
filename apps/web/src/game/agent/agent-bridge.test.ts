@@ -36,6 +36,20 @@ function turnRequest(): AgentTurnRequest {
   };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('AgentApiClient', () => {
   it('creates and loads sessions through shared response schemas', async () => {
     const session = {
@@ -109,6 +123,75 @@ describe('AgentApiClient', () => {
 });
 
 describe('AgentBridge', () => {
+  it('ignores a stale turn response from an adapter that does not honor abort', async () => {
+    const oldTurn = deferred<{
+      decision: AgentDecision;
+      degraded: false;
+      correlationId: string;
+    }>();
+    const newTurn = deferred<{
+      decision: AgentDecision;
+      degraded: false;
+      correlationId: string;
+    }>();
+    const api = {
+      sendTurn: vi.fn()
+        .mockImplementationOnce(() => oldTurn.promise)
+        .mockImplementationOnce(() => newTurn.promise),
+      postActionResult: vi.fn(async () => undefined),
+    };
+    const runner = {
+      run: vi.fn(async () => []),
+      cancel: vi.fn(),
+      currentAction: undefined,
+    } as unknown as ActionRunner;
+    const events = new GameEventBus();
+    const bubbles: string[] = [];
+    events.on('bubble-changed', ({ text }) => { if (text) bubbles.push(text); });
+    const bridge = new AgentBridge(api, runner, events, () => world);
+    bridge.replaceSession('session-1');
+
+    const oldRequest = bridge.sendPlayerMessage('Old.');
+    const newRequest = bridge.sendPlayerMessage('New.');
+    oldTurn.resolve({ decision, degraded: false, correlationId: 'turn-old' });
+    await expect(oldRequest).rejects.toMatchObject({ name: 'AbortError' });
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(bubbles).toEqual([]);
+
+    newTurn.resolve({ decision, degraded: false, correlationId: 'turn-new' });
+    await newRequest;
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(bubbles).toEqual([decision.speech]);
+  });
+
+  it('prevents a stale create response from replacing a newer loaded session', async () => {
+    const create = deferred<{
+      session: { id: string; createdAt: string; updatedAt: string };
+    }>();
+    const timestamp = '2026-07-12T00:00:00.000Z';
+    const api = {
+      createSession: vi.fn(() => create.promise),
+      loadSession: vi.fn(async () => ({
+        session: { id: 'session-new', createdAt: timestamp, updatedAt: timestamp },
+        world,
+        messages: [],
+      })),
+      sendTurn: vi.fn(),
+      postActionResult: vi.fn(async () => undefined),
+    };
+    const runner = { run: vi.fn(), cancel: vi.fn(), currentAction: undefined } as unknown as ActionRunner;
+    const bridge = new AgentBridge(api, runner, new GameEventBus(), () => world);
+
+    const oldCreate = bridge.createSession();
+    await bridge.loadSession('session-new');
+    create.resolve({
+      session: { id: 'session-old', createdAt: timestamp, updatedAt: timestamp },
+    });
+
+    await expect(oldCreate).rejects.toMatchObject({ name: 'AbortError' });
+    expect(bridge.sessionId).toBe('session-new');
+  });
+
   it('deduplicates the same turn correlation and decision', async () => {
     const api = {
       sendTurn: vi.fn(async () => ({ decision, degraded: false, correlationId: 'turn-1' })),
@@ -205,6 +288,70 @@ describe('AgentBridge', () => {
     expect(delivered[0]?.signal?.aborted).toBe(false);
     expect(ambientSuspended).toBe(false);
     expect(runner.currentAction).toBeUndefined();
+  });
+
+  it('delivers old-session cancellation without contaminating new recent results or status', async () => {
+    const oldRun = deferred<CorrelatedActionResult[]>();
+    let oldOptions: ActionRunOptions | undefined;
+    const requests: AgentTurnRequest[] = [];
+    const deliveredSessions: string[] = [];
+    const api = {
+      sendTurn: vi.fn(async (request: AgentTurnRequest) => {
+        requests.push(request);
+        return { decision, degraded: false, correlationId: `turn-${requests.length}` };
+      }),
+      postActionResult: vi.fn(async (sessionId: string) => {
+        deliveredSessions.push(sessionId);
+        throw new TypeError('old session delivery offline');
+      }),
+    };
+    const runner = {
+      run: vi.fn(async (
+        _decision: AgentDecision,
+        _correlation: string,
+        options?: ActionRunOptions,
+      ) => {
+        if (!oldOptions) {
+          oldOptions = options;
+          return oldRun.promise;
+        }
+        return [];
+      }),
+      cancel: vi.fn(),
+      currentAction: undefined,
+    } as unknown as ActionRunner;
+    const events = new GameEventBus();
+    const statuses: string[] = [];
+    events.on('connection-status', ({ status }) => statuses.push(status));
+    const bridge = new AgentBridge(api, runner, events, () => world);
+    bridge.replaceSession('session-old');
+    const oldTurn = bridge.sendPlayerMessage('Old.');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    bridge.replaceSession('session-new');
+    const statusCountAtReplacement = statuses.length;
+    const cancelled: CorrelatedActionResult = {
+      turnCorrelationId: 'turn-1',
+      result: {
+        actionId: 'move',
+        type: 'move_to',
+        status: 'cancelled',
+        errorCode: 'ACTION_CANCELLED',
+        message: 'Action sequence cancelled',
+        completedAt: '2026-07-12T00:00:00.000Z',
+      },
+    };
+    await oldOptions?.onResult?.(cancelled, world);
+    oldRun.resolve([cancelled]);
+    await expect(oldTurn).rejects.toMatchObject({ name: 'AbortError' });
+    expect(statuses.slice(statusCountAtReplacement)).not.toContain('offline');
+
+    await bridge.sendPlayerMessage('New.');
+
+    expect(deliveredSessions).toEqual(['session-old']);
+    expect(requests[1]?.recentActionResults).toEqual([]);
+    expect(statuses.at(-1)).toBe('ready');
   });
 
   it('bounds terminal result delivery timeout and emits offline status without another turn', async () => {
