@@ -186,9 +186,14 @@ function cloneJsonValue(
     if (Reflect.ownKeys(value).some((key) => typeof key === 'symbol')) {
       throw new Error(`${label} must not contain symbol keys`);
     }
-    const output: { [key: string]: MiniGameJsonValue } = {};
+    const output = Object.create(null) as { [key: string]: MiniGameJsonValue };
     for (const [key, item] of Object.entries(value)) {
-      output[key] = cloneJsonValue(item, label, activeObjects);
+      Object.defineProperty(output, key, {
+        value: cloneJsonValue(item, label, activeObjects),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return output;
   } finally {
@@ -198,7 +203,9 @@ function cloneJsonValue(
 
 function deepFreeze<T extends MiniGameJsonValue>(value: T): T {
   if (value && typeof value === 'object') {
-    for (const child of Object.values(value)) deepFreeze(child);
+    for (const key of Reflect.ownKeys(value)) {
+      deepFreeze(Reflect.get(value, key) as MiniGameJsonValue);
+    }
     Object.freeze(value);
   }
   return value;
