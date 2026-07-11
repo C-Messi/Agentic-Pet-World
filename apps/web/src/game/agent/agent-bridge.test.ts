@@ -297,7 +297,7 @@ describe('AgentBridge', () => {
     await Promise.resolve();
 
     bridge.replaceSession('session-2');
-    await turn;
+    await expect(turn).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(failures[0]?.status).toBe('cancelled');
     expect(delivered[0]?.result.result.status).toBe('cancelled');
@@ -540,7 +540,7 @@ describe('AgentBridge', () => {
         _correlation: string,
         options?: ActionRunOptions,
       ) => {
-        await options?.onResult?.(result);
+        await options?.onResult?.(result, world);
         return [result];
       }),
       cancel: vi.fn(),

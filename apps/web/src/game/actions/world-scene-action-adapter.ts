@@ -71,6 +71,6 @@ function asActionError(error: unknown, code: string): Error {
   );
 }
 
-function isAbortError(error: unknown): boolean {
+function isAbortError(error: unknown): error is DOMException {
   return error instanceof DOMException && error.name === 'AbortError';
 }

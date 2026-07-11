@@ -1,4 +1,4 @@
-import type { MemoryRecord, MessageRecord } from '@cat-house/shared';
+import type { MemoryRecord, MessageRecord, SessionResponse } from '@cat-house/shared';
 
 import type { GameUiRuntime, RuntimeSnapshot } from '../App';
 import { ActionRunner } from './actions/action-runner';
@@ -41,10 +41,10 @@ class ProductionGameRuntime implements GameUiRuntime {
     try {
       const session = storedSessionId
         ? await this.loadOrReplaceMissingSession(storedSessionId)
-        : await this.bridge.createSession();
+        : await this.createSessionSnapshot();
       this.sessionId = session.session.id;
       await this.worldReady;
-      return { sessionId: session.session.id, messages: 'messages' in session ? session.messages : [] };
+      return { sessionId: session.session.id, messages: session.messages };
     } catch (error) {
       this.events.emit('connection-status', {
         status: error instanceof AgentHttpError ? 'provider-error' : 'offline',
@@ -84,12 +84,17 @@ class ProductionGameRuntime implements GameUiRuntime {
     this.game.destroy(true);
   }
 
-  private async loadOrReplaceMissingSession(sessionId: string) {
+  private async loadOrReplaceMissingSession(sessionId: string): Promise<SessionResponse> {
     try {
       return await this.bridge.loadSession(sessionId);
     } catch (error) {
       if (!(error instanceof AgentHttpError) || error.status !== 404) throw error;
-      return this.bridge.createSession();
+      return this.createSessionSnapshot();
     }
+  }
+
+  private async createSessionSnapshot(): Promise<SessionResponse> {
+    const created = await this.bridge.createSession();
+    return { session: created.session, world: null, messages: [] };
   }
 }

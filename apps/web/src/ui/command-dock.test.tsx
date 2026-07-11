@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { MemoryRecord, MessageRecord } from '@cat-house/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,6 +35,7 @@ const memories: MemoryRecord[] = [
 ];
 
 afterEach(() => {
+  cleanup();
   localStorage.clear();
 });
 
@@ -73,7 +74,9 @@ describe('natural language game interface', () => {
     await screen.findByText('Offline');
     expect(input).toHaveValue('Stay near the very comfortable window seat');
 
-    runtime.events.emit('connection-status', { status: 'thinking' });
+    await act(async () => {
+      runtime.events.emit('connection-status', { status: 'thinking' });
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel current request' }));
     expect(runtime.cancel).toHaveBeenCalledOnce();
   });
@@ -121,6 +124,7 @@ describe('natural language game interface', () => {
     localStorage.setItem('agent-cat-house.session-id', 'session-restored');
     const runtime = createRuntime();
     const factory = vi.fn(() => runtime);
+    const subscribe = vi.spyOn(runtime.events, 'on');
     const view = render(<App runtimeFactory={factory} />);
     await screen.findByText('Ready');
 
@@ -129,6 +133,7 @@ describe('natural language game interface', () => {
     expect(factory).toHaveBeenCalledOnce();
     view.rerender(<App runtimeFactory={factory} />);
     expect(factory).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledOnce();
     view.unmount();
     expect(runtime.destroy).toHaveBeenCalledOnce();
   });

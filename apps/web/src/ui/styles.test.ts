@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+const css = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
 
 describe('responsive interface styles', () => {
   it('keeps touch controls stable and mobile text readable', () => {

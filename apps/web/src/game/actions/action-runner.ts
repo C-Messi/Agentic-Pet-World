@@ -289,7 +289,7 @@ function linkAbortSignal(signal: AbortSignal | undefined, controller: AbortContr
 }
 
 function abortRace(signal: AbortSignal): { promise: Promise<never>; cleanup: () => void } {
-  let abort = () => undefined;
+  let abort: () => void = () => undefined;
   const promise = new Promise<never>((_resolve, reject) => {
     if (signal.aborted) {
       reject(abortError());

@@ -38,28 +38,28 @@ class FakeWorld implements ActionWorldPort {
     this.calls.push(`ambient:${suspended}`);
   }
 
-  async moveTo(targetId: WorldObjectId): Promise<void> {
+  async moveTo(targetId: WorldObjectId, _signal: AbortSignal): Promise<void> {
     this.calls.push(`move_to:${targetId}`);
     if (this.failure) throw this.failure;
     if (this.pendingMove) await new Promise<void>((resolve) => (this.pendingMove = resolve));
   }
 
-  async interact(targetId: WorldObjectId, interaction: Interaction): Promise<void> {
+  async interact(targetId: WorldObjectId, interaction: Interaction, _signal: AbortSignal): Promise<void> {
     this.calls.push(`interact:${targetId}:${interaction}`);
     if (this.failure) throw this.failure;
   }
 
-  async emote(emotion: Emotion): Promise<void> {
+  async emote(emotion: Emotion, _durationMs: number, _signal: AbortSignal): Promise<void> {
     this.calls.push(`emote:${emotion}`);
     if (this.failure) throw this.failure;
   }
 
-  async wait(durationMs: number): Promise<void> {
+  async wait(durationMs: number, _signal: AbortSignal): Promise<void> {
     this.calls.push(`wait:${durationMs}`);
     if (this.failure) throw this.failure;
   }
 
-  async speak(text: string): Promise<void> {
+  async speak(text: string, _signal: AbortSignal): Promise<void> {
     this.calls.push(`speak:${text}`);
     if (this.failure) throw this.failure;
   }
@@ -113,7 +113,7 @@ describe('ActionRunner', () => {
         { id: 'talk', type: 'speak', text: 'Here it is.' },
       ]),
       'turn-1',
-      { onResult: ({ result }) => resultOrder.push(result.actionId) },
+      { onResult: ({ result }) => { resultOrder.push(result.actionId); } },
     );
 
     expect(port.calls).toEqual([
@@ -188,7 +188,7 @@ describe('ActionRunner', () => {
       'turn-pre-cancelled',
       {
         signal: controller.signal,
-        onResult: ({ result }) => delivered.push(result.actionId),
+        onResult: ({ result }) => { delivered.push(result.actionId); },
       },
     );
 
