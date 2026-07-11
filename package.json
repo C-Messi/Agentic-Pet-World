@@ -1,0 +1,27 @@
+{
+  "name": "agent-cat-house",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @cat-house/web --filter @cat-house/server dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test:e2e": "playwright test --pass-with-no-tests"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.1",
+    "@playwright/test": "^1.54.1",
+    "@types/node": "^24.0.10",
+    "eslint": "^9.30.1",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.1"
+  }
+}
