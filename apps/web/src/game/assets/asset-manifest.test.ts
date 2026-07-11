@@ -28,6 +28,7 @@ describe('generated pixel asset manifests', () => {
     expect(Object.keys(roomManifest.furniture.frames)).toEqual([
       'bed',
       'sofa',
+      'rug',
       'window',
       'food-bowl',
       'bookshelf',

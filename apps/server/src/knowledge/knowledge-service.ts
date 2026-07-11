@@ -13,6 +13,7 @@ export const KNOWLEDGE_DOCUMENT_IDS = [
   'object:bed',
   'object:bookshelf',
   'object:food-bowl',
+  'object:rug',
   'object:sofa',
   'object:toy-basket',
   'object:window',

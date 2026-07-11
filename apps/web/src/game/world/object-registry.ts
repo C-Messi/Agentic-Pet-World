@@ -13,6 +13,7 @@ export interface RoomObjectDefinition {
   interactionPoint: GridPoint;
   interactions: readonly Interaction[];
   occupiedTiles: readonly GridPoint[];
+  renderFromAtlas?: boolean;
 }
 
 const rectangleTiles = (x: number, y: number, width: number, height: number): GridPoint[] =>
@@ -22,6 +23,7 @@ const rectangleTiles = (x: number, y: number, width: number, height: number): Gr
   }));
 
 export const ROOM_GRID = { width: 24, height: 16, tileSize: 16 } as const;
+export const CAT_SPAWN_TILE: GridPoint = { x: 12, y: 12 };
 
 export const ROOM_OBJECTS: readonly RoomObjectDefinition[] = [
   {
@@ -43,11 +45,21 @@ export const ROOM_OBJECTS: readonly RoomObjectDefinition[] = [
     occupiedTiles: rectangleTiles(8, 2, 4, 4),
   },
   {
+    id: 'rug',
+    frame: 7,
+    spritePosition: { x: 112, y: 104 },
+    walkTarget: { x: 12, y: 9 },
+    interactionPoint: { x: 200, y: 152 },
+    interactions: ['inspect', 'rest'],
+    occupiedTiles: [],
+    renderFromAtlas: false,
+  },
+  {
     id: 'window',
     frame: 2,
     spritePosition: { x: 272, y: 0 },
-    walkTarget: { x: 19, y: 4 },
-    interactionPoint: { x: 312, y: 64 },
+    walkTarget: { x: 16, y: 2 },
+    interactionPoint: { x: 264, y: 40 },
     interactions: ['inspect', 'open'],
     occupiedTiles: rectangleTiles(17, 1, 4, 2),
   },

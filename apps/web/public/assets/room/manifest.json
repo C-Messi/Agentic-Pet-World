@@ -15,6 +15,7 @@
     "frames": {
       "bed": 0,
       "sofa": 1,
+      "rug": 7,
       "window": 2,
       "food-bowl": 3,
       "bookshelf": 4,

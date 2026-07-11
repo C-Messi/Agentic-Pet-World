@@ -6,6 +6,7 @@ import { NavigationSystem } from '../navigation/navigation-system';
 import {
   ROOM_GRID,
   ROOM_OBJECTS,
+  CAT_SPAWN_TILE,
   createRoomBlockedTiles,
   getWorldObject,
   type GridPoint,
@@ -13,7 +14,6 @@ import {
 
 const DISPLAY_SCALE = 2;
 const DISPLAY_TILE_SIZE = ROOM_GRID.tileSize * DISPLAY_SCALE;
-const CAT_START: GridPoint = { x: 12, y: 12 };
 const WANDER_TILES: readonly GridPoint[] = [
   { x: 8, y: 8 },
   { x: 12, y: 9 },
@@ -79,6 +79,7 @@ export class WorldScene extends Phaser.Scene {
     this.add.image(0, 0, 'room-background').setOrigin(0).setScale(DISPLAY_SCALE).setDepth(0);
 
     for (const object of ROOM_OBJECTS) {
+      if (object.renderFromAtlas === false) continue;
       this.add
         .image(
           object.spritePosition.x * DISPLAY_SCALE,
@@ -92,7 +93,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.createAnimations();
-    const start = tileCenter(CAT_START);
+    const start = tileCenter(CAT_SPAWN_TILE);
     this.cat = this.add.sprite(start.x, start.y, 'cat', 0).setScale(DISPLAY_SCALE).setDepth(start.y + 32);
     this.playEmotion('idle');
     this.game.events.emit('world-ready', this.getSnapshot());
@@ -162,8 +163,8 @@ export class WorldScene extends Phaser.Scene {
       position: cat
         ? { x: cat.x / DISPLAY_SCALE, y: cat.y / DISPLAY_SCALE }
         : {
-            x: CAT_START.x * ROOM_GRID.tileSize + ROOM_GRID.tileSize / 2,
-            y: CAT_START.y * ROOM_GRID.tileSize + ROOM_GRID.tileSize / 2,
+            x: CAT_SPAWN_TILE.x * ROOM_GRID.tileSize + ROOM_GRID.tileSize / 2,
+            y: CAT_SPAWN_TILE.y * ROOM_GRID.tileSize + ROOM_GRID.tileSize / 2,
           },
       emotion: this.currentEmotion,
     };
@@ -248,7 +249,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private getCatTile(): GridPoint {
-    if (!this.cat) return CAT_START;
+    if (!this.cat) return CAT_SPAWN_TILE;
     return {
       x: Math.floor(this.cat.x / DISPLAY_TILE_SIZE),
       y: Math.floor(this.cat.y / DISPLAY_TILE_SIZE),

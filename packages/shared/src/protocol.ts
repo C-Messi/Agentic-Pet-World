@@ -17,6 +17,7 @@ const TimestampSchema = z.string().datetime({ offset: true });
 export const WorldObjectIdSchema = z.enum([
   'bed',
   'sofa',
+  'rug',
   'window',
   'food-bowl',
   'bookshelf',
@@ -87,7 +88,7 @@ export type CatState = z.infer<typeof CatStateSchema>;
 export const WorldSnapshotSchema = z
   .object({
     cat: CatStateSchema,
-    objects: z.array(WorldObjectStateSchema).max(7),
+    objects: z.array(WorldObjectStateSchema).max(8),
   })
   .strict()
   .superRefine(({ objects }, context) => {

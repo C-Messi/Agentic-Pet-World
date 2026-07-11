@@ -211,6 +211,17 @@ function drawFurniture() {
     image.rect(x + 35, y + 39, 5, 5, colors.moss);
     image.rect(x + 17, y + 52, 30, 4, colors.shadow);
   }
+  {
+    const { x, y } = origin(7);
+    image.rect(x + 5, y + 12, 54, 40, colors.ink);
+    image.rect(x + 8, y + 15, 48, 34, colors.cream);
+    image.rect(x + 12, y + 19, 40, 26, colors.moss);
+    image.rect(x + 16, y + 23, 32, 18, colors.mossLight);
+    for (let xOffset = 16; xOffset < 48; xOffset += 8) {
+      image.rect(x + xOffset, y + 23, 3, 3, colors.sunflower);
+      image.rect(x + xOffset + 4, y + 38, 3, 3, colors.coral);
+    }
+  }
   return image;
 }
 
@@ -301,7 +312,16 @@ writeFileSync(
         image: 'furniture-atlas.png',
         frame: { width: 64, height: 64 },
         columns: 4,
-        frames: { bed: 0, sofa: 1, window: 2, 'food-bowl': 3, bookshelf: 4, 'toy-basket': 5, arcade: 6 },
+        frames: {
+          bed: 0,
+          sofa: 1,
+          rug: 7,
+          window: 2,
+          'food-bowl': 3,
+          bookshelf: 4,
+          'toy-basket': 5,
+          arcade: 6,
+        },
       },
     },
     null,

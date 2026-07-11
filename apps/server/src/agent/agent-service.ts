@@ -28,7 +28,7 @@ export const AGENT_DECISION_OUTPUT_CONTRACT_V1 = `[Output Contract: agent-decisi
 Return exactly one JSON object with no extra fields.
 Required fields: speech (non-empty string, maximum 280 characters), emotion (one of idle, walk, sit, sleep, happy, curious, confused), actions (array, maximum 4).
 Optional fields: thought (string, maximum 240 characters), memoryCandidates (array, maximum 3).
-Allowed object IDs: bed, sofa, window, food-bowl, bookshelf, toy-basket, arcade.
+Allowed object IDs: bed, sofa, rug, window, food-bowl, bookshelf, toy-basket, arcade.
 Each action must have a unique id and exactly one allowed variant:
 - move_to: {id, type:"move_to", targetId, timeoutMs integer 250..60000}
 - interact: {id, type:"interact", targetId, interaction one of inspect, rest, eat, play, open}

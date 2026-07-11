@@ -9,7 +9,7 @@ export interface AmbientContext {
 }
 
 export type AmbientAction =
-  | { type: 'rest'; targetId: 'bed' | 'sofa' }
+  | { type: 'rest'; targetId: 'bed' | 'sofa' | 'rug' }
   | { type: 'wander'; tile: GridPoint }
   | { type: 'inspect'; targetId: 'bookshelf' | 'toy-basket' | 'arcade' | 'food-bowl' }
   | { type: 'look_outside'; targetId: 'window' };
@@ -45,6 +45,7 @@ export class AmbientBehaviorSystem {
     const candidates: WeightedAction[] = [
       { action: { type: 'rest', targetId: 'bed' }, weight: 2, targetId: 'bed' },
       { action: { type: 'rest', targetId: 'sofa' }, weight: 2, targetId: 'sofa' },
+      { action: { type: 'rest', targetId: 'rug' }, weight: 2, targetId: 'rug' },
       ...context.wanderTiles.map((tile) => ({ action: { type: 'wander', tile } as const, weight: 3 })),
       { action: { type: 'inspect', targetId: 'bookshelf' }, weight: 1, targetId: 'bookshelf' },
       { action: { type: 'inspect', targetId: 'toy-basket' }, weight: 1, targetId: 'toy-basket' },

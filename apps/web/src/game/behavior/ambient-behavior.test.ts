@@ -34,6 +34,7 @@ describe('AmbientBehaviorSystem', () => {
     const blockedObjectIds = new Set([
       'bed',
       'sofa',
+      'rug',
       'bookshelf',
       'toy-basket',
       'arcade',
@@ -45,6 +46,24 @@ describe('AmbientBehaviorSystem', () => {
 
     expect(selected?.type).toBe('wander');
     expect(selected && 'targetId' in selected ? selected.targetId : undefined).toBeUndefined();
+  });
+
+  it('maps look_outside to the reachable window target', () => {
+    const system = new AmbientBehaviorSystem({ random: () => 0.5, now: () => 10_000 });
+    const blockedObjectIds = new Set([
+      'bed',
+      'sofa',
+      'rug',
+      'bookshelf',
+      'toy-basket',
+      'arcade',
+      'food-bowl',
+    ]);
+
+    expect(system.select(context({ blockedObjectIds, wanderTiles: [] }))).toEqual({
+      type: 'look_outside',
+      targetId: 'window',
+    });
   });
 
   it('respects its cooldown using the injected clock', () => {

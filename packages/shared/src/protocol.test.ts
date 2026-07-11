@@ -98,13 +98,21 @@ describe('agent decisions', () => {
     expect(() => AgentDecisionSchema.parse({ ...validDecision, actions })).toThrow();
   });
 
-  it('rejects unknown action types and targets', () => {
+  it('accepts the canonical rug target and rejects unknown action types and targets', () => {
+    expect(
+      AgentActionSchema.parse({
+        id: 'rug-rest',
+        type: 'interact',
+        targetId: 'rug',
+        interaction: 'rest',
+      }),
+    ).toMatchObject({ targetId: 'rug' });
     expect(() => AgentActionSchema.parse({ id: 'bad-1', type: 'run_code' })).toThrow();
     expect(() =>
       AgentActionSchema.parse({
         id: 'bad-2',
         type: 'move_to',
-        targetId: 'rug',
+        targetId: 'desk',
         timeoutMs: 1_000,
       }),
     ).toThrow();
@@ -145,6 +153,27 @@ describe('agent decisions', () => {
 });
 
 describe('world snapshots', () => {
+  it('accepts all eight canonical room objects', () => {
+    const ids = [
+      'bed',
+      'sofa',
+      'rug',
+      'window',
+      'food-bowl',
+      'bookshelf',
+      'toy-basket',
+      'arcade',
+    ];
+    const objects = ids.map((id, index) => ({
+      id,
+      position: { x: index, y: 1 },
+      available: true,
+      interactions: ['inspect'],
+    }));
+
+    expect(WorldSnapshotSchema.parse({ ...world, objects }).objects).toHaveLength(8);
+  });
+
   it('rejects duplicate object IDs within the object limit', () => {
     const objects = [
       {
@@ -210,7 +239,7 @@ describe('agent turn requests', () => {
       }),
     ).toThrow();
 
-    const tooManyObjects = Array.from({ length: 8 }, (_, index) => ({
+    const tooManyObjects = Array.from({ length: 9 }, (_, index) => ({
       id: 'bed',
       position: { x: index, y: 0 },
       available: true,

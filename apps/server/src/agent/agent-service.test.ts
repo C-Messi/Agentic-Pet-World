@@ -515,7 +515,7 @@ describe('AgentService', () => {
       'emote',
       'wait',
       'speak',
-      'bed, sofa, window, food-bowl, bookshelf, toy-basket, arcade',
+      'bed, sofa, rug, window, food-bowl, bookshelf, toy-basket, arcade',
     ]) {
       expect(AGENT_DECISION_OUTPUT_CONTRACT_V1).toContain(fragment);
     }
