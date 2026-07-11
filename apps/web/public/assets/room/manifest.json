@@ -1,0 +1,25 @@
+{
+  "pixelArt": true,
+  "room": {
+    "image": "room-background.png",
+    "width": 384,
+    "height": 256
+  },
+  "furniture": {
+    "image": "furniture-atlas.png",
+    "frame": {
+      "width": 64,
+      "height": 64
+    },
+    "columns": 4,
+    "frames": {
+      "bed": 0,
+      "sofa": 1,
+      "window": 2,
+      "food-bowl": 3,
+      "bookshelf": 4,
+      "toy-basket": 5,
+      "arcade": 6
+    }
+  }
+}
