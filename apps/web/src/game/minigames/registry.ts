@@ -1,5 +1,7 @@
 import {
+  createMiniGameInitialState,
   validateMiniGameManifest,
+  type MiniGameJsonValue,
   type MiniGameManifest,
   type WorldObjectId,
 } from '@cat-house/shared';
@@ -20,12 +22,13 @@ export interface MiniGameSceneController {
   launch(key: string, data: MiniGameLaunchData): unknown;
 }
 
-type RegisteredManifest = MiniGameManifest<unknown, MiniGameSceneType>;
+type RegisteredManifest = MiniGameManifest<MiniGameJsonValue, MiniGameSceneType>;
 
 export class MiniGameRegistry {
   private readonly manifests = new Map<string, RegisteredManifest>();
   private readonly triggerIds = new Map<WorldObjectId, string>();
-  private readonly sceneLoaders = new Map<string, Promise<MiniGameSceneType>>();
+  private readonly loadedScenes = new Map<string, MiniGameSceneType>();
+  private readonly pendingSceneLoads = new Map<string, Promise<MiniGameSceneType>>();
   private readonly addedScenes = new WeakMap<object, Set<string>>();
 
   constructor(fallback: RegisteredManifest, private readonly fallbackId: string) {
@@ -35,7 +38,9 @@ export class MiniGameRegistry {
     }
   }
 
-  register<TState>(manifest: MiniGameManifest<TState, MiniGameSceneType>): void {
+  register<TState extends MiniGameJsonValue>(
+    manifest: MiniGameManifest<TState, MiniGameSceneType>,
+  ): void {
     this.registerManifest(manifest, true);
   }
 
@@ -71,10 +76,18 @@ export class MiniGameRegistry {
     signal?: AbortSignal,
   ): Promise<void> {
     throwIfAborted(signal);
-    const manifest = this.manifests.get(id) ?? this.requireFallback();
-    const state = parseInitialState(manifest);
-    const Scene = await this.loadScene(manifest);
+    const requestedManifest = this.manifests.get(id) ?? this.requireFallback();
+    let manifest = requestedManifest;
+    let Scene: MiniGameSceneType;
+    try {
+      Scene = await this.loadScene(requestedManifest);
+    } catch (error) {
+      if (requestedManifest.id === this.fallbackId) throw error;
+      manifest = this.requireFallback();
+      Scene = await this.loadScene(manifest);
+    }
     throwIfAborted(signal);
+    const state = createMiniGameInitialState(manifest);
 
     let added = this.addedScenes.get(controller);
     if (!added) {
@@ -94,7 +107,7 @@ export class MiniGameRegistry {
     });
   }
 
-  private registerManifest<TState>(
+  private registerManifest<TState extends MiniGameJsonValue>(
     manifest: MiniGameManifest<TState, MiniGameSceneType>,
     indexTrigger: boolean,
   ): void {
@@ -102,20 +115,35 @@ export class MiniGameRegistry {
     if (this.manifests.has(manifest.id)) {
       throw new Error(`Duplicate mini-game ID: ${manifest.id}`);
     }
+    const existingTriggerOwner = indexTrigger
+      ? this.triggerIds.get(manifest.triggerObjectId)
+      : undefined;
+    if (existingTriggerOwner) {
+      throw new Error(
+        `Duplicate mini-game trigger object ${manifest.triggerObjectId}: owned by ${existingTriggerOwner}`,
+      );
+    }
     this.manifests.set(manifest.id, manifest as RegisteredManifest);
     if (indexTrigger) this.triggerIds.set(manifest.triggerObjectId, manifest.id);
   }
 
   private loadScene(manifest: RegisteredManifest): Promise<MiniGameSceneType> {
-    let pending = this.sceneLoaders.get(manifest.id);
+    const loaded = this.loadedScenes.get(manifest.id);
+    if (loaded) return Promise.resolve(loaded);
+    let pending = this.pendingSceneLoads.get(manifest.id);
     if (!pending) {
       pending = manifest.loadScene().then((Scene) => {
         if (typeof Scene !== 'function') {
           throw new Error(`Mini-game ${manifest.id} scene loader did not return a scene class`);
         }
+        this.loadedScenes.set(manifest.id, Scene);
+        this.pendingSceneLoads.delete(manifest.id);
         return Scene;
+      }).catch((error: unknown) => {
+        this.pendingSceneLoads.delete(manifest.id);
+        throw error;
       });
-      this.sceneLoaders.set(manifest.id, pending);
+      this.pendingSceneLoads.set(manifest.id, pending);
     }
     return pending;
   }
@@ -124,15 +152,6 @@ export class MiniGameRegistry {
     const fallback = this.manifests.get(this.fallbackId);
     if (!fallback) throw new Error(`Missing mini-game fallback: ${this.fallbackId}`);
     return fallback;
-  }
-}
-
-function parseInitialState(manifest: RegisteredManifest): unknown {
-  try {
-    return manifest.stateSchema.parse(manifest.createInitialState());
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid mini-game initial state for ${manifest.id}: ${message}`);
   }
 }
 

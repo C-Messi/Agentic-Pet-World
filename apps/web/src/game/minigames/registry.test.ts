@@ -58,6 +58,18 @@ describe('MiniGameRegistry', () => {
     );
   });
 
+  it('rejects duplicate trigger-object ownership without replacing the first manifest', () => {
+    const registry = new MiniGameRegistry(manifest('fallback'), 'fallback');
+    const first = manifest('first-game', 'arcade');
+    registry.register(first);
+
+    expect(() => registry.register(manifest('second-game', 'arcade'))).toThrow(
+      /duplicate mini-game trigger object.*arcade/i,
+    );
+    expect(registry.findByTriggerObject('arcade')).toBe(first);
+    expect(registry.get('second-game')).toBeUndefined();
+  });
+
   it('does not load a scene until opening and caches the loader result', async () => {
     const fallback = manifest('fallback');
     const loader = vi.fn(async () => TestScene as MiniGameSceneType);
@@ -76,6 +88,34 @@ describe('MiniGameRegistry', () => {
       'launch:arcade-coming-soon:WorldScene',
       'sleep:WorldScene',
       'launch:arcade-coming-soon:WorldScene',
+    ]);
+  });
+
+  it('falls back after a loader rejection and retries the registered game later', async () => {
+    const fallbackLoader = vi.fn(async () => FallbackScene as MiniGameSceneType);
+    const loader = vi
+      .fn<() => Promise<MiniGameSceneType>>()
+      .mockRejectedValueOnce(new Error('chunk unavailable'))
+      .mockResolvedValueOnce(TestScene as MiniGameSceneType);
+    const registry = new MiniGameRegistry(
+      manifest('fallback', 'window', fallbackLoader),
+      'fallback',
+    );
+    registry.register(manifest('arcade-game', 'arcade', loader));
+    const sceneController = controller();
+
+    await expect(
+      registry.openByTriggerObject('arcade', sceneController.value, 'WorldScene'),
+    ).resolves.toBe(true);
+    await expect(
+      registry.openByTriggerObject('arcade', sceneController.value, 'WorldScene'),
+    ).resolves.toBe(true);
+
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(fallbackLoader).toHaveBeenCalledTimes(1);
+    expect(sceneController.calls.filter((call) => call.startsWith('launch:'))).toEqual([
+      'launch:fallback:WorldScene',
+      'launch:arcade-game:WorldScene',
     ]);
   });
 

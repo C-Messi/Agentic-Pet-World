@@ -4,6 +4,14 @@ import { IdentifierSchema, WorldObjectIdSchema, type WorldObjectId } from './pro
 
 const MAX_AGENT_TOOLS = 8;
 
+export type MiniGameJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | MiniGameJsonValue[]
+  | { [key: string]: MiniGameJsonValue };
+
 export const MiniGameAgentToolMetadataSchema = z
   .object({
     id: IdentifierSchema.max(64),
@@ -24,16 +32,22 @@ export const MiniGameManifestMetadataSchema = z
   .strict();
 export type MiniGameManifestMetadata = z.infer<typeof MiniGameManifestMetadataSchema>;
 
-export interface MiniGameValidator<T> {
+export interface MiniGameValidator<T extends MiniGameJsonValue> {
   parse(input: unknown): T;
 }
 
-export interface MiniGameAgentTool<TState, TInput = never> extends MiniGameAgentToolMetadata {
+export interface MiniGameAgentTool<
+  TState extends MiniGameJsonValue,
+  TInput extends MiniGameJsonValue = MiniGameJsonValue,
+> extends MiniGameAgentToolMetadata {
   inputSchema: MiniGameValidator<TInput>;
   execute(input: TInput, state: Readonly<TState>): TState | Promise<TState>;
 }
 
-export interface MiniGameManifest<TState = unknown, TScene = unknown> {
+export interface MiniGameManifest<
+  TState extends MiniGameJsonValue = MiniGameJsonValue,
+  TScene = unknown,
+> {
   id: string;
   title: string;
   triggerObjectId: WorldObjectId;
@@ -44,7 +58,7 @@ export interface MiniGameManifest<TState = unknown, TScene = unknown> {
   agentTools?: readonly MiniGameAgentTool<TState>[];
 }
 
-export function getMiniGameManifestMetadata<TState, TScene>(
+export function getMiniGameManifestMetadata<TState extends MiniGameJsonValue, TScene>(
   manifest: MiniGameManifest<TState, TScene>,
 ): MiniGameManifestMetadata {
   const metadata: MiniGameManifestMetadata = {
@@ -63,7 +77,7 @@ export function getMiniGameManifestMetadata<TState, TScene>(
   return MiniGameManifestMetadataSchema.parse(metadata);
 }
 
-export function validateMiniGameManifest<TState, TScene>(
+export function validateMiniGameManifest<TState extends MiniGameJsonValue, TScene>(
   manifest: MiniGameManifest<TState, TScene>,
 ): MiniGameManifest<TState, TScene> {
   if (!manifest || typeof manifest !== 'object') {
@@ -92,14 +106,23 @@ export function validateMiniGameManifest<TState, TScene>(
   }
 
   try {
-    manifest.stateSchema.parse(manifest.createInitialState());
+    createMiniGameInitialState(manifest);
   } catch (error) {
     throw new Error(`Invalid mini-game initial state: ${errorMessage(error)}`);
   }
   return manifest;
 }
 
-export async function executeMiniGameAgentTool<TState, TScene>(
+export function createMiniGameInitialState<TState extends MiniGameJsonValue, TScene>(
+  manifest: MiniGameManifest<TState, TScene>,
+): TState {
+  return cloneMiniGameJsonValue<TState>(
+    manifest.stateSchema.parse(manifest.createInitialState()),
+    'Mini-game initial state',
+  );
+}
+
+export async function executeMiniGameAgentTool<TState extends MiniGameJsonValue, TScene>(
   manifest: MiniGameManifest<TState, TScene>,
   toolId: string,
   input: unknown,
@@ -108,10 +131,77 @@ export async function executeMiniGameAgentTool<TState, TScene>(
   validateMiniGameManifest(manifest);
   const tool = manifest.agentTools?.find(({ id }) => id === toolId);
   if (!tool) throw new Error(`Unknown mini-game agent tool: ${toolId}`);
-  const currentState = manifest.stateSchema.parse(state);
-  const parsedInput = tool.inputSchema.parse(input);
+  const currentState = cloneAndFreezeMiniGameJsonValue<TState>(
+    manifest.stateSchema.parse(state),
+    'Mini-game state',
+  );
+  const parsedInput = cloneAndFreezeMiniGameJsonValue(
+    tool.inputSchema.parse(input),
+    'Mini-game agent tool input',
+  );
   const nextState = await tool.execute(parsedInput, currentState);
-  return manifest.stateSchema.parse(nextState);
+  return cloneMiniGameJsonValue<TState>(
+    manifest.stateSchema.parse(nextState),
+    'Mini-game agent tool output state',
+  );
+}
+
+export function cloneMiniGameJsonValue<T extends MiniGameJsonValue>(
+  value: unknown,
+  label = 'Mini-game value',
+): T {
+  return cloneJsonValue(value, label, new WeakSet()) as T;
+}
+
+function cloneAndFreezeMiniGameJsonValue<T extends MiniGameJsonValue>(
+  value: unknown,
+  label: string,
+): T {
+  return deepFreeze(cloneMiniGameJsonValue<T>(value, label));
+}
+
+function cloneJsonValue(
+  value: unknown,
+  label: string,
+  activeObjects: WeakSet<object>,
+): MiniGameJsonValue {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new Error(`${label} must contain only finite numbers`);
+  }
+  if (typeof value !== 'object') {
+    throw new Error(`${label} must be JSON-compatible data`);
+  }
+  if (activeObjects.has(value)) throw new Error(`${label} must not contain cycles`);
+  activeObjects.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneJsonValue(item, label, activeObjects));
+    }
+    const prototype = Object.getPrototypeOf(value) as object | null;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${label} must contain only plain JSON-compatible objects`);
+    }
+    if (Reflect.ownKeys(value).some((key) => typeof key === 'symbol')) {
+      throw new Error(`${label} must not contain symbol keys`);
+    }
+    const output: { [key: string]: MiniGameJsonValue } = {};
+    for (const [key, item] of Object.entries(value)) {
+      output[key] = cloneJsonValue(item, label, activeObjects);
+    }
+    return output;
+  } finally {
+    activeObjects.delete(value);
+  }
+}
+
+function deepFreeze<T extends MiniGameJsonValue>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function requireFunction(value: unknown, name: string): asserts value is (...args: never[]) => unknown {

@@ -7,6 +7,7 @@ import {
   getMiniGameManifestMetadata,
   validateMiniGameManifest,
   type MiniGameManifest,
+  type MiniGameJsonValue,
 } from './minigame.js';
 
 const stateSchema = z.object({ visits: z.number().int().nonnegative() }).strict();
@@ -55,6 +56,13 @@ describe('mini-game manifests', () => {
         loadScene: 'not-a-function',
       }),
     ).toThrow(/loadScene/i);
+    expect(() =>
+      validateMiniGameManifest({
+        ...manifest(),
+        stateSchema: z.unknown(),
+        createInitialState: () => ({ invalid: undefined }) as unknown as MiniGameJsonValue,
+      }),
+    ).toThrow(/json-compatible/i);
   });
 
   it('bounds optional agent tools and requires schema-validated execution contracts', () => {
@@ -104,5 +112,58 @@ describe('mini-game manifests', () => {
     await expect(
       executeMiniGameAgentTool(runtime, 'missing', {}, { visits: 2 }),
     ).rejects.toThrow(/unknown mini-game agent tool/i);
+  });
+
+  it('isolates caller-owned nested state and input when a tool mutates then fails', async () => {
+    type NestedState = { nested: { visits: number } };
+    type NestedInput = { payload: { amount: number } };
+    const nestedStateSchema = {
+      parse: (input: unknown) => input as NestedState,
+    };
+    const nestedInputSchema = {
+      parse: (input: unknown) => input as NestedInput,
+    };
+    const runtime: MiniGameManifest<
+      NestedState,
+      string
+    > = {
+      id: 'nested-game',
+      title: 'Nested Game',
+      triggerObjectId: 'arcade',
+      stateSchemaId: 'nested-state-v1',
+      stateSchema: nestedStateSchema,
+      createInitialState: () => ({ nested: { visits: 0 } }),
+      loadScene: async () => 'NestedScene',
+      agentTools: [
+        {
+          id: 'mutate',
+          description: 'Attempts nested mutation before failing.',
+          inputSchemaId: 'nested-input-v1',
+          inputSchema: nestedInputSchema,
+          execute: async (input: NestedInput, state) => {
+            try {
+              state.nested.visits = 99;
+            } catch {
+              // Frozen runtime copies may reject mutation before the tool failure.
+            }
+            try {
+              input.payload.amount = 99;
+            } catch {
+              // Frozen runtime copies may reject mutation before the tool failure.
+            }
+            throw new Error('tool failed');
+          },
+        },
+      ],
+    };
+    const callerState = { nested: { visits: 2 } };
+    const callerInput = { payload: { amount: 1 } };
+
+    await expect(
+      executeMiniGameAgentTool(runtime, 'mutate', callerInput, callerState),
+    ).rejects.toThrow('tool failed');
+
+    expect(callerState).toEqual({ nested: { visits: 2 } });
+    expect(callerInput).toEqual({ payload: { amount: 1 } });
   });
 });
