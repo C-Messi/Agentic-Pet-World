@@ -71,30 +71,58 @@ describe('SQLite storage', () => {
     ).toEqual([{ version: 1 }]);
   });
 
-  it('persists sessions and messages across close and reopen', () => {
+  it('persists complete durable session state across close and reopen', () => {
     const sessions = new SessionRepository(database);
     const messages = new MessageRepository(database);
+    const worldStates = new WorldStateRepository(database);
+    const memories = new MemoryRepository(database);
 
     const session = { id: 'session-1', createdAt: timestamp, updatedAt: timestamp };
-    const message = {
-      id: 'message-1',
+    const playerMessage = {
+      id: 'message-player-1',
       sessionId: session.id,
       role: 'player' as const,
       content: 'Please look out of the window.',
       createdAt: timestamp,
     };
+    const agentMessage = {
+      id: 'message-agent-1',
+      sessionId: session.id,
+      role: 'agent' as const,
+      content: 'The sunlight is warm today.',
+      createdAt: laterTimestamp,
+    };
+    const memory = {
+      id: 'memory-1',
+      sessionId: session.id,
+      content: 'The player likes sunny windows.',
+      importance: 0.8,
+      sourceMessageId: agentMessage.id,
+      createdAt: laterTimestamp,
+      updatedAt: laterTimestamp,
+    };
 
     sessions.create(session);
-    messages.create(message);
-    expect(sessions.get(session.id)).toEqual(session);
-    expect(messages.listForSession(session.id)).toEqual([message]);
+    messages.create(playerMessage);
+    messages.create(agentMessage);
+    worldStates.upsert(session.id, world, laterTimestamp);
+    memories.create(memory);
 
     database.close();
     database = openDatabase(databasePath);
 
     expect(new SessionRepository(database).get(session.id)).toEqual(session);
     expect(new MessageRepository(database).listForSession(session.id)).toEqual([
-      message,
+      playerMessage,
+      agentMessage,
+    ]);
+    expect(new WorldStateRepository(database).get(session.id)).toEqual({
+      sessionId: session.id,
+      snapshot: world,
+      updatedAt: laterTimestamp,
+    });
+    expect(new MemoryRepository(database).listForSession(session.id)).toEqual([
+      memory,
     ]);
   });
 
