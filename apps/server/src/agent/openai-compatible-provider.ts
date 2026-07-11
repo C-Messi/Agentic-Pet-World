@@ -7,52 +7,95 @@ import {
   type ProviderCompletionRequest,
 } from './provider.js';
 
-interface ChatCompletionInput {
+export interface OpenAIClientOptions {
+  readonly baseURL: string;
+  readonly apiKey: string;
+}
+
+export interface OpenAIChatCompletionBody {
   readonly model: string;
   readonly temperature: number;
-  readonly messages: readonly {
+  readonly stream: false;
+  readonly response_format: { readonly type: 'json_object' };
+  readonly messages: {
     readonly role: 'system' | 'user' | 'assistant';
     readonly content: string;
   }[];
+}
+
+export interface OpenAIRequestOptions {
   readonly signal: AbortSignal;
 }
 
-interface ChatCompletionOutput {
-  readonly content: string | null;
+export interface OpenAIClientLike {
+  readonly chat: {
+    readonly completions: {
+      create(
+        body: OpenAIChatCompletionBody,
+        options: OpenAIRequestOptions,
+      ): Promise<{
+        readonly choices: readonly {
+          readonly message: { readonly content: string | null };
+        }[];
+      }>;
+    };
+  };
 }
 
-export interface OpenAIChatClient {
-  createChatCompletion(input: ChatCompletionInput): Promise<ChatCompletionOutput>;
+export interface OpenAICompatibleProviderDependencies {
+  readonly createClient?: (options: OpenAIClientOptions) => OpenAIClientLike;
+  readonly createTimeoutSignal?: (timeoutMs: number) => AbortSignal;
 }
 
 export class OpenAICompatibleProvider implements ProviderAdapter {
-  private readonly client: OpenAIChatClient;
+  private readonly client: OpenAIClientLike;
+  private readonly createTimeoutSignal: (timeoutMs: number) => AbortSignal;
 
   public constructor(
     private readonly config: Omit<OpenAICompatibleLlmConfig, 'kind'>,
-    client?: OpenAIChatClient,
+    dependencies: OpenAICompatibleProviderDependencies = {},
   ) {
-    this.client = client ?? createSdkClient(config);
+    this.client = (dependencies.createClient ?? createSdkClient)({
+      baseURL: config.baseURL,
+      apiKey: config.apiKey,
+    });
+    this.createTimeoutSignal =
+      dependencies.createTimeoutSignal ?? ((timeoutMs) => AbortSignal.timeout(timeoutMs));
   }
 
   public async complete(request: ProviderCompletionRequest): Promise<unknown> {
-    const timeoutSignal = AbortSignal.timeout(this.config.timeoutMs);
+    if (request.signal.aborted) {
+      throw new ProviderError('cancelled', {
+        correlationId: request.correlationId,
+      });
+    }
+    const timeoutSignal = this.createTimeoutSignal(this.config.timeoutMs);
+    if (timeoutSignal.aborted) {
+      throw new ProviderError('timeout', {
+        correlationId: request.correlationId,
+      });
+    }
     const signal = AbortSignal.any([request.signal, timeoutSignal]);
 
     try {
-      const completion = await this.client.createChatCompletion({
-        model: this.config.model,
-        temperature: this.config.temperature,
-        messages: buildMessages(request),
-        signal,
-      });
-      if (completion.content === null || completion.content.trim().length === 0) {
+      const completion = await this.client.chat.completions.create(
+        {
+          model: this.config.model,
+          temperature: this.config.temperature,
+          stream: false,
+          response_format: { type: 'json_object' },
+          messages: buildMessages(request),
+        },
+        { signal },
+      );
+      const content = completion.choices[0]?.message.content ?? null;
+      if (content === null || content.trim().length === 0) {
         throw new ProviderError('invalid_output', {
           correlationId: request.correlationId,
         });
       }
       try {
-        return JSON.parse(completion.content) as unknown;
+        return JSON.parse(content) as unknown;
       } catch {
         throw new ProviderError('invalid_output', {
           correlationId: request.correlationId,
@@ -104,32 +147,27 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
 }
 
 function createSdkClient(
-  config: Omit<OpenAICompatibleLlmConfig, 'kind'>,
-): OpenAIChatClient {
-  const openai = new OpenAI({
-    baseURL: config.baseURL,
-    apiKey: config.apiKey,
-  });
+  options: OpenAIClientOptions,
+): OpenAIClientLike {
+  const openai = new OpenAI(options);
   return {
-    async createChatCompletion(input) {
-      const completion = await openai.chat.completions.create(
-        {
-          model: input.model,
-          temperature: input.temperature,
-          response_format: { type: 'json_object' },
-          messages: [...input.messages],
+    chat: {
+      completions: {
+        async create(body, requestOptions) {
+          return openai.chat.completions.create(
+            { ...body, messages: [...body.messages] },
+            { signal: requestOptions.signal },
+          );
         },
-        { signal: input.signal },
-      );
-      return { content: completion.choices[0]?.message.content ?? null };
+      },
     },
   };
 }
 
 function buildMessages(
   request: ProviderCompletionRequest,
-): ChatCompletionInput['messages'] {
-  const messages: Array<ChatCompletionInput['messages'][number]> =
+): OpenAIChatCompletionBody['messages'] {
+  const messages: Array<OpenAIChatCompletionBody['messages'][number]> =
     request.trustedInstructions.map((content) => ({ role: 'system', content }));
   if (request.untrustedContext.length > 0) {
     messages.push({

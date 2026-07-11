@@ -208,6 +208,7 @@ export class AgentService {
     }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      throwIfCancelled(request.signal, request.correlationId);
       try {
         return await provider.complete(request);
       } catch (error) {
@@ -221,12 +222,28 @@ export class AgentService {
             correlationId: request.correlationId,
           });
         }
-        await this.sleep(this.retryDelayMs, request.signal);
+        try {
+          await this.sleep(this.retryDelayMs, request.signal);
+        } catch (sleepError) {
+          if (request.signal.aborted) {
+            throw new ProviderError('cancelled', {
+              correlationId: request.correlationId,
+            });
+          }
+          throw sleepError;
+        }
+        throwIfCancelled(request.signal, request.correlationId);
       }
     }
     throw new ProviderError('request_failed', {
       correlationId: request.correlationId,
     });
+  }
+}
+
+function throwIfCancelled(signal: AbortSignal, correlationId: string): void {
+  if (signal.aborted) {
+    throw new ProviderError('cancelled', { correlationId });
   }
 }
 
