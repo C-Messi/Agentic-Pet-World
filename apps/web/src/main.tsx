@@ -1,9 +1,7 @@
-import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-
-function App() {
-  return <main id="app" />;
-}
+import { App } from './App';
+import { createProductionRuntime } from './game/production-runtime';
+import './styles.css';
 
 const rootElement = document.getElementById('root');
 
@@ -11,8 +9,4 @@ if (!rootElement) {
   throw new Error('Root element not found');
 }
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+createRoot(rootElement).render(<App runtimeFactory={createProductionRuntime} />);

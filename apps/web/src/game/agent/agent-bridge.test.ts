@@ -70,6 +70,22 @@ describe('AgentApiClient', () => {
     ]);
   });
 
+  it('loads durable memories through the shared schema', async () => {
+    const memory = {
+      id: 'memory-1',
+      sessionId: 'session-1',
+      content: 'The player enjoys the sunny window.',
+      importance: 0.8,
+      createdAt: '2026-07-12T00:00:00.000Z',
+      updatedAt: '2026-07-12T00:00:00.000Z',
+    };
+    const fetcher = vi.fn(async () => response({ memories: [memory] }));
+    const client = new AgentApiClient({ fetcher });
+
+    await expect(client.listMemories('session-1')).resolves.toEqual([memory]);
+    expect(fetcher).toHaveBeenCalledWith('/api/sessions/session-1/memories', {});
+  });
+
   it('accepts and parses a 503 fallback envelope', async () => {
     const fetcher = vi.fn(async () => response({
       decision: { speech: 'I need a quiet moment.', emotion: 'confused', actions: [] },

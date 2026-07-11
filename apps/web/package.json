@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cat-house/shared": "workspace:*",
+    "lucide-react": "^0.468.0",
     "phaser": "^3.90.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

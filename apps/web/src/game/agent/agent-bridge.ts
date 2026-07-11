@@ -5,12 +5,14 @@ import {
   AgentTurnResponseSchema,
   CreateSessionResponseSchema,
   ErrorResponseSchema,
+  MemoriesResponseSchema,
   SessionResponseSchema,
   type ActionResult,
   type AgentDecision,
   type AgentTurnRequest,
   type AgentTurnResponse,
   type CreateSessionResponse,
+  type MemoryRecord,
   type SessionResponse,
   type WorldSnapshot,
 } from '@cat-house/shared';
@@ -64,6 +66,15 @@ export class AgentApiClient {
       signal === undefined ? {} : { signal },
     );
     return SessionResponseSchema.parse(await this.requireJson(response));
+  }
+
+  async listMemories(sessionId: string, signal?: AbortSignal): Promise<readonly MemoryRecord[]> {
+    const response = await this.fetcher(
+      `${this.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/memories`,
+      signal === undefined ? {} : { signal },
+    );
+    const payload = await this.requireJson(response);
+    return MemoriesResponseSchema.parse(payload).memories;
   }
 
   async sendTurn(request: AgentTurnRequest, signal?: AbortSignal): Promise<AgentTurnResponse> {

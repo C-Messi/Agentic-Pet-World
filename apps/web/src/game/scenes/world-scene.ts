@@ -44,6 +44,10 @@ export class WorldScene extends Phaser.Scene {
   static readonly key = 'WorldScene';
 
   private cat: Phaser.GameObjects.Sprite | undefined;
+  private bubble: Phaser.GameObjects.Container | undefined;
+  private bubbleBackground: Phaser.GameObjects.Graphics | undefined;
+  private bubbleText: Phaser.GameObjects.Text | undefined;
+  private removeBubbleListener: (() => void) | undefined;
   private readonly navigation = new NavigationSystem({
     width: ROOM_GRID.width,
     height: ROOM_GRID.height,
@@ -106,11 +110,15 @@ export class WorldScene extends Phaser.Scene {
       .sprite(start.x, start.y, 'cat', 0)
       .setScale(DISPLAY_SCALE)
       .setDepth(bottomDepthFromCenter(start.y, 32 * DISPLAY_SCALE));
+    this.createBubble();
+    this.removeBubbleListener?.();
+    this.removeBubbleListener = gameEvents.on('bubble-changed', this.handleBubbleChanged);
     this.playEmotion('idle');
     gameEvents.emit('world-ready', this.getSnapshot());
   }
 
   update(_time: number, delta: number): void {
+    this.positionBubble();
     if (this.runtime.path.length > 0) {
       this.advanceMovement(delta);
       return;
@@ -365,8 +373,61 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handleShutdown(): void {
+    this.removeBubbleListener?.();
+    this.removeBubbleListener = undefined;
     this.resetSceneState();
     this.cat = undefined;
+    this.bubble = undefined;
+    this.bubbleBackground = undefined;
+    this.bubbleText = undefined;
+  }
+
+  private createBubble(): void {
+    this.bubbleBackground = this.add.graphics();
+    this.bubbleText = this.add.text(-98, -59, '', {
+      color: '#2d2528',
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '15px',
+      lineSpacing: 2,
+      wordWrap: { width: 196, useAdvancedWrap: true },
+      align: 'center',
+    }).setOrigin(0, 0.5);
+    this.bubble = this.add.container(0, 0, [this.bubbleBackground, this.bubbleText])
+      .setDepth(20_000)
+      .setVisible(false);
+  }
+
+  private readonly handleBubbleChanged = ({
+    kind,
+    text,
+  }: {
+    kind: 'speech' | 'thought';
+    text?: string;
+  }): void => {
+    if (!this.bubble || !this.bubbleBackground || !this.bubbleText) return;
+    if (!text) {
+      this.bubble.setVisible(false);
+      return;
+    }
+    const fill = kind === 'thought' ? 0xdce8df : 0xfff4d6;
+    const border = kind === 'thought' ? 0x72947e : 0x8e665a;
+    this.bubbleBackground.clear();
+    this.bubbleBackground.fillStyle(fill, 0.97);
+    this.bubbleBackground.lineStyle(3, border, 1);
+    this.bubbleBackground.fillRoundedRect(-110, -78, 220, 64, 8);
+    this.bubbleBackground.strokeRoundedRect(-110, -78, 220, 64, 8);
+    this.bubbleBackground.fillTriangle(-12, -14, 12, -14, 0, 0);
+    this.bubbleText.setText(text);
+    this.bubble.setVisible(true);
+    this.positionBubble();
+  };
+
+  private positionBubble(): void {
+    if (!this.bubble?.visible || !this.cat) return;
+    this.bubble.setPosition(
+      Phaser.Math.Clamp(this.cat.x, 116, 652),
+      Phaser.Math.Clamp(this.cat.y - 42, 82, 500),
+    );
   }
 
   private resolveMovementCompletion(): void {
