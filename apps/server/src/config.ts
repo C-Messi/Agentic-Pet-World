@@ -30,6 +30,15 @@ const environmentSchema = z
     }
   });
 
+const runtimeEnvironmentSchema = z
+  .object({
+    DATABASE_URL: z.string().trim().min(1).default('./data/cat-house.sqlite'),
+    PORT: z.coerce.number().int().min(1).max(65_535).default(8_787),
+    HOST: z.string().trim().min(1).max(255).default('127.0.0.1'),
+    WEB_ORIGIN: z.string().trim().url().default('http://127.0.0.1:5173'),
+  })
+  .passthrough();
+
 export interface FakeLlmConfig {
   readonly kind: 'fake';
 }
@@ -45,6 +54,25 @@ export interface OpenAICompatibleLlmConfig {
 
 export interface ServerConfig {
   readonly llm: FakeLlmConfig | OpenAICompatibleLlmConfig;
+}
+
+export interface RuntimeServerConfig {
+  readonly databasePath: string;
+  readonly port: number;
+  readonly host: string;
+  readonly webOrigin: string;
+}
+
+export function parseRuntimeServerConfig(
+  environment: Readonly<Record<string, string | undefined>>,
+): RuntimeServerConfig {
+  const parsed = runtimeEnvironmentSchema.parse(environment);
+  return {
+    databasePath: parsed.DATABASE_URL,
+    port: parsed.PORT,
+    host: parsed.HOST,
+    webOrigin: parsed.WEB_ORIGIN,
+  };
 }
 
 export function parseServerConfig(

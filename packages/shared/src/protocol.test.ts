@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ActionResultsRequestSchema,
   ActionResultSchema,
   AgentActionSchema,
   AgentDecisionSchema,
   AgentTurnRequestSchema,
+  AgentTurnResponseSchema,
+  CreateSessionRequestSchema,
   EmotionSchema,
+  ErrorResponseSchema,
   MemoryCandidateSchema,
   WorldSnapshotSchema,
 } from './index.js';
@@ -246,5 +250,37 @@ describe('action results', () => {
     expect(() =>
       ActionResultSchema.parse({ ...validResult, message: 'x'.repeat(501) }),
     ).toThrow();
+  });
+});
+
+describe('HTTP API envelopes', () => {
+  it('validates session, turn, action-result, and error payloads', () => {
+    expect(CreateSessionRequestSchema.parse({})).toEqual({});
+    expect(
+      AgentTurnResponseSchema.parse({
+        decision: validDecision,
+        degraded: true,
+        fallbackReason: 'provider_unavailable',
+        correlationId: 'request-1',
+      }),
+    ).toEqual({
+      decision: validDecision,
+      degraded: true,
+      fallbackReason: 'provider_unavailable',
+      correlationId: 'request-1',
+    });
+    expect(
+      ActionResultsRequestSchema.parse({ world, results: [validResult] }),
+    ).toEqual({ world, results: [validResult] });
+    expect(
+      ErrorResponseSchema.parse({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Request body is invalid',
+          correlationId: 'request-1',
+          details: [{ path: 'playerMessage', message: 'Required' }],
+        },
+      }),
+    ).toBeTruthy();
   });
 });

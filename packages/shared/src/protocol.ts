@@ -5,7 +5,7 @@ const ACTION_ID_MAX_LENGTH = 64;
 const SHORT_TEXT_MAX_LENGTH = 280;
 const LONG_TEXT_MAX_LENGTH = 1_000;
 
-const IdentifierSchema = z
+export const IdentifierSchema = z
   .string()
   .min(1)
   .max(ID_MAX_LENGTH)
@@ -243,3 +243,114 @@ export const MemoryRecordSchema = z
   })
   .strict();
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
+
+export const SessionRecordSchema = z
+  .object({
+    id: IdentifierSchema,
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict();
+export type SessionRecord = z.infer<typeof SessionRecordSchema>;
+
+export const CreateSessionRequestSchema = z.object({}).strict();
+export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
+
+export const CreateSessionResponseSchema = z
+  .object({ session: SessionRecordSchema })
+  .strict();
+export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>;
+
+export const SessionResponseSchema = z
+  .object({
+    session: SessionRecordSchema,
+    world: WorldSnapshotSchema.nullable(),
+    messages: z.array(MessageRecordSchema),
+  })
+  .strict();
+export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+export const AgentTurnBodySchema = AgentTurnRequestSchema.omit({ sessionId: true });
+export type AgentTurnBody = z.infer<typeof AgentTurnBodySchema>;
+
+export const AgentFallbackReasonSchema = z.enum([
+  'cancelled',
+  'invalid_output',
+  'provider_failure',
+  'provider_unavailable',
+  'timeout',
+  'unsafe_target',
+]);
+
+export const AgentTurnResponseSchema = z
+  .object({
+    decision: AgentDecisionSchema,
+    degraded: z.boolean(),
+    fallbackReason: AgentFallbackReasonSchema.optional(),
+    correlationId: IdentifierSchema.max(96),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    if (response.degraded !== (response.fallbackReason !== undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Degraded responses require a fallback reason',
+        path: ['fallbackReason'],
+      });
+    }
+  });
+export type AgentTurnResponse = z.infer<typeof AgentTurnResponseSchema>;
+
+export const ActionResultsRequestSchema = z
+  .object({
+    world: WorldSnapshotSchema,
+    results: z.array(ActionResultSchema).min(1).max(12),
+  })
+  .strict();
+export type ActionResultsRequest = z.infer<typeof ActionResultsRequestSchema>;
+
+export const ActionResultsResponseSchema = z
+  .object({ accepted: z.number().int().min(1).max(12) })
+  .strict();
+
+export const MemoriesResponseSchema = z
+  .object({ memories: z.array(MemoryRecordSchema) })
+  .strict();
+
+export const HealthResponseSchema = z
+  .object({
+    status: z.enum(['ok', 'degraded']),
+    checks: z
+      .object({
+        config: z.boolean(),
+        storage: z.boolean(),
+        knowledge: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const ErrorResponseSchema = z
+  .object({
+    error: z
+      .object({
+        code: z.string().min(1).max(64).regex(/^[A-Z][A-Z0-9_]*$/),
+        message: z.string().min(1).max(500),
+        correlationId: IdentifierSchema.max(96),
+        details: z
+          .array(
+            z
+              .object({
+                path: z.string().max(240),
+                message: z.string().min(1).max(500),
+              })
+              .strict(),
+          )
+          .max(24)
+          .optional(),
+        retryAfterMs: z.number().int().positive().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;

@@ -9,6 +9,7 @@ import {
 import type { EventRecord } from '../storage/types.js';
 import {
   AgentTurnEventPayloadSchema,
+  type AgentFallbackReason,
   type AgentTurnEventPayload,
   type TurnPersistence,
 } from './agent-service.js';
@@ -40,6 +41,26 @@ export class StorageTurnPersistence implements TurnPersistence {
     return event?.payload.phase === 'completed'
       ? event.payload.decision
       : undefined;
+  }
+
+  public findCompletedOutcome(
+    sessionId: string,
+    correlationId: string,
+  ): { decision: AgentDecision; fallbackReason?: AgentFallbackReason } | undefined {
+    const event = this.events.findLatestForSessionByTypeAndCorrelation(
+      sessionId,
+      'agent.turn.completed',
+      correlationId,
+    );
+    if (event?.payload.phase !== 'completed') {
+      return undefined;
+    }
+    return {
+      decision: event.payload.decision,
+      ...(event.payload.fallbackReason === undefined
+        ? {}
+        : { fallbackReason: event.payload.fallbackReason }),
+    };
   }
 
   public createMessage(record: MessageRecord): void {

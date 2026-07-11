@@ -52,4 +52,13 @@ export class SessionRepository {
           updatedAt: row.updated_at,
         });
   }
+
+  public touch(id: string, updatedAt: string): void {
+    const update = this.database
+      .prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
+      .run(normalizeTimestamp(updatedAt), id);
+    if (update.changes !== 1) {
+      throw new Error(`Session not found: ${id}`);
+    }
+  }
 }

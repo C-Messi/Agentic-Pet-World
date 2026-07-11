@@ -79,6 +79,10 @@ export type AgentTurnEventPayload = z.infer<typeof AgentTurnEventPayloadSchema>;
 
 export interface TurnPersistence {
   runInTransaction<T>(operation: () => T): T;
+  findCompletedOutcome?(
+    sessionId: string,
+    correlationId: string,
+  ): AgentTurnOutcome | undefined;
   findCompletedDecision(
     sessionId: string,
     correlationId: string,
@@ -103,6 +107,11 @@ export interface AgentTurnOptions {
   readonly correlationId?: string;
 }
 
+export interface AgentTurnOutcome {
+  readonly decision: AgentDecision;
+  readonly fallbackReason?: AgentFallbackReason;
+}
+
 export class AgentService {
   private readonly retryDelayMs: number;
   private readonly sleep: (delayMs: number, signal: AbortSignal) => Promise<void>;
@@ -117,16 +126,30 @@ export class AgentService {
     request: AgentTurnRequest,
     options: AgentTurnOptions = {},
   ): Promise<AgentDecision> {
+    return (await this.turnDetailed(request, options)).decision;
+  }
+
+  public async turnDetailed(
+    request: AgentTurnRequest,
+    options: AgentTurnOptions = {},
+  ): Promise<AgentTurnOutcome> {
     const signal = options.signal ?? new AbortController().signal;
     const correlationId = validateCorrelationId(
       options.correlationId ?? this.dependencies.idFactory('correlation'),
     );
-    const persisted = this.dependencies.persistence.findCompletedDecision(
+    const persistedOutcome = this.dependencies.persistence.findCompletedOutcome?.(
       request.sessionId,
       correlationId,
     );
-    if (persisted !== undefined) {
-      return persisted;
+    if (persistedOutcome !== undefined) {
+      return persistedOutcome;
+    }
+    const persistedDecision = this.dependencies.persistence.findCompletedDecision(
+      request.sessionId,
+      correlationId,
+    );
+    if (persistedDecision !== undefined) {
+      return { decision: persistedDecision };
     }
 
     let context: BuiltContext | undefined;
@@ -147,14 +170,21 @@ export class AgentService {
     request: AgentTurnRequest,
     correlationId: string,
     outcome: DecisionOutcome,
-  ): AgentDecision {
+  ): AgentTurnOutcome {
     return this.dependencies.persistence.runInTransaction(() => {
+      const persistedOutcome = this.dependencies.persistence.findCompletedOutcome?.(
+        request.sessionId,
+        correlationId,
+      );
+      if (persistedOutcome !== undefined) {
+        return persistedOutcome;
+      }
       const persisted = this.dependencies.persistence.findCompletedDecision(
         request.sessionId,
         correlationId,
       );
       if (persisted !== undefined) {
-        return persisted;
+        return { decision: persisted };
       }
 
       const decision = outcome.decision;
@@ -218,7 +248,7 @@ export class AgentService {
         },
         createdAt,
       });
-      return decision;
+      return outcome;
     });
   }
 
@@ -338,10 +368,7 @@ function turnRecordId(
   return `${sessionScope}:${correlationId}:${suffix}`;
 }
 
-interface DecisionOutcome {
-  readonly decision: AgentDecision;
-  readonly fallbackReason?: AgentFallbackReason;
-}
+type DecisionOutcome = AgentTurnOutcome;
 
 function buildProviderRequest(
   request: AgentTurnRequest,

@@ -388,9 +388,12 @@ describe('AgentService', () => {
       ...(provider === undefined ? { providerConfigured: false } : { provider }),
     });
 
-    const decision = await harness.service.turn(request());
+    const outcome = await harness.service.turnDetailed(request());
 
-    expect(decision.actions).toEqual([]);
+    expect(outcome.decision.actions).toEqual([]);
+    expect(outcome.fallbackReason).toBe(
+      error === undefined ? 'provider_unavailable' : 'timeout',
+    );
     expect(harness.messages.map((message) => message.role)).toEqual(['player', 'agent']);
     expect(harness.events).toHaveLength(2);
   });
