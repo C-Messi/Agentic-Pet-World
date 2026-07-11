@@ -207,14 +207,14 @@ export class WorldScene extends Phaser.Scene {
       throw new Error(`${targetId} does not support ${interaction}`);
     }
     if (interaction === 'open') {
-      await openMiniGameInteraction(
+      const openedMiniGame = await openMiniGameInteraction(
         this.miniGames,
         targetId,
         this.scene,
         WorldScene.key,
         signal,
       );
-      return;
+      if (openedMiniGame) return;
     }
     const emotion: Emotion =
       interaction === 'rest'

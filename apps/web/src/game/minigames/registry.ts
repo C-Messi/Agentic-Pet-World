@@ -48,14 +48,20 @@ export class MiniGameRegistry {
     return id ? this.manifests.get(id) : undefined;
   }
 
-  openByTriggerObject(
+  hasTriggerObject(triggerObjectId: WorldObjectId): boolean {
+    return this.triggerIds.has(triggerObjectId);
+  }
+
+  async openByTriggerObject(
     triggerObjectId: WorldObjectId,
     controller: MiniGameSceneController,
     returnSceneKey: string,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const manifest = this.findByTriggerObject(triggerObjectId);
-    return this.open(manifest?.id ?? this.fallbackId, controller, returnSceneKey, signal);
+    if (!manifest) return false;
+    await this.open(manifest.id, controller, returnSceneKey, signal);
+    return true;
   }
 
   async open(

@@ -19,7 +19,8 @@ describe('open mini-game interaction', () => {
 
   it('delegates by trigger object without mutating world or session state', async () => {
     const launcher: MiniGameInteractionLauncher = {
-      openByTriggerObject: vi.fn(async () => undefined),
+      hasTriggerObject: vi.fn(() => true),
+      openByTriggerObject: vi.fn(async () => true),
     };
     const worldSnapshot = Object.freeze({ cat: Object.freeze({ emotion: 'idle' }) });
     const session = Object.freeze({ id: 'session-1' });
@@ -27,13 +28,13 @@ describe('open mini-game interaction', () => {
     const controller = {} as MiniGameSceneController;
     const signal = new AbortController().signal;
 
-    await openMiniGameInteraction(
+    await expect(openMiniGameInteraction(
       launcher,
       'arcade',
       controller,
       'WorldScene',
       signal,
-    );
+    )).resolves.toBe(true);
 
     expect(launcher.openByTriggerObject).toHaveBeenCalledWith(
       'arcade',
@@ -42,5 +43,20 @@ describe('open mini-game interaction', () => {
       signal,
     );
     expect(JSON.stringify({ worldSnapshot, session })).toBe(before);
+  });
+
+  it('leaves window open on the ordinary world interaction path', async () => {
+    const launcher: MiniGameInteractionLauncher = {
+      hasTriggerObject: vi.fn(() => false),
+      openByTriggerObject: vi.fn(async () => true),
+    };
+    const controller = {} as MiniGameSceneController;
+
+    await expect(
+      openMiniGameInteraction(launcher, 'window', controller, 'WorldScene'),
+    ).resolves.toBe(false);
+
+    expect(launcher.hasTriggerObject).toHaveBeenCalledWith('window');
+    expect(launcher.openByTriggerObject).not.toHaveBeenCalled();
   });
 });

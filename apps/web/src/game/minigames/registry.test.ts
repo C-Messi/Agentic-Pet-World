@@ -79,16 +79,28 @@ describe('MiniGameRegistry', () => {
     ]);
   });
 
-  it('opens the safe fallback for an unknown game or unregistered trigger', async () => {
+  it('opens the safe fallback for an explicit unknown game ID', async () => {
     const fallbackLoader = vi.fn(async () => FallbackScene as MiniGameSceneType);
     const registry = new MiniGameRegistry(manifest('fallback', 'window', fallbackLoader), 'fallback');
     const sceneController = controller();
 
     await registry.open('missing-game', sceneController.value, 'WorldScene');
-    await registry.openByTriggerObject('bookshelf', sceneController.value, 'WorldScene');
 
     expect(fallbackLoader).toHaveBeenCalledTimes(1);
-    expect(sceneController.calls.filter((call) => call === 'launch:fallback:WorldScene')).toHaveLength(2);
+    expect(sceneController.calls).toContain('launch:fallback:WorldScene');
+  });
+
+  it('declines an unregistered trigger without loading or launching the fallback', async () => {
+    const fallbackLoader = vi.fn(async () => FallbackScene as MiniGameSceneType);
+    const registry = new MiniGameRegistry(manifest('fallback', 'arcade', fallbackLoader), 'fallback');
+    const sceneController = controller();
+
+    await expect(
+      registry.openByTriggerObject('window', sceneController.value, 'WorldScene'),
+    ).resolves.toBe(false);
+
+    expect(fallbackLoader).not.toHaveBeenCalled();
+    expect(sceneController.calls).toEqual([]);
   });
 
   it('validates factory state before launching and honors cancellation', async () => {
