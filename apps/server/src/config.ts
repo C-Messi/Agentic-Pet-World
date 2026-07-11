@@ -55,15 +55,21 @@ export function parseServerConfig(
     return { llm: { kind: 'fake' } };
   }
 
+  const llm = {
+    kind: 'openai-compatible',
+    baseURL: requireParsedValue(parsed.LLM_BASE_URL, 'LLM_BASE_URL'),
+    model: requireParsedValue(parsed.LLM_MODEL, 'LLM_MODEL'),
+    temperature: parsed.LLM_TEMPERATURE,
+    timeoutMs: parsed.LLM_TIMEOUT_MS,
+  } as OpenAICompatibleLlmConfig;
+  Object.defineProperty(llm, 'apiKey', {
+    value: requireParsedValue(parsed.LLM_API_KEY, 'LLM_API_KEY'),
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
   return {
-    llm: {
-      kind: 'openai-compatible',
-      baseURL: requireParsedValue(parsed.LLM_BASE_URL, 'LLM_BASE_URL'),
-      apiKey: requireParsedValue(parsed.LLM_API_KEY, 'LLM_API_KEY'),
-      model: requireParsedValue(parsed.LLM_MODEL, 'LLM_MODEL'),
-      temperature: parsed.LLM_TEMPERATURE,
-      timeoutMs: parsed.LLM_TIMEOUT_MS,
-    },
+    llm: Object.freeze(llm),
   };
 }
 

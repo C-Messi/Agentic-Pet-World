@@ -6,7 +6,7 @@ export interface ProviderMessage {
 }
 
 export interface UntrustedProviderContext {
-  readonly source: 'memories' | 'messages';
+  readonly source: 'memories' | 'messages' | 'turn-state';
   readonly content: string;
 }
 
