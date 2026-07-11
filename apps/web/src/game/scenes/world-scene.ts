@@ -5,6 +5,11 @@ import { AmbientBehaviorSystem, type AmbientAction } from '../behavior/ambient-b
 import { evaluateAmbientBehavior } from '../behavior/ambient-evaluation';
 import { gameBubbles } from '../bubble-coordinator';
 import { gameEvents } from '../events';
+import { miniGameRegistry } from '../minigames/manifests';
+import {
+  openMiniGameInteraction,
+  type MiniGameInteractionLauncher,
+} from '../minigames/open-interaction';
 import { NavigationSystem } from '../navigation/navigation-system';
 import { bottomDepthFromCenter, bottomDepthFromTopLeft } from '../render/render-depth';
 import {
@@ -68,7 +73,7 @@ export class WorldScene extends Phaser.Scene {
     | { resolve: () => void; reject: (error: Error) => void; removeAbortListener: () => void }
     | undefined;
 
-  constructor() {
+  constructor(private readonly miniGames: MiniGameInteractionLauncher = miniGameRegistry) {
     super(WorldScene.key);
   }
 
@@ -200,6 +205,16 @@ export class WorldScene extends Phaser.Scene {
     }
     if (!target.interactions.includes(interaction)) {
       throw new Error(`${targetId} does not support ${interaction}`);
+    }
+    if (interaction === 'open') {
+      await openMiniGameInteraction(
+        this.miniGames,
+        targetId,
+        this.scene,
+        WorldScene.key,
+        signal,
+      );
+      return;
     }
     const emotion: Emotion =
       interaction === 'rest'
