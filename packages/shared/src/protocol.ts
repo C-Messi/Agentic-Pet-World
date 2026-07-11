@@ -39,6 +39,24 @@ export type Emotion = z.infer<typeof EmotionSchema>;
 export const InteractionSchema = z.enum(['inspect', 'rest', 'eat', 'play', 'open']);
 export type Interaction = z.infer<typeof InteractionSchema>;
 
+export const AGENT_ACTION_TYPES = [
+  'move_to',
+  'interact',
+  'emote',
+  'wait',
+  'speak',
+] as const;
+export const AgentActionTypeSchema = z.enum(AGENT_ACTION_TYPES);
+export type AgentActionType = z.infer<typeof AgentActionTypeSchema>;
+
+const [
+  MOVE_TO_ACTION_TYPE,
+  INTERACT_ACTION_TYPE,
+  EMOTE_ACTION_TYPE,
+  WAIT_ACTION_TYPE,
+  SPEAK_ACTION_TYPE,
+] = AGENT_ACTION_TYPES;
+
 export const PositionSchema = z
   .object({
     x: z.number().finite().min(-10_000).max(10_000),
@@ -91,7 +109,7 @@ export type WorldSnapshot = z.infer<typeof WorldSnapshotSchema>;
 const MoveToActionSchema = z
   .object({
     id: ActionIdSchema,
-    type: z.literal('move_to'),
+    type: z.literal(MOVE_TO_ACTION_TYPE),
     targetId: WorldObjectIdSchema,
     timeoutMs: z.number().int().min(250).max(60_000),
   })
@@ -100,7 +118,7 @@ const MoveToActionSchema = z
 const InteractActionSchema = z
   .object({
     id: ActionIdSchema,
-    type: z.literal('interact'),
+    type: z.literal(INTERACT_ACTION_TYPE),
     targetId: WorldObjectIdSchema,
     interaction: InteractionSchema,
   })
@@ -109,7 +127,7 @@ const InteractActionSchema = z
 const EmoteActionSchema = z
   .object({
     id: ActionIdSchema,
-    type: z.literal('emote'),
+    type: z.literal(EMOTE_ACTION_TYPE),
     emotion: EmotionSchema,
     durationMs: z.number().int().min(100).max(30_000),
   })
@@ -118,7 +136,7 @@ const EmoteActionSchema = z
 const WaitActionSchema = z
   .object({
     id: ActionIdSchema,
-    type: z.literal('wait'),
+    type: z.literal(WAIT_ACTION_TYPE),
     durationMs: z.number().int().min(100).max(30_000),
   })
   .strict();
@@ -126,7 +144,7 @@ const WaitActionSchema = z
 const SpeakActionSchema = z
   .object({
     id: ActionIdSchema,
-    type: z.literal('speak'),
+    type: z.literal(SPEAK_ACTION_TYPE),
     text: z.string().trim().min(1).max(SHORT_TEXT_MAX_LENGTH),
   })
   .strict();
@@ -143,7 +161,7 @@ export type AgentAction = z.infer<typeof AgentActionSchema>;
 export const ActionResultSchema = z
   .object({
     actionId: ActionIdSchema,
-    type: z.enum(['move_to', 'interact', 'emote', 'wait', 'speak']),
+    type: AgentActionTypeSchema,
     status: z.enum(['succeeded', 'failed', 'cancelled', 'timed_out']),
     message: z.string().trim().min(1).max(500).optional(),
     errorCode: z
@@ -185,7 +203,21 @@ export const AgentDecisionSchema = z
     actions: z.array(AgentActionSchema).max(4),
     memoryCandidates: z.array(MemoryCandidateSchema).max(3).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine(({ actions }, context) => {
+    const actionIds = new Set<string>();
+
+    for (const [index, action] of actions.entries()) {
+      if (actionIds.has(action.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate action ID: ${action.id}`,
+          path: ['actions', index, 'id'],
+        });
+      }
+      actionIds.add(action.id);
+    }
+  });
 export type AgentDecision = z.infer<typeof AgentDecisionSchema>;
 
 export const MessageRecordSchema = z

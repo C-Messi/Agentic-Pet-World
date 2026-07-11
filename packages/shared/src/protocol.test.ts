@@ -85,6 +85,15 @@ describe('agent decisions', () => {
     expect(() => AgentDecisionSchema.parse({ ...validDecision, actions })).toThrow();
   });
 
+  it('rejects otherwise-valid actions with duplicate IDs', () => {
+    const actions = [
+      { id: 'duplicate-action', type: 'wait', durationMs: 500 },
+      { id: 'duplicate-action', type: 'wait', durationMs: 1_000 },
+    ];
+
+    expect(() => AgentDecisionSchema.parse({ ...validDecision, actions })).toThrow();
+  });
+
   it('rejects unknown action types and targets', () => {
     expect(() => AgentActionSchema.parse({ id: 'bad-1', type: 'run_code' })).toThrow();
     expect(() =>
@@ -128,6 +137,27 @@ describe('agent decisions', () => {
         durationMs: 500,
       }),
     ).toThrow();
+  });
+});
+
+describe('world snapshots', () => {
+  it('rejects duplicate object IDs within the object limit', () => {
+    const objects = [
+      {
+        id: 'bed',
+        position: { x: 1, y: 1 },
+        available: true,
+        interactions: ['rest'],
+      },
+      {
+        id: 'bed',
+        position: { x: 2, y: 1 },
+        available: true,
+        interactions: ['inspect'],
+      },
+    ];
+
+    expect(() => WorldSnapshotSchema.parse({ ...world, objects })).toThrow();
   });
 });
 
