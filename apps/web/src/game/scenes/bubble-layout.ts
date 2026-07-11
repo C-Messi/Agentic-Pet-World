@@ -3,23 +3,34 @@ export interface BubbleLayout {
   width: number;
   height: number;
   lines: number;
+  wrappedLines: readonly string[];
 }
 
-const MAX_DISPLAY_CHARS = 150;
-const CHARS_PER_LINE = 26;
+const CHARS_PER_LINE = 24;
 const MAX_LINES = 6;
+const CELL_WIDTH = 8;
+const HORIZONTAL_PADDING = 24;
+const LINE_HEIGHT = 18;
+const VERTICAL_PADDING = 20;
 
 export function layoutBubble(input: string): BubbleLayout {
   const normalized = input.replace(/\s+/g, ' ').trim();
-  const text = normalized.length > MAX_DISPLAY_CHARS
-    ? `${normalized.slice(0, MAX_DISPLAY_CHARS - 3).trimEnd()}...`
-    : normalized;
-  const lines = Math.min(MAX_LINES, Math.max(1, Math.ceil(text.length / CHARS_PER_LINE)));
+  const codePoints = [...normalized];
+  const capacity = CHARS_PER_LINE * MAX_LINES;
+  const visible = codePoints.slice(0, capacity);
+  if (codePoints.length > capacity) visible[visible.length - 1] = '…';
+  const wrappedLines: string[] = [];
+  for (let index = 0; index < visible.length; index += CHARS_PER_LINE) {
+    wrappedLines.push(visible.slice(index, index + CHARS_PER_LINE).join(''));
+  }
+  if (wrappedLines.length === 0) wrappedLines.push('');
+  const longestLine = Math.max(...wrappedLines.map((line) => [...line].length));
   return {
-    text,
-    width: Math.min(220, Math.max(112, text.length * 7 + 24)),
-    height: 28 + lines * 17,
-    lines,
+    text: wrappedLines.join('\n'),
+    width: Math.min(220, Math.max(112, longestLine * CELL_WIDTH + HORIZONTAL_PADDING)),
+    height: VERTICAL_PADDING + wrappedLines.length * LINE_HEIGHT,
+    lines: wrappedLines.length,
+    wrappedLines,
   };
 }
 

@@ -3,6 +3,7 @@ import Phaser from 'phaser';
 
 import { AmbientBehaviorSystem, type AmbientAction } from '../behavior/ambient-behavior';
 import { evaluateAmbientBehavior } from '../behavior/ambient-evaluation';
+import { gameBubbles } from '../bubble-coordinator';
 import { gameEvents } from '../events';
 import { NavigationSystem } from '../navigation/navigation-system';
 import { bottomDepthFromCenter, bottomDepthFromTopLeft } from '../render/render-depth';
@@ -227,12 +228,12 @@ export class WorldScene extends Phaser.Scene {
     return abortableDelay(durationMs, signal);
   }
 
-  async speakForAction(text: string, signal: AbortSignal): Promise<void> {
-    gameEvents.emit('bubble-changed', { kind: 'speech', text });
+  async speakForAction(text: string, ownerId: string, signal: AbortSignal): Promise<void> {
+    gameBubbles.showAction(ownerId, text);
     try {
       await abortableDelay(Math.min(2_500, Math.max(600, text.length * 35)), signal);
     } finally {
-      gameEvents.emit('bubble-changed', { kind: 'speech' });
+      gameBubbles.clearOwner(ownerId);
     }
   }
 
@@ -391,10 +392,9 @@ export class WorldScene extends Phaser.Scene {
     this.bubbleBackground = this.add.graphics();
     this.bubbleText = this.add.text(-98, -59, '', {
       color: '#2d2528',
-      fontFamily: 'system-ui, sans-serif',
-      fontSize: '15px',
+      fontFamily: '"Courier New", monospace',
+      fontSize: '14px',
       lineSpacing: 2,
-      wordWrap: { width: 196, useAdvancedWrap: true },
       align: 'center',
     }).setOrigin(0.5);
     this.bubble = this.add.container(0, 0, [this.bubbleBackground, this.bubbleText])

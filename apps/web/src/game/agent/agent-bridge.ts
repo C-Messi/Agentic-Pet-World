@@ -18,6 +18,7 @@ import {
 } from '@cat-house/shared';
 
 import type { ActionRunner, CorrelatedActionResult } from '../actions/action-runner';
+import { BubbleCoordinator, type BubbleCoordinatorOptions } from '../bubble-coordinator';
 import type { GameEventBus } from '../events';
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -160,6 +161,7 @@ export interface AgentBridgeTurnOutcome {
 export interface AgentBridgeOptions {
   resultDeliveryTimeoutMs?: number;
   bubbleDurationMs?: (text: string) => number;
+  bubbles?: BubbleCoordinator;
 }
 
 interface OperationToken {
@@ -176,9 +178,7 @@ export class AgentBridge {
   private readonly executedDecisions = new Set<string>();
   private offlineSequence = 0;
   private readonly resultDeliveryTimeoutMs: number;
-  private readonly bubbleDurationMs: (text: string) => number;
-  private bubbleTimer: ReturnType<typeof setTimeout> | undefined;
-  private activeBubbleOwner: string | undefined;
+  private readonly bubbles: BubbleCoordinator;
 
   constructor(
     private readonly api: AgentBridgeApi,
@@ -188,7 +188,10 @@ export class AgentBridge {
     options: AgentBridgeOptions = {},
   ) {
     this.resultDeliveryTimeoutMs = options.resultDeliveryTimeoutMs ?? 5_000;
-    this.bubbleDurationMs = options.bubbleDurationMs ?? defaultBubbleDurationMs;
+    const bubbleOptions: BubbleCoordinatorOptions = options.bubbleDurationMs === undefined
+      ? {}
+      : { durationMs: options.bubbleDurationMs };
+    this.bubbles = options.bubbles ?? new BubbleCoordinator(events, bubbleOptions);
   }
 
   get sessionId(): string | undefined {
@@ -267,7 +270,7 @@ export class AgentBridge {
       const response = await this.api.sendTurn(request, operation.controller.signal);
       this.assertOwnership(operation, capturedSessionGeneration);
       responseReceived = true;
-      this.emitDecisionBubbles(response.decision, response.correlationId);
+      this.bubbles.showDecision(response.correlationId, response.decision.speech, response.decision.thought);
       this.events.emit('connection-status', {
         status: response.degraded ? 'provider-error' : 'acting',
         ...(response.fallbackReason === undefined ? {} : { message: response.fallbackReason }),
@@ -310,7 +313,7 @@ export class AgentBridge {
       this.emitRequestError(error);
       if (!responseReceived && isNetworkError(error)) {
         const fallback = this.localOfflineFallback();
-        this.emitDecisionBubbles(fallback.decision, fallback.correlationId);
+        this.bubbles.showDecision(fallback.correlationId, fallback.decision.speech, fallback.decision.thought);
         await this.runner.run(fallback.decision, fallback.correlationId, {
           signal: operation.controller.signal,
         });
@@ -324,7 +327,7 @@ export class AgentBridge {
   }
 
   private replaceActiveController(): OperationToken {
-    this.clearDecisionBubbles();
+    this.bubbles.reset();
     this.activeController?.abort();
     this.runner.cancel();
     const controller = new AbortController();
@@ -342,37 +345,6 @@ export class AgentBridge {
       status: error instanceof AgentHttpError ? 'provider-error' : 'offline',
       message: error instanceof Error ? error.message : 'Request failed',
     });
-  }
-
-  private emitDecisionBubbles(decision: AgentDecision, ownerId: string): void {
-    this.clearDecisionBubbles();
-    this.activeBubbleOwner = ownerId;
-    this.events.emit('bubble-changed', { kind: 'speech', text: decision.speech, ownerId });
-    this.bubbleTimer = setTimeout(() => {
-      if (this.activeBubbleOwner !== ownerId) return;
-      if (decision.thought) {
-        this.events.emit('bubble-changed', { kind: 'thought', text: decision.thought, ownerId });
-        this.bubbleTimer = setTimeout(
-          () => this.clearDecisionBubbles(ownerId, 'thought'),
-          this.bubbleDurationMs(decision.thought),
-        );
-        return;
-      }
-      this.clearDecisionBubbles(ownerId, 'speech');
-    }, this.bubbleDurationMs(decision.speech));
-  }
-
-  private clearDecisionBubbles(ownerId = this.activeBubbleOwner, finalKind?: 'speech' | 'thought'): void {
-    if (!ownerId || (this.activeBubbleOwner && ownerId !== this.activeBubbleOwner)) return;
-    if (this.bubbleTimer !== undefined) clearTimeout(this.bubbleTimer);
-    this.bubbleTimer = undefined;
-    if (finalKind) {
-      this.events.emit('bubble-changed', { kind: finalKind, ownerId });
-    } else {
-      this.events.emit('bubble-changed', { kind: 'speech', ownerId });
-      this.events.emit('bubble-changed', { kind: 'thought', ownerId });
-    }
-    this.activeBubbleOwner = undefined;
   }
 
   private async deliverResult(
@@ -423,7 +395,7 @@ export class AgentBridge {
   }
 
   private invalidateOperation(): void {
-    this.clearDecisionBubbles();
+    this.bubbles.reset();
     this.activeController?.abort();
     this.activeController = undefined;
     this.operationGeneration += 1;
@@ -510,8 +482,4 @@ function staleOperationError(): DOMException {
 
 function stableDecision(decision: AgentTurnResponse['decision']): string {
   return JSON.stringify(decision);
-}
-
-function defaultBubbleDurationMs(text: string): number {
-  return Math.min(5_000, Math.max(1_800, 1_000 + text.length * 18));
 }

@@ -4,6 +4,7 @@ import type { GameUiRuntime, RuntimeSnapshot } from '../App';
 import { ActionRunner } from './actions/action-runner';
 import { WorldSceneActionAdapter } from './actions/world-scene-action-adapter';
 import { AgentApiClient, AgentBridge, AgentHttpError } from './agent/agent-bridge';
+import { gameBubbles } from './bubble-coordinator';
 import { createGame } from './create-game';
 import { gameEvents } from './events';
 import { WorldScene } from './scenes/world-scene';
@@ -34,7 +35,13 @@ class ProductionGameRuntime implements GameUiRuntime {
     const adapter = new WorldSceneActionAdapter(scene);
     const runner = new ActionRunner(adapter, this.events);
     this.api = new AgentApiClient({ baseUrl: apiUrl });
-    this.bridge = new AgentBridge(this.api, runner, this.events, () => adapter.getSnapshot());
+    this.bridge = new AgentBridge(
+      this.api,
+      runner,
+      this.events,
+      () => adapter.getSnapshot(),
+      { bubbles: gameBubbles },
+    );
   }
 
   async initialize(storedSessionId?: string): Promise<RuntimeSnapshot> {

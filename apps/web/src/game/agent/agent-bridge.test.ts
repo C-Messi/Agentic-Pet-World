@@ -184,10 +184,7 @@ describe('AgentBridge', () => {
 
     bridge.replaceSession('session-new');
     const countAfterReplacement = bubbles.length;
-    expect(bubbles.slice(-2)).toEqual([
-      { kind: 'speech', ownerId: 'turn-old' },
-      { kind: 'thought', ownerId: 'turn-old' },
-    ]);
+    expect(bubbles.at(-1)).toEqual({ kind: 'speech', ownerId: 'turn-old' });
     await vi.advanceTimersByTimeAsync(500);
     expect(bubbles).toHaveLength(countAfterReplacement);
     vi.useRealTimers();

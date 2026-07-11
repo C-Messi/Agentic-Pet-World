@@ -50,9 +50,9 @@ export class WorldSceneActionAdapter implements ActionWorldPort {
     }
   }
 
-  async speak(text: string, signal: AbortSignal): Promise<void> {
+  async speak(text: string, ownerId: string, signal: AbortSignal): Promise<void> {
     try {
-      await this.scene.speakForAction(text, signal);
+      await this.scene.speakForAction(text, ownerId, signal);
     } catch (error) {
       throw asActionError(error, 'SPEAK_FAILED');
     }

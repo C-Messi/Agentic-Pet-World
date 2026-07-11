@@ -31,14 +31,14 @@ describe('WorldSceneActionAdapter', () => {
     await adapter.interact('window', 'inspect', signal);
     await adapter.emote('happy', 100, signal);
     await adapter.wait(100, signal);
-    await adapter.speak('Hello.', signal);
+    await adapter.speak('Hello.', 'turn-1:speak-1', signal);
 
     expect(scene.setAgentBusy).toHaveBeenCalledWith(true);
     expect(scene.moveToActionTarget).toHaveBeenCalledWith('window', signal);
     expect(scene.interactWithActionTarget).toHaveBeenCalledWith('window', 'inspect', signal);
     expect(scene.emoteForAction).toHaveBeenCalledWith('happy', 100, signal);
     expect(scene.waitForAction).toHaveBeenCalledWith(100, signal);
-    expect(scene.speakForAction).toHaveBeenCalledWith('Hello.', signal);
+    expect(scene.speakForAction).toHaveBeenCalledWith('Hello.', 'turn-1:speak-1', signal);
     expect(adapter.getSnapshot()).toBe(snapshot);
   });
 
@@ -87,6 +87,6 @@ function invoke(
     case 'wait':
       return adapter.wait(100, signal);
     case 'speak':
-      return adapter.speak('Hello.', signal);
+      return adapter.speak('Hello.', 'turn-1:speak-1', signal);
   }
 }

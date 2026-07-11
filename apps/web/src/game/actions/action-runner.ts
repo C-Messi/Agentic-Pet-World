@@ -18,7 +18,7 @@ export interface ActionWorldPort {
   interact(targetId: WorldObjectId, interaction: Interaction, signal: AbortSignal): Promise<void>;
   emote(emotion: Emotion, durationMs: number, signal: AbortSignal): Promise<void>;
   wait(durationMs: number, signal: AbortSignal): Promise<void>;
-  speak(text: string, signal: AbortSignal): Promise<void>;
+  speak(text: string, ownerId: string, signal: AbortSignal): Promise<void>;
   getSnapshot(): WorldSnapshot;
 }
 
@@ -107,7 +107,7 @@ export class ActionRunner {
         }
         this.activeAction = action;
         this.events.emit('action-started', { turnCorrelationId, action });
-        const result = await this.execute(action, controller.signal);
+        const result = await this.execute(action, turnCorrelationId, controller.signal);
         const correlated = { turnCorrelationId, result };
         await this.publishResult(correlated, results, options);
         if (result.status !== 'succeeded') {
@@ -140,7 +140,11 @@ export class ActionRunner {
     }
   }
 
-  private async execute(action: AgentAction, parentSignal: AbortSignal): Promise<ActionResult> {
+  private async execute(
+    action: AgentAction,
+    turnCorrelationId: string,
+    parentSignal: AbortSignal,
+  ): Promise<ActionResult> {
     if ('targetId' in action && !this.world.hasTarget(action.targetId)) {
       return this.result(action, 'failed', 'Unknown or unavailable target', 'UNKNOWN_TARGET');
     }
@@ -151,7 +155,7 @@ export class ActionRunner {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     try {
-      const operation = this.executeWithAdapter(action, actionController.signal);
+      const operation = this.executeWithAdapter(action, turnCorrelationId, actionController.signal);
       const timeoutMs = action.type === 'move_to' ? action.timeoutMs : this.defaultTimeoutMs;
       const timeout = new Promise<never>((_resolve, reject) => {
         timeoutId = setTimeout(() => {
@@ -182,7 +186,11 @@ export class ActionRunner {
     }
   }
 
-  private executeWithAdapter(action: AgentAction, signal: AbortSignal): Promise<void> {
+  private executeWithAdapter(
+    action: AgentAction,
+    turnCorrelationId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     switch (action.type) {
       case 'move_to':
         return this.world.moveTo(action.targetId, signal);
@@ -193,7 +201,7 @@ export class ActionRunner {
       case 'wait':
         return this.world.wait(action.durationMs, signal);
       case 'speak':
-        return this.world.speak(action.text, signal);
+        return this.world.speak(action.text, `${turnCorrelationId}:${action.id}`, signal);
     }
   }
 

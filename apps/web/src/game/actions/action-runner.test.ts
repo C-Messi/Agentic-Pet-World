@@ -26,6 +26,7 @@ function decision(actions: AgentAction[]): AgentDecision {
 
 class FakeWorld implements ActionWorldPort {
   readonly calls: string[] = [];
+  readonly speakOwners: string[] = [];
   targets = new Set<WorldObjectId>(['window']);
   failure: Error | undefined;
   pendingMove: (() => void) | undefined;
@@ -64,9 +65,10 @@ class FakeWorld implements ActionWorldPort {
     if (this.failure) throw this.failure;
   }
 
-  async speak(text: string, _signal: AbortSignal): Promise<void> {
+  async speak(text: string, ownerId: string, _signal: AbortSignal): Promise<void> {
     void _signal;
     this.calls.push(`speak:${text}`);
+    this.speakOwners.push(ownerId);
     if (this.failure) throw this.failure;
   }
 
@@ -129,6 +131,7 @@ describe('ActionRunner', () => {
       'ambient:false',
     ]);
     expect(resultOrder).toEqual(['move', 'talk']);
+    expect(port.speakOwners).toEqual(['turn-1:talk']);
     expect(results.map(({ turnCorrelationId, result }) => [turnCorrelationId, result.status])).toEqual([
       ['turn-1', 'succeeded'],
       ['turn-1', 'succeeded'],
