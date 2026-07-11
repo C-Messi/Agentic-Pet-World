@@ -2,7 +2,9 @@ import type { Emotion, WorldObjectId, WorldSnapshot } from '@cat-house/shared';
 import Phaser from 'phaser';
 
 import { AmbientBehaviorSystem, type AmbientAction } from '../behavior/ambient-behavior';
+import { evaluateAmbientBehavior } from '../behavior/ambient-evaluation';
 import { NavigationSystem } from '../navigation/navigation-system';
+import { bottomDepthFromCenter, bottomDepthFromTopLeft } from '../render/render-depth';
 import {
   ROOM_GRID,
   ROOM_OBJECTS,
@@ -11,6 +13,7 @@ import {
   getWorldObject,
   type GridPoint,
 } from '../world/object-registry';
+import { WorldRuntimeState } from './world-runtime-state';
 
 const DISPLAY_SCALE = 2;
 const DISPLAY_TILE_SIZE = ROOM_GRID.tileSize * DISPLAY_SCALE;
@@ -39,7 +42,7 @@ const tileCenter = ({ x, y }: GridPoint) => ({
 export class WorldScene extends Phaser.Scene {
   static readonly key = 'WorldScene';
 
-  private cat!: Phaser.GameObjects.Sprite;
+  private cat: Phaser.GameObjects.Sprite | undefined;
   private readonly navigation = new NavigationSystem({
     width: ROOM_GRID.width,
     height: ROOM_GRID.height,
@@ -50,13 +53,7 @@ export class WorldScene extends Phaser.Scene {
     now: () => this.time.now,
     cooldownMs: 7_000,
   });
-  private path: GridPoint[] = [];
-  private movementOwner: string | null = null;
-  private pendingEmotion: Emotion = 'idle';
-  private currentEmotion: Emotion = 'idle';
-  private currentTargetId: WorldObjectId | undefined;
-  private agentBusy = false;
-  private ambientSettledUntil = 0;
+  private readonly runtime = new WorldRuntimeState();
 
   constructor() {
     super(WorldScene.key);
@@ -75,6 +72,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.resetSceneState();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
     this.cameras.main.setBackgroundColor('#3a3029');
     this.add.image(0, 0, 'room-background').setOrigin(0).setScale(DISPLAY_SCALE).setDepth(0);
 
@@ -89,53 +88,67 @@ export class WorldScene extends Phaser.Scene {
         )
         .setOrigin(0)
         .setScale(DISPLAY_SCALE)
-        .setDepth(object.spritePosition.y + 64);
+        .setDepth(
+          bottomDepthFromTopLeft(
+            object.spritePosition.y * DISPLAY_SCALE,
+            64 * DISPLAY_SCALE,
+          ),
+        );
     }
 
     this.createAnimations();
     const start = tileCenter(CAT_SPAWN_TILE);
-    this.cat = this.add.sprite(start.x, start.y, 'cat', 0).setScale(DISPLAY_SCALE).setDepth(start.y + 32);
+    this.cat = this.add
+      .sprite(start.x, start.y, 'cat', 0)
+      .setScale(DISPLAY_SCALE)
+      .setDepth(bottomDepthFromCenter(start.y, 32 * DISPLAY_SCALE));
     this.playEmotion('idle');
     this.game.events.emit('world-ready', this.getSnapshot());
   }
 
   update(_time: number, delta: number): void {
-    if (this.path.length > 0) {
+    if (this.runtime.path.length > 0) {
       this.advanceMovement(delta);
       return;
     }
-    if (this.agentBusy || this.time.now < this.ambientSettledUntil) return;
+    if (this.runtime.agentBusy || this.time.now < this.runtime.ambientSettledUntil) return;
 
-    const catTile = this.getCatTile();
-    const blockedObjectIds = new Set(
-      ROOM_OBJECTS.filter(
-        ({ walkTarget }) => this.navigation.findPath(catTile, walkTarget, 'ambient').length === 0,
-      ).map(({ id }) => id),
+    const action = evaluateAmbientBehavior(
+      this.ambient,
+      this.runtime.agentBusy,
+      () => {
+        const catTile = this.getCatTile();
+        return {
+          agentBusy: this.runtime.agentBusy,
+          blockedObjectIds: new Set(
+            ROOM_OBJECTS.filter(
+              ({ walkTarget }) =>
+                this.navigation.findPath(catTile, walkTarget, 'ambient').length === 0,
+            ).map(({ id }) => id),
+          ),
+          wanderTiles: WANDER_TILES.filter(
+            (tile) => this.navigation.findPath(catTile, tile, 'ambient').length > 0,
+          ),
+        };
+      },
     );
-    const action = this.ambient.select({
-      agentBusy: this.agentBusy,
-      blockedObjectIds,
-      wanderTiles: WANDER_TILES.filter(
-        (tile) => this.navigation.findPath(catTile, tile, 'ambient').length > 0,
-      ),
-    });
     if (action) this.runAmbientAction(action);
   }
 
   setAgentBusy(busy: boolean): void {
-    this.agentBusy = busy;
-    if (busy && this.movementOwner === 'ambient') this.cancelMovement('ambient');
+    this.runtime.agentBusy = busy;
+    if (busy && this.runtime.movementOwner === 'ambient') this.cancelMovement('ambient');
   }
 
   moveCatTo(targetId: WorldObjectId, owner = 'agent', arrivalEmotion: Emotion = 'idle'): boolean {
     const target = getWorldObject(targetId);
     const started = this.moveCatToTile(target.walkTarget, owner, arrivalEmotion);
-    if (started) this.currentTargetId = targetId;
+    if (started) this.runtime.currentTargetId = targetId;
     return started;
   }
 
   moveCatToTile(target: GridPoint, owner = 'agent', arrivalEmotion: Emotion = 'idle'): boolean {
-    if (this.movementOwner && this.movementOwner !== owner) return false;
+    if (this.runtime.movementOwner && this.runtime.movementOwner !== owner) return false;
     this.navigation.release(owner);
     if (!this.navigation.reserve(target, owner)) return false;
     const path = this.navigation.findPath(this.getCatTile(), target, owner);
@@ -143,18 +156,18 @@ export class WorldScene extends Phaser.Scene {
       this.navigation.release(owner);
       return false;
     }
-    this.path = path.slice(1);
-    this.movementOwner = owner;
-    this.pendingEmotion = arrivalEmotion;
-    this.playEmotion(this.path.length > 0 ? 'walk' : 'idle');
-    if (this.path.length === 0) this.finishMovement();
+    this.runtime.path = path.slice(1);
+    this.runtime.movementOwner = owner;
+    this.runtime.pendingEmotion = arrivalEmotion;
+    this.playEmotion(this.runtime.path.length > 0 ? 'walk' : 'idle');
+    if (this.runtime.path.length === 0) this.finishMovement();
     return true;
   }
 
   playEmotion(emotion: Emotion): void {
-    this.currentEmotion = emotion;
+    this.runtime.currentEmotion = emotion;
     const animationKey = `cat-${emotion}`;
-    if (this.anims.exists(animationKey)) this.cat.play(animationKey, true);
+    if (this.cat && this.anims.exists(animationKey)) this.cat.play(animationKey, true);
   }
 
   getSnapshot(): WorldSnapshot {
@@ -166,9 +179,9 @@ export class WorldScene extends Phaser.Scene {
             x: CAT_SPAWN_TILE.x * ROOM_GRID.tileSize + ROOM_GRID.tileSize / 2,
             y: CAT_SPAWN_TILE.y * ROOM_GRID.tileSize + ROOM_GRID.tileSize / 2,
           },
-      emotion: this.currentEmotion,
+      emotion: this.runtime.currentEmotion,
     };
-    if (this.currentTargetId) catState.currentTargetId = this.currentTargetId;
+    if (this.runtime.currentTargetId) catState.currentTargetId = this.runtime.currentTargetId;
     return {
       cat: catState,
       objects: ROOM_OBJECTS.map((object) => ({
@@ -199,7 +212,7 @@ export class WorldScene extends Phaser.Scene {
 
   private runAmbientAction(action: AmbientAction): void {
     if (action.type === 'wander') {
-      this.currentTargetId = undefined;
+      this.runtime.currentTargetId = undefined;
       this.moveCatToTile(action.tile, 'ambient', 'idle');
       return;
     }
@@ -209,42 +222,44 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private advanceMovement(delta: number): void {
-    const nextTile = this.path[0];
+    const cat = this.cat;
+    if (!cat) return;
+    const nextTile = this.runtime.path[0];
     if (!nextTile) {
       this.finishMovement();
       return;
     }
     const target = tileCenter(nextTile);
-    const distance = Phaser.Math.Distance.Between(this.cat.x, this.cat.y, target.x, target.y);
+    const distance = Phaser.Math.Distance.Between(cat.x, cat.y, target.x, target.y);
     const step = (96 * delta) / 1_000;
     if (distance <= step) {
-      this.cat.setPosition(target.x, target.y);
-      this.path.shift();
-      if (this.path.length === 0) this.finishMovement();
+      cat.setPosition(target.x, target.y);
+      this.runtime.path.shift();
+      if (this.runtime.path.length === 0) this.finishMovement();
     } else {
-      const angle = Phaser.Math.Angle.Between(this.cat.x, this.cat.y, target.x, target.y);
-      this.cat.x += Math.cos(angle) * step;
-      this.cat.y += Math.sin(angle) * step;
-      this.cat.setFlipX(Math.cos(angle) < 0);
+      const angle = Phaser.Math.Angle.Between(cat.x, cat.y, target.x, target.y);
+      cat.x += Math.cos(angle) * step;
+      cat.y += Math.sin(angle) * step;
+      cat.setFlipX(Math.cos(angle) < 0);
     }
-    this.cat.setDepth(this.cat.y + 32);
+    cat.setDepth(bottomDepthFromCenter(cat.y, cat.displayHeight));
   }
 
   private finishMovement(): void {
-    if (this.movementOwner) this.navigation.release(this.movementOwner);
-    const wasAmbient = this.movementOwner === 'ambient';
-    this.path = [];
-    this.movementOwner = null;
-    this.playEmotion(this.pendingEmotion);
-    if (wasAmbient) this.ambientSettledUntil = this.time.now + 2_500;
+    if (this.runtime.movementOwner) this.navigation.release(this.runtime.movementOwner);
+    const wasAmbient = this.runtime.movementOwner === 'ambient';
+    this.runtime.path = [];
+    this.runtime.movementOwner = null;
+    this.playEmotion(this.runtime.pendingEmotion);
+    if (wasAmbient) this.runtime.ambientSettledUntil = this.time.now + 2_500;
     this.game.events.emit('world-snapshot', this.getSnapshot());
   }
 
   private cancelMovement(owner: string): void {
     this.navigation.release(owner);
-    this.path = [];
-    this.movementOwner = null;
-    this.currentTargetId = undefined;
+    this.runtime.path = [];
+    this.runtime.movementOwner = null;
+    this.runtime.currentTargetId = undefined;
     this.playEmotion('idle');
   }
 
@@ -254,5 +269,15 @@ export class WorldScene extends Phaser.Scene {
       x: Math.floor(this.cat.x / DISPLAY_TILE_SIZE),
       y: Math.floor(this.cat.y / DISPLAY_TILE_SIZE),
     };
+  }
+
+  private resetSceneState(): void {
+    this.cat?.stop();
+    this.runtime.reset(this.navigation, this.ambient);
+  }
+
+  private handleShutdown(): void {
+    this.resetSceneState();
+    this.cat = undefined;
   }
 }

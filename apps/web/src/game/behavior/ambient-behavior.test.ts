@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AmbientBehaviorSystem, type AmbientContext } from './ambient-behavior';
+import { evaluateAmbientBehavior } from './ambient-evaluation';
 
 function seededRandom(seed: number) {
   let state = seed >>> 0;
@@ -96,5 +97,63 @@ describe('AmbientBehaviorSystem', () => {
     }
 
     expect(selected).toEqual(new Set(['rest', 'wander', 'inspect', 'look_outside']));
+  });
+
+  it('does not build pathfinding context before the next eligible evaluation', () => {
+    let now = 20_000;
+    let contextBuilds = 0;
+    const system = new AmbientBehaviorSystem({
+      cooldownMs: 5_000,
+      random: () => 0,
+      now: () => now,
+    });
+    const buildContext = () => {
+      contextBuilds += 1;
+      return context();
+    };
+
+    expect(evaluateAmbientBehavior(system, false, buildContext)).not.toBeNull();
+    now += 4_999;
+    expect(evaluateAmbientBehavior(system, false, buildContext)).toBeNull();
+    expect(contextBuilds).toBe(1);
+    now += 1;
+    expect(evaluateAmbientBehavior(system, false, buildContext)).not.toBeNull();
+    expect(contextBuilds).toBe(2);
+  });
+
+  it('bounds reevaluation when no ambient candidate is available', () => {
+    let now = 30_000;
+    let contextBuilds = 0;
+    const system = new AmbientBehaviorSystem({
+      noCandidateRetryMs: 1_000,
+      random: () => 0,
+      now: () => now,
+    });
+    const buildEmptyContext = () => {
+      contextBuilds += 1;
+      return context({
+        blockedObjectIds: new Set([
+          'bed',
+          'sofa',
+          'rug',
+          'bookshelf',
+          'toy-basket',
+          'arcade',
+          'food-bowl',
+          'window',
+        ]),
+        wanderTiles: [],
+      });
+    };
+
+    expect(evaluateAmbientBehavior(system, false, buildEmptyContext)).toBeNull();
+    for (let elapsed = 1; elapsed < 1_000; elapsed += 100) {
+      now = 30_000 + elapsed;
+      expect(evaluateAmbientBehavior(system, false, buildEmptyContext)).toBeNull();
+    }
+    expect(contextBuilds).toBe(1);
+    now = 31_000;
+    expect(evaluateAmbientBehavior(system, false, buildEmptyContext)).toBeNull();
+    expect(contextBuilds).toBe(2);
   });
 });

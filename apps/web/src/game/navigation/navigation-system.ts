@@ -35,6 +35,10 @@ export class NavigationSystem {
     }
   }
 
+  clearReservations(): void {
+    this.reservations.clear();
+  }
+
   isWalkable(tile: GridPoint, owner?: string): boolean {
     if (!this.inBounds(tile) || this.blocked.has(keyOf(tile))) return false;
     const reservationOwner = this.reservations.get(keyOf(tile));

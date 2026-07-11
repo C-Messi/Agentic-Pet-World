@@ -18,6 +18,7 @@ interface AmbientBehaviorOptions {
   random: () => number;
   now: () => number;
   cooldownMs?: number;
+  noCandidateRetryMs?: number;
 }
 
 interface WeightedAction {
@@ -30,17 +31,24 @@ export class AmbientBehaviorSystem {
   private readonly random: () => number;
   private readonly now: () => number;
   private readonly cooldownMs: number;
-  private lastSelectedAt = Number.NEGATIVE_INFINITY;
+  private readonly noCandidateRetryMs: number;
+  private nextEvaluationTime = Number.NEGATIVE_INFINITY;
 
-  constructor({ random, now, cooldownMs = 8_000 }: AmbientBehaviorOptions) {
+  constructor({
+    random,
+    now,
+    cooldownMs = 8_000,
+    noCandidateRetryMs = 1_000,
+  }: AmbientBehaviorOptions) {
     this.random = random;
     this.now = now;
     this.cooldownMs = cooldownMs;
+    this.noCandidateRetryMs = noCandidateRetryMs;
   }
 
   select(context: AmbientContext): AmbientAction | null {
     const currentTime = this.now();
-    if (context.agentBusy || currentTime - this.lastSelectedAt < this.cooldownMs) return null;
+    if (!this.isEligible(context.agentBusy)) return null;
 
     const candidates: WeightedAction[] = [
       { action: { type: 'rest', targetId: 'bed' }, weight: 2, targetId: 'bed' },
@@ -57,7 +65,10 @@ export class AmbientBehaviorSystem {
       ({ targetId }) => !targetId || !context.blockedObjectIds.has(targetId),
     );
 
-    if (availableCandidates.length === 0) return null;
+    if (availableCandidates.length === 0) {
+      this.nextEvaluationTime = currentTime + this.noCandidateRetryMs;
+      return null;
+    }
     const totalWeight = availableCandidates.reduce((sum, candidate) => sum + candidate.weight, 0);
     let roll = Math.min(Math.max(this.random(), 0), 0.999_999_999) * totalWeight;
     const selected =
@@ -67,11 +78,19 @@ export class AmbientBehaviorSystem {
       }) ?? availableCandidates[availableCandidates.length - 1];
     if (!selected) return null;
 
-    this.lastSelectedAt = currentTime;
+    this.nextEvaluationTime = currentTime + this.cooldownMs;
     return selected.action;
   }
 
+  isEligible(agentBusy: boolean): boolean {
+    return !agentBusy && this.now() >= this.nextEvaluationTime;
+  }
+
+  nextEvaluationAt(): number {
+    return this.nextEvaluationTime;
+  }
+
   resetCooldown(): void {
-    this.lastSelectedAt = Number.NEGATIVE_INFINITY;
+    this.nextEvaluationTime = Number.NEGATIVE_INFINITY;
   }
 }
