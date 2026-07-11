@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --dts --clean --no-external @cat-house/shared",
-    "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc --noEmit --pretty false",
+    "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/index.ts",
+    "start": "node --env-file-if-exists=../../.env dist/index.js",
+    "build": "tsc -b && tsup src/index.ts --format esm --dts --clean --no-external @cat-house/shared",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false",
     "lint": "eslint ."
   },
   "dependencies": {

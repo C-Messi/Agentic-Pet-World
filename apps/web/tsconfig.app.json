@@ -5,11 +5,8 @@
     "tsBuildInfoFile": "./node_modules/.cache/tsconfig.app.tsbuildinfo",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "noEmit": true,
-    "baseUrl": ".",
-    "paths": {
-      "@cat-house/shared": ["../../packages/shared/src/index.ts"]
-    }
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [{ "path": "../../packages/shared" }]
 }
