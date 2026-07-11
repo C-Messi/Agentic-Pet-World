@@ -56,6 +56,25 @@ describe('measured bubble layout', () => {
     expect(measure(layout.wrappedLines[1] ?? '').width).toBeLessThanOrEqual(196);
   });
 
+  it('remeasures ellipsis candidates when the renderer wraps a seventh line', () => {
+    const ellipsisWrapMeasure = (text: string): RenderedTextMeasurement => {
+      const measured = measure(text);
+      const lastLine = text.split('\n').at(-1) ?? '';
+      if (text.endsWith('…') && segmentGraphemes(lastLine).length > 5) {
+        return { width: Math.min(196, measured.width), height: 126, lines: 7 };
+      }
+      return measured;
+    };
+
+    const layout = fitBubbleText('W'.repeat(280), ellipsisWrapMeasure);
+    const measured = ellipsisWrapMeasure(layout.text);
+
+    expect(layout.text.endsWith('…')).toBe(true);
+    expect(measured.lines).toBeLessThanOrEqual(6);
+    expect(measured.height).toBeLessThanOrEqual(108);
+    expect(measured.width).toBeLessThanOrEqual(196);
+  });
+
   it('keeps the measured bubble inside every world edge', () => {
     const layout = fitBubbleText('WWW界😀'.repeat(40), measure);
 

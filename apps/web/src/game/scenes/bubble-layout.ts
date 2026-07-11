@@ -41,32 +41,50 @@ export function fitBubbleText(input: string, measure: TextMeasurer): BubbleLayou
   let truncated = allLines.length > MAX_LINES;
   let wrappedLines = allLines.slice(0, MAX_LINES);
   let measurement = measure(wrappedLines.join('\n'));
-  while (wrappedLines.length > 1 && (measurement.lines > MAX_LINES || measurement.height > MAX_TEXT_HEIGHT)) {
-    wrappedLines = wrappedLines.slice(0, -1);
+  if (!fitsBubble(measurement)) {
     truncated = true;
-    measurement = measure(wrappedLines.join('\n'));
   }
   if (truncated) {
-    const lastIndex = wrappedLines.length - 1;
-    wrappedLines[lastIndex] = fitEllipsis(wrappedLines[lastIndex] ?? '', measure);
-    measurement = measure(wrappedLines.join('\n'));
+    const fitted = fitTruncatedLines(wrappedLines, measure);
+    wrappedLines = fitted.lines;
+    measurement = fitted.measurement;
   }
   return {
     text: wrappedLines.join('\n'),
-    width: Math.min(220, Math.max(112, Math.ceil(measurement.width) + HORIZONTAL_PADDING)),
-    height: Math.min(132, Math.ceil(measurement.height) + VERTICAL_PADDING),
+    width: Math.max(112, Math.ceil(measurement.width) + HORIZONTAL_PADDING),
+    height: Math.ceil(measurement.height) + VERTICAL_PADDING,
     lines: measurement.lines,
     wrappedLines,
     truncated,
   };
 }
 
-function fitEllipsis(line: string, measure: TextMeasurer): string {
-  const graphemes = segmentGraphemes(line);
-  while (graphemes.length > 0 && measure(`${graphemes.join('')}…`).width > WRAP_WIDTH) {
-    graphemes.pop();
+function fitTruncatedLines(
+  inputLines: readonly string[],
+  measure: TextMeasurer,
+): { lines: string[]; measurement: RenderedTextMeasurement } {
+  const lines = [...inputLines];
+  while (lines.length > 0) {
+    const prefix = lines.slice(0, -1);
+    const graphemes = segmentGraphemes(lines.at(-1) ?? '');
+    for (let length = graphemes.length; length >= 0; length -= 1) {
+      const candidateLines = [...prefix, `${graphemes.slice(0, length).join('')}…`];
+      const measurement = measure(candidateLines.join('\n'));
+      if (fitsBubble(measurement)) return { lines: candidateLines, measurement };
+    }
+    lines.pop();
   }
-  return `${graphemes.join('')}…`;
+  for (const fallback of ['…', '']) {
+    const measurement = measure(fallback);
+    if (fitsBubble(measurement)) return { lines: [fallback], measurement };
+  }
+  throw new Error('Renderer cannot fit an empty bubble');
+}
+
+function fitsBubble(measurement: RenderedTextMeasurement): boolean {
+  return measurement.lines <= MAX_LINES
+    && measurement.height <= MAX_TEXT_HEIGHT
+    && measurement.width <= WRAP_WIDTH;
 }
 
 export function segmentGraphemes(input: string): string[] {
