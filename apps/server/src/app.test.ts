@@ -51,8 +51,10 @@ class MemoryApiStore implements ApiStore {
   public readonly memories: MemoryRecord[] = [];
   public readonly actionRuns: Array<{
     sessionId: string;
+    turnCorrelationId: string;
     action: AgentAction;
     result?: ActionResult;
+    resultWorld?: WorldSnapshot;
   }> = [];
   public readonly events: unknown[] = [];
   public worldUpdates = 0;
@@ -100,26 +102,32 @@ class MemoryApiStore implements ApiStore {
   public createActionRun(
     sessionId: string,
     action: AgentAction,
-    _correlationId: string,
+    turnCorrelationId: string,
     _createdAt: string,
   ): void {
-    this.actionRuns.push({ sessionId, action });
+    this.actionRuns.push({ sessionId, turnCorrelationId, action });
   }
 
   public completeActionRun(
     sessionId: string,
+    turnCorrelationId: string,
     result: ActionResult,
+    resultWorld: WorldSnapshot,
     _updatedAt: string,
   ): boolean {
     const run = this.actionRuns.find(
       (candidate) => candidate.sessionId === sessionId
+        && candidate.turnCorrelationId === turnCorrelationId
         && candidate.action.id === result.actionId,
     );
     if (run === undefined || run.action.type !== result.type) {
       throw new ActionResultDomainError('not_found', `Action run not found: ${result.actionId}`);
     }
     if (run.result !== undefined) {
-      if (JSON.stringify(run.result) === JSON.stringify(result)) {
+      if (
+        JSON.stringify(run.result) === JSON.stringify(result)
+        && JSON.stringify(run.resultWorld) === JSON.stringify(resultWorld)
+      ) {
         return false;
       }
       throw new ActionResultDomainError(
@@ -128,6 +136,7 @@ class MemoryApiStore implements ApiStore {
       );
     }
     run.result = result;
+    run.resultWorld = resultWorld;
     return true;
   }
 
@@ -361,7 +370,7 @@ describe('Fastify BFF', () => {
   it('persists validated action results and the resulting world snapshot', async () => {
     const { app, store } = createHarness();
     const sessionId = await createSession(app);
-    await app.inject({
+    const turn = await app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/turns`,
       payload: turnPayload(),
@@ -375,12 +384,20 @@ describe('Fastify BFF', () => {
     const accepted = await app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
-      payload: { world, results: [result] },
+      payload: {
+        turnCorrelationId: turn.json().correlationId,
+        world,
+        results: [result],
+      },
     });
     const invalid = await app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
-      payload: { world, results: [{ ...result, status: 'unknown' }] },
+      payload: {
+        turnCorrelationId: turn.json().correlationId,
+        world,
+        results: [{ ...result, status: 'unknown' }],
+      },
     });
     await app.close();
 
@@ -395,12 +412,13 @@ describe('Fastify BFF', () => {
   it('accepts lost-response action retries idempotently without duplicate updates or events', async () => {
     const { app, store } = createHarness();
     const sessionId = await createSession(app);
-    await app.inject({
+    const turn = await app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/turns`,
       payload: turnPayload(),
     });
     const payload = {
+      turnCorrelationId: turn.json().correlationId as string,
       world,
       results: [{
         actionId: 'move-window',
@@ -439,12 +457,13 @@ describe('Fastify BFF', () => {
   it('rejects a conflicting second result for a completed action', async () => {
     const { app } = createHarness();
     const sessionId = await createSession(app);
-    await app.inject({
+    const turn = await app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/turns`,
       payload: turnPayload(),
     });
     const succeeded = {
+      turnCorrelationId: turn.json().correlationId as string,
       world,
       results: [{
         actionId: 'move-window',
@@ -462,6 +481,7 @@ describe('Fastify BFF', () => {
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
       payload: {
+        turnCorrelationId: succeeded.turnCorrelationId,
         world,
         results: [{
           ...succeeded.results[0],
@@ -470,10 +490,22 @@ describe('Fastify BFF', () => {
         }],
       },
     });
-    await app.close();
-
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json().error.code).toBe('ACTION_RESULT_CONFLICT');
+
+    const worldConflict = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: {
+        ...succeeded,
+        world: {
+          ...world,
+          cat: { ...world.cat, position: { x: 9, y: 7 } },
+        },
+      },
+    });
+    expect(worldConflict.statusCode).toBe(409);
+    await app.close();
   });
 
   it('maps action domain mismatches to 422 and unexpected persistence faults to 500', async () => {
@@ -488,7 +520,11 @@ describe('Fastify BFF', () => {
     const mismatch = await domain.app.inject({
       method: 'POST',
       url: `/api/sessions/${domainSessionId}/action-results`,
-      payload: { world, results: [result] },
+      payload: {
+        turnCorrelationId: 'missing-turn',
+        world,
+        results: [result],
+      },
     });
     await domain.app.close();
 
@@ -500,7 +536,11 @@ describe('Fastify BFF', () => {
     const failed = await internal.app.inject({
       method: 'POST',
       url: `/api/sessions/${internalSessionId}/action-results`,
-      payload: { world, results: [result] },
+      payload: {
+        turnCorrelationId: 'missing-turn',
+        world,
+        results: [result],
+      },
     });
     await internal.app.close();
 

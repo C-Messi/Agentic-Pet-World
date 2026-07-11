@@ -15,6 +15,7 @@ import {
   SessionRepository,
   WorldStateRepository,
 } from './repositories/index.js';
+import { worldSnapshotHash } from '../world-identity.js';
 
 const timestamp = '2026-07-12T08:30:00.000Z';
 const laterTimestamp = '2026-07-12T08:31:00.000Z';
@@ -325,6 +326,7 @@ describe('SQLite storage', () => {
     actionRuns.create({
       id: 'run-1',
       sessionId: 'session-1',
+      turnCorrelationId: 'turn-1',
       action,
       status: 'pending',
       createdAt: timestamp,
@@ -333,6 +335,7 @@ describe('SQLite storage', () => {
     expect(actionRuns.get('run-1')).toEqual({
       id: 'run-1',
       sessionId: 'session-1',
+      turnCorrelationId: 'turn-1',
       action,
       status: 'pending',
       createdAt: timestamp,
@@ -346,14 +349,18 @@ describe('SQLite storage', () => {
       message: 'Reached the window.',
       completedAt: laterTimestamp,
     };
-    actionRuns.complete('run-1', result, laterTimestamp);
+    const resultWorldHash = worldSnapshotHash(world);
+    actionRuns.complete('run-1', result, world, resultWorldHash, laterTimestamp);
 
     expect(actionRuns.get('run-1')).toEqual({
       id: 'run-1',
       sessionId: 'session-1',
+      turnCorrelationId: 'turn-1',
       action,
       status: 'succeeded',
       result,
+      resultWorld: world,
+      resultWorldHash,
       createdAt: timestamp,
       updatedAt: laterTimestamp,
     });

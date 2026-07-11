@@ -28,9 +28,12 @@ export type ActionRunStatus =
 export interface ActionRunRecord {
   id: string;
   sessionId: string;
+  turnCorrelationId: string;
   action: AgentAction;
   status: ActionRunStatus;
   result?: ActionResult;
+  resultWorld?: WorldSnapshot;
+  resultWorldHash?: string;
   createdAt: string;
   updatedAt: string;
 }

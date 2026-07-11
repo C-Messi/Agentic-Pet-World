@@ -303,6 +303,7 @@ export type AgentTurnResponse = z.infer<typeof AgentTurnResponseSchema>;
 
 export const ActionResultsRequestSchema = z
   .object({
+    turnCorrelationId: IdentifierSchema.max(96),
     world: WorldSnapshotSchema,
     results: z.array(ActionResultSchema).min(1).max(12),
   })

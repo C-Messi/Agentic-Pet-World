@@ -22,9 +22,14 @@ import {
   SessionRepository,
   WorldStateRepository,
 } from './repositories/index.js';
+import {
+  canonicalizeWorldSnapshot,
+  worldSnapshotHash,
+} from '../world-identity.js';
 
 const ActionResultsEventPayloadSchema = z
   .object({
+    turnCorrelationId: z.string().min(1).max(96),
     results: z.array(ActionResultSchema).min(1).max(12),
     world: WorldSnapshotSchema,
   })
@@ -87,16 +92,17 @@ export class StorageApiStore implements ApiStore {
   public createActionRun(
     sessionId: string,
     action: AgentAction,
-    _correlationId: string,
+    turnCorrelationId: string,
     createdAt: string,
   ): void {
-    const id = actionRunId(sessionId, action.id);
+    const id = actionRunId(sessionId, turnCorrelationId, action.id);
     if (this.actionRuns.get(id) !== undefined) {
       return;
     }
     this.actionRuns.create({
       id,
       sessionId,
+      turnCorrelationId,
       action,
       status: 'pending',
       createdAt,
@@ -106,31 +112,25 @@ export class StorageApiStore implements ApiStore {
 
   public completeActionRun(
     sessionId: string,
+    turnCorrelationId: string,
     result: ActionResult,
+    world: WorldSnapshot,
     updatedAt: string,
   ): boolean {
-    const row = this.database
-      .prepare(
-        `SELECT id
-         FROM action_runs
-         WHERE session_id = ?
-           AND json_extract(action_json, '$.id') = ?
-         ORDER BY created_at DESC, id DESC
-         LIMIT 1`,
-      )
-      .get(sessionId, result.actionId) as { id: string } | undefined;
-    if (row === undefined) {
+    const id = actionRunId(sessionId, turnCorrelationId, result.actionId);
+    const run = this.actionRuns.get(id);
+    if (run === undefined) {
       throw new ActionResultDomainError(
         'not_found',
         `Active action run not found: ${result.actionId}`,
       );
     }
-    const run = this.actionRuns.get(row.id);
-    if (run === undefined) {
-      throw new Error(`Action run disappeared: ${row.id}`);
-    }
+    const resultWorldHash = worldSnapshotHash(world);
     if (run.result !== undefined) {
-      if (actionResultsEqual(run.result, result)) {
+      if (
+        actionResultsEqual(run.result, result)
+        && run.resultWorldHash === resultWorldHash
+      ) {
         return false;
       }
       throw new ActionResultDomainError(
@@ -145,7 +145,13 @@ export class StorageApiStore implements ApiStore {
       );
     }
     try {
-      this.actionRuns.complete(row.id, result, updatedAt);
+      this.actionRuns.complete(
+        id,
+        result,
+        canonicalizeWorldSnapshot(world),
+        resultWorldHash,
+        updatedAt,
+      );
     } catch (error) {
       if (error instanceof z.ZodError) {
         throw new ActionResultDomainError(
@@ -163,11 +169,14 @@ export class StorageApiStore implements ApiStore {
     sessionId: string;
     type: 'actions.results.recorded';
     payload: { results: readonly ActionResult[]; world: WorldSnapshot };
+    turnCorrelationId: string;
     createdAt: string;
   }): void {
+    const { turnCorrelationId, ...record } = event;
     this.events.create({
-      ...event,
+      ...record,
       payload: {
+        turnCorrelationId,
         results: [...event.payload.results],
         world: event.payload.world,
       },
@@ -188,9 +197,10 @@ function actionResultsEqual(left: ActionResult, right: ActionResult): boolean {
 
 function actionRunId(
   sessionId: string,
+  turnCorrelationId: string,
   actionId: string,
 ): string {
   return `run-${createHash('sha256')
-    .update(`${sessionId}\0${actionId}`)
+    .update(`${sessionId}\0${turnCorrelationId}\0${actionId}`)
     .digest('hex')}`;
 }

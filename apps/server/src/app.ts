@@ -28,6 +28,8 @@ import Fastify, {
 } from 'fastify';
 import { z } from 'zod';
 
+import { worldSnapshotHash } from './world-identity.js';
+
 const CorrelationIdSchema = z
   .string()
   .min(1)
@@ -49,15 +51,22 @@ export interface ApiStore {
   createActionRun(
     sessionId: string,
     action: AgentAction,
-    correlationId: string,
+    turnCorrelationId: string,
     createdAt: string,
   ): void;
-  completeActionRun(sessionId: string, result: ActionResult, updatedAt: string): boolean;
+  completeActionRun(
+    sessionId: string,
+    turnCorrelationId: string,
+    result: ActionResult,
+    world: WorldSnapshot,
+    updatedAt: string,
+  ): boolean;
   createActionResultsEvent(event: {
     id: string;
     sessionId: string;
     type: 'actions.results.recorded';
     payload: { results: readonly ActionResult[]; world: WorldSnapshot };
+    turnCorrelationId: string;
     createdAt: string;
   }): void;
 }
@@ -328,7 +337,9 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
         for (const result of body.results) {
           hasNewResult = dependencies.store.completeActionRun(
             sessionId,
+            body.turnCorrelationId,
             result,
+            body.world,
             updatedAt,
           ) || hasNewResult;
         }
@@ -338,8 +349,14 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
         dependencies.store.upsertWorld(sessionId, body.world, updatedAt);
         dependencies.store.touchSession(sessionId, updatedAt);
         dependencies.store.createActionResultsEvent({
-          id: actionResultsEventId(sessionId, body.results),
+          id: actionResultsEventId(
+            sessionId,
+            body.turnCorrelationId,
+            body.results,
+            body.world,
+          ),
           sessionId,
+          turnCorrelationId: body.turnCorrelationId,
           type: 'actions.results.recorded',
           payload: { results: body.results, world: body.world },
           createdAt: updatedAt,
@@ -535,11 +552,18 @@ function validateRateLimit(rateLimit: {
 
 function actionResultsEventId(
   sessionId: string,
+  turnCorrelationId: string,
   results: readonly ActionResult[],
+  world: WorldSnapshot,
 ): string {
   const identity = results.map(canonicalActionResult);
   return `event-actions-${createHash('sha256')
-    .update(JSON.stringify({ sessionId, results: identity }))
+    .update(JSON.stringify({
+      sessionId,
+      turnCorrelationId,
+      results: identity,
+      worldHash: worldSnapshotHash(world),
+    }))
     .digest('hex')}`;
 }
 

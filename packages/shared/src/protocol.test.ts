@@ -270,8 +270,16 @@ describe('HTTP API envelopes', () => {
       correlationId: 'request-1',
     });
     expect(
-      ActionResultsRequestSchema.parse({ world, results: [validResult] }),
-    ).toEqual({ world, results: [validResult] });
+      ActionResultsRequestSchema.parse({
+        turnCorrelationId: 'turn-request-1',
+        world,
+        results: [validResult],
+      }),
+    ).toEqual({
+      turnCorrelationId: 'turn-request-1',
+      world,
+      results: [validResult],
+    });
     expect(
       ErrorResponseSchema.parse({
         error: {
@@ -282,5 +290,8 @@ describe('HTTP API envelopes', () => {
         },
       }),
     ).toBeTruthy();
+    expect(() =>
+      ActionResultsRequestSchema.parse({ world, results: [validResult] }),
+    ).toThrow();
   });
 });

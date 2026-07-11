@@ -79,6 +79,7 @@ describe('Fastify BFF production integration', () => {
         recentActionResults: [],
       },
     });
+    const firstTurnCorrelationId = turn.json().correlationId as string;
     const result: ActionResult = {
       actionId: 'fake-window-move',
       type: 'move_to',
@@ -88,19 +89,51 @@ describe('Fastify BFF production integration', () => {
     const action = await fixture.app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
-      payload: { world, results: [result] },
+      payload: { turnCorrelationId: firstTurnCorrelationId, world, results: [result] },
     });
     const retry = await fixture.app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
-      payload: { world, results: [result] },
+      payload: { turnCorrelationId: firstTurnCorrelationId, world, results: [result] },
     });
     const conflict = await fixture.app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
       payload: {
+        turnCorrelationId: firstTurnCorrelationId,
         world,
         results: [{ ...result, status: 'failed', errorCode: 'PATH_BLOCKED' }],
+      },
+    });
+    const worldConflict = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: {
+        turnCorrelationId: firstTurnCorrelationId,
+        world: {
+          ...world,
+          cat: { ...world.cat, position: { x: 9, y: 7 } },
+        },
+        results: [result],
+      },
+    });
+    const secondTurn = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/turns`,
+      payload: {
+        playerMessage: 'Please look at the window again.',
+        world,
+        recentActionResults: [result],
+      },
+    });
+    const secondTurnCorrelationId = secondTurn.json().correlationId as string;
+    const secondAction = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: {
+        turnCorrelationId: secondTurnCorrelationId,
+        world,
+        results: [result],
       },
     });
     const session = await fixture.app.inject({
@@ -119,26 +152,38 @@ describe('Fastify BFF production integration', () => {
     expect(action.statusCode).toBe(202);
     expect(retry.statusCode).toBe(202);
     expect(conflict.statusCode).toBe(409);
-    expect(session.json().messages.map((message: { role: string }) => message.role)).toEqual([
-      'player',
-      'agent',
-    ]);
+    expect(worldConflict.statusCode).toBe(409);
+    expect(secondTurn.statusCode).toBe(200);
+    expect(secondTurnCorrelationId).not.toBe(firstTurnCorrelationId);
+    expect(secondTurn.json().decision.actions[0].id).toBe('fake-window-move');
+    expect(secondAction.statusCode).toBe(202);
+    const roles = session.json().messages.map(
+      (message: { role: string }) => message.role,
+    );
+    expect(roles.filter((role: string) => role === 'player')).toHaveLength(2);
+    expect(roles.filter((role: string) => role === 'agent')).toHaveLength(2);
     expect(session.json().world).toEqual(world);
     expect(memories.json().memories).toEqual([
       expect.objectContaining({ id: 'memory-integration', sessionId }),
     ]);
     expect(
       fixture.database.prepare(
-        `SELECT status FROM action_runs WHERE session_id = ?`,
-      ).get(sessionId),
-    ).toEqual({ status: 'succeeded' });
+        `SELECT turn_correlation_id, status
+         FROM action_runs
+         WHERE session_id = ?
+         ORDER BY turn_correlation_id`,
+      ).all(sessionId),
+    ).toEqual([
+      { turn_correlation_id: firstTurnCorrelationId, status: 'succeeded' },
+      { turn_correlation_id: secondTurnCorrelationId, status: 'succeeded' },
+    ].sort((left, right) => left.turn_correlation_id.localeCompare(right.turn_correlation_id)));
     expect(
       fixture.database.prepare(
         `SELECT COUNT(*) AS count
          FROM events
          WHERE session_id = ? AND type = 'actions.results.recorded'`,
       ).get(sessionId),
-    ).toEqual({ count: 1 });
+    ).toEqual({ count: 2 });
   });
 
   it('bridges request abort events to a provider-observed cancellation signal', async () => {
