@@ -34,16 +34,28 @@ export class WorldSceneActionAdapter implements ActionWorldPort {
     }
   }
 
-  emote(emotion: Emotion, durationMs: number, signal: AbortSignal): Promise<void> {
-    return this.scene.emoteForAction(emotion, durationMs, signal);
+  async emote(emotion: Emotion, durationMs: number, signal: AbortSignal): Promise<void> {
+    try {
+      await this.scene.emoteForAction(emotion, durationMs, signal);
+    } catch (error) {
+      throw asActionError(error, 'EMOTE_FAILED');
+    }
   }
 
-  wait(durationMs: number, signal: AbortSignal): Promise<void> {
-    return this.scene.waitForAction(durationMs, signal);
+  async wait(durationMs: number, signal: AbortSignal): Promise<void> {
+    try {
+      await this.scene.waitForAction(durationMs, signal);
+    } catch (error) {
+      throw asActionError(error, 'WAIT_FAILED');
+    }
   }
 
-  speak(text: string, signal: AbortSignal): Promise<void> {
-    return this.scene.speakForAction(text, signal);
+  async speak(text: string, signal: AbortSignal): Promise<void> {
+    try {
+      await this.scene.speakForAction(text, signal);
+    } catch (error) {
+      throw asActionError(error, 'SPEAK_FAILED');
+    }
   }
 
   getSnapshot(): WorldSnapshot {

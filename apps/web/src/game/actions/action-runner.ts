@@ -110,10 +110,12 @@ export class ActionRunner {
       return results;
     } finally {
       unlink();
-      this.activeAction = undefined;
-      if (this.activeController === controller) this.activeController = undefined;
-      this.world.setAmbientSuspended(false);
-      this.events.emit('agent-busy', { busy: false });
+      if (this.activeController === controller) {
+        this.activeAction = undefined;
+        this.activeController = undefined;
+        this.world.setAmbientSuspended(false);
+        this.events.emit('agent-busy', { busy: false });
+      }
     }
   }
 

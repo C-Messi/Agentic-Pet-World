@@ -1,10 +1,11 @@
-import type { AgentDecision, AgentTurnRequest, WorldSnapshot } from '@cat-house/shared';
+import type { ActionResult, AgentDecision, AgentTurnRequest, WorldSnapshot } from '@cat-house/shared';
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  ActionRunOptions,
+import {
   ActionRunner,
-  CorrelatedActionResult,
+  type ActionRunOptions,
+  type ActionWorldPort,
+  type CorrelatedActionResult,
 } from '../actions/action-runner';
 import { GameEventBus } from '../events';
 import { AgentApiClient, AgentBridge } from './agent-bridge';
@@ -36,6 +37,25 @@ function turnRequest(): AgentTurnRequest {
 }
 
 describe('AgentApiClient', () => {
+  it('creates and loads sessions through shared response schemas', async () => {
+    const session = {
+      id: 'session-1',
+      createdAt: '2026-07-12T00:00:00.000Z',
+      updatedAt: '2026-07-12T00:00:00.000Z',
+    };
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ session }, 201))
+      .mockResolvedValueOnce(response({ session, world, messages: [] }));
+    const client = new AgentApiClient({ fetcher });
+
+    expect((await client.createSession()).session).toEqual(session);
+    expect((await client.loadSession('session-1')).world).toEqual(world);
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      '/api/sessions',
+      '/api/sessions/session-1',
+    ]);
+  });
+
   it('accepts and parses a 503 fallback envelope', async () => {
     const fetcher = vi.fn(async () => response({
       decision: { speech: 'I need a quiet moment.', emotion: 'confused', actions: [] },
@@ -129,6 +149,99 @@ describe('AgentBridge', () => {
     expect(runner.cancel).toHaveBeenCalled();
   });
 
+  it('cancels a real running action when the session is replaced', async () => {
+    let ambientSuspended = false;
+    const port: ActionWorldPort = {
+      hasTarget: () => true,
+      setAmbientSuspended: (suspended) => { ambientSuspended = suspended; },
+      moveTo: async () => undefined,
+      interact: async () => undefined,
+      emote: async () => undefined,
+      wait: async (_duration, signal) => new Promise<void>((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('cancelled', 'AbortError')),
+          { once: true },
+        );
+      }),
+      speak: async () => undefined,
+      getSnapshot: () => world,
+    };
+    const events = new GameEventBus();
+    const failures: ActionResult[] = [];
+    events.on('action-failed', ({ result }) => failures.push(result));
+    const runner = new ActionRunner(port, events);
+    const api = {
+      sendTurn: vi.fn(async () => ({
+        decision: {
+          speech: 'Waiting.',
+          emotion: 'idle' as const,
+          actions: [{ id: 'wait', type: 'wait' as const, durationMs: 1_000 }],
+        },
+        degraded: false,
+        correlationId: 'turn-wait',
+      })),
+      postActionResult: vi.fn(async () => undefined),
+    };
+    const bridge = new AgentBridge(api, runner, events, () => world);
+    bridge.replaceSession('session-1');
+    const turn = bridge.sendPlayerMessage('Wait.');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    bridge.replaceSession('session-2');
+    await turn;
+
+    expect(failures[0]?.status).toBe('cancelled');
+    expect(ambientSuspended).toBe(false);
+    expect(runner.currentAction).toBeUndefined();
+  });
+
+  it('includes world, current action, and recent results in the next turn request', async () => {
+    const delivered: CorrelatedActionResult = {
+      turnCorrelationId: 'turn-1',
+      result: {
+        actionId: 'move',
+        type: 'move_to',
+        status: 'succeeded',
+        completedAt: '2026-07-12T00:00:00.000Z',
+      },
+    };
+    const requests: AgentTurnRequest[] = [];
+    let turn = 0;
+    const api = {
+      sendTurn: vi.fn(async (request: AgentTurnRequest) => {
+        requests.push(request);
+        turn += 1;
+        return { decision, degraded: false, correlationId: `turn-${turn}` };
+      }),
+      postActionResult: vi.fn(async () => undefined),
+    };
+    const runner = {
+      run: vi.fn(async (
+        _decision: AgentDecision,
+        _correlation: string,
+        options?: ActionRunOptions,
+      ) => {
+        await options?.onResult?.(delivered, world);
+        return [delivered];
+      }),
+      cancel: vi.fn(),
+      currentAction: { id: 'pause', type: 'wait', durationMs: 100 },
+    } as unknown as ActionRunner;
+    const bridge = new AgentBridge(api, runner, new GameEventBus(), () => world);
+    bridge.replaceSession('session-1');
+
+    await bridge.sendPlayerMessage('First.');
+    await bridge.sendPlayerMessage('Second.');
+
+    expect(requests[1]).toMatchObject({
+      world,
+      currentAction: { id: 'pause', type: 'wait', durationMs: 100 },
+      recentActionResults: [delivered.result],
+    });
+  });
+
   it('posts results without recursively starting another turn', async () => {
     const result: CorrelatedActionResult = {
       turnCorrelationId: 'turn-1',
@@ -161,21 +274,32 @@ describe('AgentBridge', () => {
     expect(api.postActionResult).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves the session and emits offline status after a network error', async () => {
+  it('preserves the session and returns a local safe fallback after a network error', async () => {
     const api = {
       sendTurn: vi.fn(async () => { throw new TypeError('Network failed'); }),
       postActionResult: vi.fn(async () => undefined),
     };
-    const runner = { run: vi.fn(), cancel: vi.fn(), currentAction: undefined } as unknown as ActionRunner;
+    const runner = {
+      run: vi.fn(async () => []),
+      cancel: vi.fn(),
+      currentAction: undefined,
+    } as unknown as ActionRunner;
     const events = new GameEventBus();
     const statuses: string[] = [];
+    const bubbles: string[] = [];
     events.on('connection-status', ({ status }) => statuses.push(status));
+    events.on('bubble-changed', ({ text }) => { if (text) bubbles.push(text); });
     const bridge = new AgentBridge(api, runner, events, () => world);
     bridge.replaceSession('session-1');
 
-    await expect(bridge.sendPlayerMessage('Hello.')).rejects.toThrow('Network failed');
+    const outcome = await bridge.sendPlayerMessage('Hello.');
 
     expect(bridge.sessionId).toBe('session-1');
     expect(statuses.at(-1)).toBe('offline');
+    expect(outcome).toMatchObject({ source: 'local', degraded: true, fallbackReason: 'network_error' });
+    expect(outcome.decision.actions).toEqual([]);
+    expect(bubbles).toEqual([outcome.decision.speech, outcome.decision.thought]);
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(api.sendTurn).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,6 +7,7 @@ import {
   ErrorResponseSchema,
   SessionResponseSchema,
   type ActionResult,
+  type AgentDecision,
   type AgentTurnRequest,
   type AgentTurnResponse,
   type CreateSessionResponse,
@@ -137,11 +138,20 @@ export interface AgentBridgeApi {
   ): Promise<void>;
 }
 
+export interface AgentBridgeTurnOutcome {
+  decision: AgentDecision;
+  degraded: boolean;
+  correlationId: string;
+  source: 'server' | 'local';
+  fallbackReason?: AgentTurnResponse['fallbackReason'] | 'network_error';
+}
+
 export class AgentBridge {
   private activeController: AbortController | undefined;
   private activeSessionId: string | undefined;
   private readonly deliveredResults: ActionResult[] = [];
   private readonly executedDecisions = new Set<string>();
+  private offlineSequence = 0;
 
   constructor(
     private readonly api: AgentBridgeApi,
@@ -204,7 +214,7 @@ export class AgentBridge {
     this.events.emit('connection-status', { status: 'cancelled' });
   }
 
-  async sendPlayerMessage(playerMessage: string): Promise<AgentTurnResponse> {
+  async sendPlayerMessage(playerMessage: string): Promise<AgentBridgeTurnOutcome> {
     const sessionId = this.activeSessionId;
     if (!sessionId) throw new Error('No active session');
     const controller = this.replaceActiveController();
@@ -217,13 +227,12 @@ export class AgentBridge {
       ...(currentAction === undefined ? {} : { currentAction }),
       recentActionResults: this.deliveredResults.slice(-12),
     });
+    let responseReceived = false;
 
     try {
       const response = await this.api.sendTurn(request, controller.signal);
-      this.events.emit('bubble-changed', { kind: 'speech', text: response.decision.speech });
-      if (response.decision.thought) {
-        this.events.emit('bubble-changed', { kind: 'thought', text: response.decision.thought });
-      }
+      responseReceived = true;
+      this.emitDecisionBubbles(response.decision);
       this.events.emit('connection-status', {
         status: response.degraded ? 'provider-error' : 'acting',
         ...(response.fallbackReason === undefined ? {} : { message: response.fallbackReason }),
@@ -247,9 +256,17 @@ export class AgentBridge {
       if (!response.degraded && !controller.signal.aborted) {
         this.events.emit('connection-status', { status: 'ready' });
       }
-      return response;
+      return { ...response, source: 'server' };
     } catch (error) {
       this.emitRequestError(error);
+      if (!responseReceived && isNetworkError(error)) {
+        const fallback = this.localOfflineFallback();
+        this.emitDecisionBubbles(fallback.decision);
+        await this.runner.run(fallback.decision, fallback.correlationId, {
+          signal: controller.signal,
+        });
+        return fallback;
+      }
       throw error;
     } finally {
       if (this.activeController === controller) this.activeController = undefined;
@@ -273,6 +290,29 @@ export class AgentBridge {
       status: error instanceof AgentHttpError ? 'provider-error' : 'offline',
       message: error instanceof Error ? error.message : 'Request failed',
     });
+  }
+
+  private emitDecisionBubbles(decision: AgentDecision): void {
+    this.events.emit('bubble-changed', { kind: 'speech', text: decision.speech });
+    if (decision.thought) {
+      this.events.emit('bubble-changed', { kind: 'thought', text: decision.thought });
+    }
+  }
+
+  private localOfflineFallback(): AgentBridgeTurnOutcome {
+    this.offlineSequence += 1;
+    return {
+      decision: {
+        speech: "I can't reach the server, but I'll stay here with you.",
+        thought: 'The room is still safe and playable offline.',
+        emotion: 'confused',
+        actions: [],
+      },
+      degraded: true,
+      correlationId: `local-offline-${this.offlineSequence}`,
+      source: 'local',
+      fallbackReason: 'network_error',
+    };
   }
 }
 
@@ -300,6 +340,10 @@ function isRetryable(error: unknown): boolean {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
 }
 
 function stableDecision(decision: AgentTurnResponse['decision']): string {

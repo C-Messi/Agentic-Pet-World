@@ -70,6 +70,38 @@ class FakeWorld implements ActionWorldPort {
 }
 
 describe('ActionRunner', () => {
+  it('rejects a decision with more than four actions before touching the world', async () => {
+    const port = new FakeWorld();
+    const runner = new ActionRunner(port, new GameEventBus());
+    const invalidDecision = {
+      speech: 'Too much.',
+      emotion: 'confused',
+      actions: Array.from({ length: 5 }, (_, index) => ({
+        id: `wait-${index}`,
+        type: 'wait' as const,
+        durationMs: 100,
+      })),
+    };
+
+    await expect(runner.run(invalidDecision as AgentDecision, 'turn-invalid')).rejects.toThrow();
+    expect(port.calls).toEqual([]);
+  });
+
+  it('rejects an unknown browser-side action before touching the world', async () => {
+    const port = new FakeWorld();
+    const runner = new ActionRunner(port, new GameEventBus());
+    const invalidDecision = {
+      speech: 'Unsafe.',
+      emotion: 'confused',
+      actions: [{ id: 'code', type: 'run_code', source: 'open()' }],
+    };
+
+    await expect(
+      runner.run(invalidDecision as unknown as AgentDecision, 'turn-unknown'),
+    ).rejects.toThrow();
+    expect(port.calls).toEqual([]);
+  });
+
   it('runs actions sequentially and reports each result with the turn correlation ID', async () => {
     const port = new FakeWorld();
     const resultOrder: string[] = [];
@@ -136,6 +168,50 @@ describe('ActionRunner', () => {
     expect((await run)[0]?.result.status).toBe('cancelled');
   });
 
+  it('keeps ambient suspended and busy while a replacement run still owns execution', async () => {
+    const port = new FakeWorld();
+    const completions: Array<() => void> = [];
+    port.moveTo = async (targetId: WorldObjectId, signal: AbortSignal) => {
+      port.calls.push(`move_to:${targetId}`);
+      await new Promise<void>((resolve, reject) => {
+        completions.push(resolve);
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('cancelled', 'AbortError')),
+          { once: true },
+        );
+      });
+    };
+    const events = new GameEventBus();
+    const busy: boolean[] = [];
+    events.on('agent-busy', ({ busy: value }) => busy.push(value));
+    const runner = new ActionRunner(port, events);
+
+    const first = runner.run(
+      decision([{ id: 'first', type: 'move_to', targetId: 'window', timeoutMs: 1_000 }]),
+      'turn-first',
+    );
+    await Promise.resolve();
+    const second = runner.run(
+      decision([{ id: 'second', type: 'move_to', targetId: 'window', timeoutMs: 1_000 }]),
+      'turn-second',
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(port.calls.filter((call) => call === 'ambient:false')).toEqual([]);
+    expect(busy).toEqual([true, true]);
+
+    completions[1]?.();
+    await Promise.all([first, second]);
+    expect(port.calls.filter((call) => call.startsWith('ambient:'))).toEqual([
+      'ambient:true',
+      'ambient:true',
+      'ambient:false',
+    ]);
+    expect(busy).toEqual([true, true, false]);
+  });
+
   it('fails an unavailable runtime target before invoking the adapter', async () => {
     const port = new FakeWorld();
     port.targets.clear();
@@ -190,5 +266,29 @@ describe('ActionRunner', () => {
     );
 
     expect(completed).toEqual(['move_to', 'interact', 'emote', 'wait', 'speak']);
+  });
+
+  it.each([
+    [{ id: 'move', type: 'move_to', targetId: 'window', timeoutMs: 1_000 }],
+    [{ id: 'interact', type: 'interact', targetId: 'window', interaction: 'inspect' }],
+    [{ id: 'emote', type: 'emote', emotion: 'happy', durationMs: 100 }],
+    [{ id: 'wait', type: 'wait', durationMs: 100 }],
+    [{ id: 'speak', type: 'speak', text: 'Hello.' }],
+  ] as const)('returns and emits a structured failure for %s', async (input) => {
+    const action = input as unknown as AgentAction;
+    const port = new FakeWorld();
+    port.failure = new ActionExecutionError('ADAPTER_FAILED', `${action.type} failed`);
+    const events = new GameEventBus();
+    const failures: Array<{ turnCorrelationId: string; result: { type: string; status: string } }> = [];
+    events.on('action-failed', (payload) => failures.push(payload));
+    const runner = new ActionRunner(port, events);
+
+    const results = await runner.run(decision([action]), `turn-${action.type}`);
+
+    expect(results[0]).toMatchObject({
+      turnCorrelationId: `turn-${action.type}`,
+      result: { type: action.type, status: 'failed', errorCode: 'ADAPTER_FAILED' },
+    });
+    expect(failures).toEqual([results[0]]);
   });
 });
