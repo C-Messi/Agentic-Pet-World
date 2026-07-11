@@ -47,7 +47,7 @@ export class AgentApiClient {
 
   constructor(options: AgentApiClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/$/, '');
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init));
     this.resultRetryCount = options.resultRetryCount ?? 2;
   }
 
@@ -256,10 +256,11 @@ export class AgentBridge {
     const capturedSessionGeneration = this.sessionGeneration;
     this.events.emit('connection-status', { status: 'thinking' });
     const currentAction = this.runner.currentAction;
+    const world = this.getSnapshot();
     const request = AgentTurnRequestSchema.parse({
       sessionId,
       playerMessage,
-      world: this.getSnapshot(),
+      world,
       ...(currentAction === undefined ? {} : { currentAction }),
       recentActionResults: this.deliveredResults.slice(-12),
     });
@@ -267,7 +268,9 @@ export class AgentBridge {
     let resultDeliveryFailed = false;
 
     try {
+      recordE2EPhase('turn-requested');
       const response = await this.api.sendTurn(request, operation.controller.signal);
+      recordE2EPhase('turn-received');
       this.assertOwnership(operation, capturedSessionGeneration);
       responseReceived = true;
       this.bubbles.showDecision(response.correlationId, response.decision.speech, response.decision.thought);
@@ -482,4 +485,8 @@ function staleOperationError(): DOMException {
 
 function stableDecision(decision: AgentTurnResponse['decision']): string {
   return JSON.stringify(decision);
+}
+
+function recordE2EPhase(phase: string): void {
+  if (import.meta.env.DEV) window.__CAT_HOUSE_E2E__?.phases.push(phase);
 }

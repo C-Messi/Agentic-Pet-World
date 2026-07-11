@@ -51,6 +51,24 @@ function deferred<T>(): {
 }
 
 describe('AgentApiClient', () => {
+  it('calls the native fetch function without changing its receiver', async () => {
+    const session = {
+      id: 'session-1',
+      createdAt: '2026-07-12T00:00:00.000Z',
+      updatedAt: '2026-07-12T00:00:00.000Z',
+    };
+    const nativeFetch = vi.fn(function (this: unknown) {
+      if (this !== undefined) throw new TypeError('Illegal invocation');
+      return Promise.resolve(response({ session }, 201));
+    });
+    vi.stubGlobal('fetch', nativeFetch);
+
+    const client = new AgentApiClient();
+    await expect(client.createSession()).resolves.toMatchObject({ session });
+
+    vi.unstubAllGlobals();
+  });
+
   it('creates and loads sessions through shared response schemas', async () => {
     const session = {
       id: 'session-1',

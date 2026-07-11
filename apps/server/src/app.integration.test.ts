@@ -163,9 +163,9 @@ describe('Fastify BFF production integration', () => {
     expect(roles.filter((role: string) => role === 'player')).toHaveLength(2);
     expect(roles.filter((role: string) => role === 'agent')).toHaveLength(2);
     expect(session.json().world).toEqual(world);
-    expect(memories.json().memories).toEqual([
+    expect(memories.json().memories).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'memory-integration', sessionId }),
-    ]);
+    ]));
     expect(
       fixture.database.prepare(
         `SELECT turn_correlation_id, status

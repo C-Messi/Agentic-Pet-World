@@ -103,8 +103,9 @@ class MemoryApiStore implements ApiStore {
     sessionId: string,
     action: AgentAction,
     turnCorrelationId: string,
-    _createdAt: string,
+    createdAt: string,
   ): void {
+    void createdAt;
     this.actionRuns.push({ sessionId, turnCorrelationId, action });
   }
 
@@ -113,8 +114,9 @@ class MemoryApiStore implements ApiStore {
     turnCorrelationId: string,
     result: ActionResult,
     resultWorld: WorldSnapshot,
-    _updatedAt: string,
+    updatedAt: string,
   ): boolean {
+    void updatedAt;
     const run = this.actionRuns.find(
       (candidate) => candidate.sessionId === sessionId
         && candidate.turnCorrelationId === turnCorrelationId
@@ -175,6 +177,18 @@ function turnPayload() {
 }
 
 describe('Fastify BFF', () => {
+  it('reports process liveness independently of dependency readiness', async () => {
+    const degraded = createHarness({
+      readiness: () => ({ config: false, storage: true, knowledge: true }),
+    });
+
+    const response = await degraded.app.inject({ method: 'GET', url: '/live' });
+    await degraded.app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'live' });
+  });
+
   it('reports readiness and a degraded dependency state', async () => {
     const healthy = createHarness();
     const ready = await healthy.app.inject({ method: 'GET', url: '/health' });

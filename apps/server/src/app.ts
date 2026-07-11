@@ -236,6 +236,8 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
     sendError(reply, request.id, 404, 'ROUTE_NOT_FOUND', 'Route not found');
   });
 
+  app.get('/live', async (_request, reply) => reply.send({ status: 'live' }));
+
   app.get('/health', async (_request, reply) => {
     const checks = dependencies.readiness();
     const ready = checks.config && checks.storage && checks.knowledge;

@@ -7,6 +7,7 @@ import type {
 
 const WINDOW_DECISION: AgentDecision = {
   speech: 'I will take a look by the window.',
+  thought: 'The light by the glass looks warm and interesting.',
   emotion: 'curious',
   actions: [
     {
@@ -14,6 +15,13 @@ const WINDOW_DECISION: AgentDecision = {
       type: 'move_to',
       targetId: 'window',
       timeoutMs: 8_000,
+    },
+  ],
+  memoryCandidates: [
+    {
+      content: 'The player asked me to visit the window.',
+      importance: 0.8,
+      reason: 'A clear preference for exploring the room together.',
     },
   ],
 };
@@ -34,7 +42,20 @@ const BED_DECISION: AgentDecision = {
 const ARCADE_DECISION: AgentDecision = {
   speech: 'The arcade games are coming soon. I can admire the cabinet for now.',
   emotion: 'curious',
-  actions: [],
+  actions: [
+    {
+      id: 'fake-arcade-move',
+      type: 'move_to',
+      targetId: 'arcade',
+      timeoutMs: 8_000,
+    },
+    {
+      id: 'fake-arcade-open',
+      type: 'interact',
+      targetId: 'arcade',
+      interaction: 'open',
+    },
+  ],
 };
 
 const GENERAL_DECISION: AgentDecision = {

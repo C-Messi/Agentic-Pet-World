@@ -1,4 +1,4 @@
-import type { MemoryRecord, MessageRecord, SessionResponse } from '@cat-house/shared';
+import type { MemoryRecord, MessageRecord, SessionResponse, WorldSnapshot } from '@cat-house/shared';
 
 import type { GameUiRuntime, RuntimeSnapshot } from '../App';
 import { ActionRunner } from './actions/action-runner';
@@ -20,28 +20,43 @@ class ProductionGameRuntime implements GameUiRuntime {
   private readonly bridge: AgentBridge;
   private readonly worldReady: Promise<void>;
   private removeWorldReadyListener: (() => void) | undefined;
+  private removeWorldSnapshotListener: (() => void) | undefined;
+  private readonly removeE2EListeners: Array<() => void> = [];
   private sessionId: string | undefined;
+  private latestSnapshot: WorldSnapshot | undefined;
 
   constructor(parent: HTMLElement, readonly apiUrl: string) {
+    const e2eState = import.meta.env.DEV ? this.installE2ERecorder() : undefined;
     this.worldReady = new Promise((resolve) => {
-      this.removeWorldReadyListener = this.events.on('world-ready', () => {
+      this.removeWorldReadyListener = this.events.on('world-ready', (snapshot) => {
+        this.latestSnapshot = snapshot;
         this.removeWorldReadyListener?.();
         this.removeWorldReadyListener = undefined;
         resolve();
       });
     });
+    this.removeWorldSnapshotListener = this.events.on('world-snapshot', (snapshot) => {
+      this.latestSnapshot = snapshot;
+    });
     this.game = createGame(parent);
-    const scene = this.game.scene.getScene(WorldScene.key) as WorldScene;
-    const adapter = new WorldSceneActionAdapter(scene);
+    const adapter = new WorldSceneActionAdapter(
+      () => this.game.scene.getScene(WorldScene.key) as WorldScene,
+    );
     const runner = new ActionRunner(adapter, this.events);
     this.api = new AgentApiClient({ baseUrl: apiUrl });
     this.bridge = new AgentBridge(
       this.api,
       runner,
       this.events,
-      () => adapter.getSnapshot(),
+      () => this.requireLatestSnapshot(),
       { bubbles: gameBubbles },
     );
+    if (e2eState) {
+      Object.defineProperty(e2eState, 'activeSceneKeys', {
+        enumerable: true,
+        get: () => this.game.scene.getScenes(true).map((scene) => scene.sys.settings.key),
+      });
+    }
   }
 
   async initialize(storedSessionId?: string): Promise<RuntimeSnapshot> {
@@ -50,6 +65,7 @@ class ProductionGameRuntime implements GameUiRuntime {
         ? await this.loadOrReplaceMissingSession(storedSessionId)
         : await this.createSessionSnapshot();
       this.sessionId = session.session.id;
+      if (window.__CAT_HOUSE_E2E__) window.__CAT_HOUSE_E2E__.sessionId = this.sessionId;
       await this.worldReady;
       return { sessionId: session.session.id, messages: session.messages };
     } catch (error) {
@@ -87,7 +103,11 @@ class ProductionGameRuntime implements GameUiRuntime {
   destroy(): void {
     this.removeWorldReadyListener?.();
     this.removeWorldReadyListener = undefined;
+    this.removeWorldSnapshotListener?.();
+    this.removeWorldSnapshotListener = undefined;
     this.bridge.cancel();
+    for (const remove of this.removeE2EListeners.splice(0)) remove();
+    if (window.__CAT_HOUSE_E2E__) delete window.__CAT_HOUSE_E2E__;
     this.game.destroy(true);
   }
 
@@ -103,5 +123,35 @@ class ProductionGameRuntime implements GameUiRuntime {
   private async createSessionSnapshot(): Promise<SessionResponse> {
     const created = await this.bridge.createSession();
     return { session: created.session, world: null, messages: [] };
+  }
+
+  private requireLatestSnapshot(): WorldSnapshot {
+    if (!this.latestSnapshot) throw new Error('World snapshot is unavailable');
+    return this.latestSnapshot;
+  }
+
+  private installE2ERecorder(): NonNullable<Window['__CAT_HOUSE_E2E__']> {
+    const state: NonNullable<Window['__CAT_HOUSE_E2E__']> = {
+      statuses: [],
+      phases: [],
+      bubbles: [],
+      actions: [],
+      snapshots: [],
+      activeSceneKeys: [],
+    };
+    window.__CAT_HOUSE_E2E__ = state;
+    this.removeE2EListeners.push(
+      this.events.on('connection-status', ({ status }) => state.statuses.push(status)),
+      this.events.on('bubble-changed', ({ kind, text }) => state.bubbles.push({
+        kind,
+        ...(text === undefined ? {} : { text }),
+      })),
+      this.events.on('action-started', ({ action }) => state.actions.push({ phase: 'started', actionId: action.id })),
+      this.events.on('action-completed', ({ result }) => state.actions.push({ phase: 'completed', actionId: result.actionId })),
+      this.events.on('action-failed', ({ result }) => state.actions.push({ phase: 'failed', actionId: result.actionId })),
+      this.events.on('world-ready', (snapshot) => state.snapshots.push(snapshot)),
+      this.events.on('world-snapshot', (snapshot) => state.snapshots.push(snapshot)),
+    );
+    return state;
   }
 }

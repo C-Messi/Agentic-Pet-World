@@ -579,12 +579,17 @@ describe('FakeProvider', () => {
     });
   });
 
-  it('maps arcade phrases to a coming-soon response without a play action', async () => {
+  it('maps arcade phrases to the registered coming-soon open interaction', async () => {
     const output = await new FakeProvider().complete(
       providerRequest('Can we play the arcade?'),
     );
 
-    expect(output).toMatchObject({ actions: [] });
+    expect(output).toMatchObject({
+      actions: [
+        expect.objectContaining({ type: 'move_to', targetId: 'arcade' }),
+        expect.objectContaining({ type: 'interact', targetId: 'arcade', interaction: 'open' }),
+      ],
+    });
     expect(JSON.stringify(output)).toContain('coming soon');
   });
 

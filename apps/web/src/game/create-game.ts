@@ -18,6 +18,7 @@ export function createGame(parent: string | HTMLElement): Phaser.Game {
     render: {
       antialias: false,
       pixelArt: true,
+      preserveDrawingBuffer: import.meta.env.DEV,
       roundPixels: true,
     },
     scale: {

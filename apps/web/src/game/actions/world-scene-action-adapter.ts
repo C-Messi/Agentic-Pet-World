@@ -4,7 +4,11 @@ import type { WorldScene } from '../scenes/world-scene';
 import { ActionExecutionError, type ActionWorldPort } from './action-runner';
 
 export class WorldSceneActionAdapter implements ActionWorldPort {
-  constructor(private readonly scene: WorldScene) {}
+  constructor(private readonly sceneSource: WorldScene | (() => WorldScene)) {}
+
+  private get scene(): WorldScene {
+    return typeof this.sceneSource === 'function' ? this.sceneSource() : this.sceneSource;
+  }
 
   hasTarget(targetId: WorldObjectId): boolean {
     return this.scene.hasActionTarget(targetId);
