@@ -1,0 +1,211 @@
+import { z } from 'zod';
+
+const ID_MAX_LENGTH = 128;
+const ACTION_ID_MAX_LENGTH = 64;
+const SHORT_TEXT_MAX_LENGTH = 280;
+const LONG_TEXT_MAX_LENGTH = 1_000;
+
+const IdentifierSchema = z
+  .string()
+  .min(1)
+  .max(ID_MAX_LENGTH)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+
+const ActionIdSchema = IdentifierSchema.max(ACTION_ID_MAX_LENGTH);
+const TimestampSchema = z.string().datetime({ offset: true });
+
+export const WorldObjectIdSchema = z.enum([
+  'bed',
+  'sofa',
+  'window',
+  'food-bowl',
+  'bookshelf',
+  'toy-basket',
+  'arcade',
+]);
+export type WorldObjectId = z.infer<typeof WorldObjectIdSchema>;
+
+export const EmotionSchema = z.enum([
+  'neutral',
+  'happy',
+  'curious',
+  'confused',
+  'sleepy',
+]);
+export type Emotion = z.infer<typeof EmotionSchema>;
+
+export const InteractionSchema = z.enum(['inspect', 'rest', 'eat', 'play', 'open']);
+export type Interaction = z.infer<typeof InteractionSchema>;
+
+export const PositionSchema = z
+  .object({
+    x: z.number().finite().min(-10_000).max(10_000),
+    y: z.number().finite().min(-10_000).max(10_000),
+  })
+  .strict();
+export type Position = z.infer<typeof PositionSchema>;
+
+export const WorldObjectStateSchema = z
+  .object({
+    id: WorldObjectIdSchema,
+    position: PositionSchema,
+    available: z.boolean(),
+    interactions: z.array(InteractionSchema).max(5),
+  })
+  .strict();
+export type WorldObjectState = z.infer<typeof WorldObjectStateSchema>;
+
+export const CatStateSchema = z
+  .object({
+    position: PositionSchema,
+    emotion: EmotionSchema,
+    currentTargetId: WorldObjectIdSchema.optional(),
+  })
+  .strict();
+export type CatState = z.infer<typeof CatStateSchema>;
+
+export const WorldSnapshotSchema = z
+  .object({
+    cat: CatStateSchema,
+    objects: z.array(WorldObjectStateSchema).max(7),
+  })
+  .strict()
+  .superRefine(({ objects }, context) => {
+    const objectIds = new Set<WorldObjectId>();
+
+    for (const [index, object] of objects.entries()) {
+      if (objectIds.has(object.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate world object ID: ${object.id}`,
+          path: ['objects', index, 'id'],
+        });
+      }
+      objectIds.add(object.id);
+    }
+  });
+export type WorldSnapshot = z.infer<typeof WorldSnapshotSchema>;
+
+const MoveToActionSchema = z
+  .object({
+    id: ActionIdSchema,
+    type: z.literal('move_to'),
+    targetId: WorldObjectIdSchema,
+    timeoutMs: z.number().int().min(250).max(60_000),
+  })
+  .strict();
+
+const InteractActionSchema = z
+  .object({
+    id: ActionIdSchema,
+    type: z.literal('interact'),
+    targetId: WorldObjectIdSchema,
+    interaction: InteractionSchema,
+  })
+  .strict();
+
+const EmoteActionSchema = z
+  .object({
+    id: ActionIdSchema,
+    type: z.literal('emote'),
+    emotion: EmotionSchema,
+    durationMs: z.number().int().min(100).max(30_000),
+  })
+  .strict();
+
+const WaitActionSchema = z
+  .object({
+    id: ActionIdSchema,
+    type: z.literal('wait'),
+    durationMs: z.number().int().min(100).max(30_000),
+  })
+  .strict();
+
+const SpeakActionSchema = z
+  .object({
+    id: ActionIdSchema,
+    type: z.literal('speak'),
+    text: z.string().trim().min(1).max(SHORT_TEXT_MAX_LENGTH),
+  })
+  .strict();
+
+export const AgentActionSchema = z.discriminatedUnion('type', [
+  MoveToActionSchema,
+  InteractActionSchema,
+  EmoteActionSchema,
+  WaitActionSchema,
+  SpeakActionSchema,
+]);
+export type AgentAction = z.infer<typeof AgentActionSchema>;
+
+export const ActionResultSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    type: z.enum(['move_to', 'interact', 'emote', 'wait', 'speak']),
+    status: z.enum(['succeeded', 'failed', 'cancelled', 'timed_out']),
+    message: z.string().trim().min(1).max(500).optional(),
+    errorCode: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Z][A-Z0-9_]*$/)
+      .optional(),
+    completedAt: TimestampSchema,
+  })
+  .strict();
+export type ActionResult = z.infer<typeof ActionResultSchema>;
+
+export const AgentTurnRequestSchema = z
+  .object({
+    sessionId: IdentifierSchema,
+    playerMessage: z.string().trim().min(1).max(LONG_TEXT_MAX_LENGTH),
+    world: WorldSnapshotSchema,
+    currentAction: AgentActionSchema.optional(),
+    recentActionResults: z.array(ActionResultSchema).max(12),
+  })
+  .strict();
+export type AgentTurnRequest = z.infer<typeof AgentTurnRequestSchema>;
+
+export const MemoryCandidateSchema = z
+  .object({
+    content: z.string().trim().min(1).max(500),
+    importance: z.number().finite().min(0).max(1),
+    reason: z.string().trim().min(1).max(240).optional(),
+  })
+  .strict();
+export type MemoryCandidate = z.infer<typeof MemoryCandidateSchema>;
+
+export const AgentDecisionSchema = z
+  .object({
+    speech: z.string().trim().min(1).max(SHORT_TEXT_MAX_LENGTH),
+    thought: z.string().trim().min(1).max(240).optional(),
+    emotion: EmotionSchema,
+    actions: z.array(AgentActionSchema).max(4),
+    memoryCandidates: z.array(MemoryCandidateSchema).max(3).optional(),
+  })
+  .strict();
+export type AgentDecision = z.infer<typeof AgentDecisionSchema>;
+
+export const MessageRecordSchema = z
+  .object({
+    id: IdentifierSchema,
+    sessionId: IdentifierSchema,
+    role: z.enum(['player', 'agent', 'system']),
+    content: z.string().trim().min(1).max(4_000),
+    createdAt: TimestampSchema,
+  })
+  .strict();
+export type MessageRecord = z.infer<typeof MessageRecordSchema>;
+
+export const MemoryRecordSchema = z
+  .object({
+    id: IdentifierSchema,
+    sessionId: IdentifierSchema,
+    content: z.string().trim().min(1).max(1_000),
+    importance: z.number().finite().min(0).max(1),
+    sourceMessageId: IdentifierSchema.optional(),
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict();
+export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
