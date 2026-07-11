@@ -1,5 +1,6 @@
 import type { StorageDatabase } from './database.js';
 import { initialMigrationSql } from './migrations/001-initial.js';
+import { actionDeliveryIdentityMigrationSql } from './migrations/002-action-delivery-identity.js';
 
 interface Migration {
   version: number;
@@ -12,6 +13,11 @@ const migrations: readonly Migration[] = [
     version: 1,
     name: 'initial',
     sql: initialMigrationSql,
+  },
+  {
+    version: 2,
+    name: 'action-delivery-identity',
+    sql: actionDeliveryIdentityMigrationSql,
   },
 ];
 

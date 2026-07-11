@@ -62,28 +62,15 @@ CREATE INDEX events_session_created_idx
 CREATE TABLE action_runs (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  turn_correlation_id TEXT NOT NULL,
   action_json TEXT NOT NULL CHECK (json_valid(action_json)),
   status TEXT NOT NULL CHECK (
     status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled', 'timed_out')
   ),
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
-  result_world_hash TEXT,
-  result_world_json TEXT CHECK (
-    result_world_json IS NULL OR json_valid(result_world_json)
-  ),
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (
-    (result_json IS NULL AND result_world_hash IS NULL AND result_world_json IS NULL)
-    OR
-    (result_json IS NOT NULL AND result_world_hash IS NOT NULL AND result_world_json IS NOT NULL)
-  )
+  updated_at TEXT NOT NULL
 );
 
 CREATE INDEX action_runs_session_status_idx
   ON action_runs(session_id, status, created_at, id);
-
-CREATE UNIQUE INDEX action_runs_turn_action_idx
-  ON action_runs(session_id, turn_correlation_id, json_extract(action_json, '$.id'));
 `;

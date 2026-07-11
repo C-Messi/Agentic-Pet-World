@@ -2,11 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import Database from 'better-sqlite3';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase, type StorageDatabase } from './database.js';
-import { loadMigrations } from './migrations.js';
+import { loadMigrations, runMigrations } from './migrations.js';
 import {
   ActionRunRepository,
   EventRepository,
@@ -67,17 +68,156 @@ describe('SQLite storage', () => {
         name: 'initial',
         sql: expect.stringContaining('CREATE TABLE sessions'),
       }),
+      expect.objectContaining({
+        version: 2,
+        name: 'action-delivery-identity',
+        sql: expect.stringContaining('ALTER TABLE action_runs RENAME'),
+      }),
     ]);
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([{ version: 1 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }]);
 
     database.close();
     database = openDatabase(databasePath);
 
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([{ version: 1 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }]);
+  });
+
+  it('upgrades a populated v1 action_runs table without losing data', () => {
+    const legacyPath = join(directory, 'legacy-v1.sqlite');
+    const legacyDatabase = new Database(legacyPath);
+    try {
+      legacyDatabase.pragma('foreign_keys = ON');
+      const migrations = loadMigrations();
+      const v1 = migrations[0];
+      const v2 = migrations[1];
+      if (v1 === undefined || v2 === undefined) {
+        throw new Error('Expected action delivery migrations v1 and v2');
+      }
+      runMigrations(legacyDatabase, [v1]);
+      legacyDatabase
+        .prepare('INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)')
+        .run('session-legacy', timestamp, timestamp);
+      const pendingAction = {
+        id: 'pending-action',
+        type: 'wait',
+        durationMs: 500,
+      };
+      const completedAction = {
+        id: 'completed-action',
+        type: 'move_to',
+        targetId: 'window',
+        timeoutMs: 5_000,
+      };
+      const completedResult = {
+        actionId: 'completed-action',
+        type: 'move_to',
+        status: 'succeeded',
+        completedAt: laterTimestamp,
+      };
+      const insertLegacyRun = legacyDatabase.prepare(
+        `INSERT INTO action_runs (
+           id, session_id, action_json, status, result_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insertLegacyRun.run(
+        'run-pending',
+        'session-legacy',
+        JSON.stringify(pendingAction),
+        'pending',
+        null,
+        timestamp,
+        timestamp,
+      );
+      insertLegacyRun.run(
+        'run-completed',
+        'session-legacy',
+        JSON.stringify(completedAction),
+        'succeeded',
+        JSON.stringify(completedResult),
+        timestamp,
+        laterTimestamp,
+      );
+
+      runMigrations(legacyDatabase, [v2]);
+
+      expect(
+        legacyDatabase.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
+      ).toEqual([{ version: 1 }, { version: 2 }]);
+      expect(
+        legacyDatabase.prepare('PRAGMA table_info(action_runs)').all()
+          .map((column) => (column as { name: string }).name),
+      ).toEqual(expect.arrayContaining([
+        'turn_correlation_id',
+        'result_world_hash',
+        'result_world_json',
+      ]));
+      expect(
+        legacyDatabase.prepare('PRAGMA index_list(action_runs)').all()
+          .map((index) => (index as { name: string }).name),
+      ).toEqual(expect.arrayContaining([
+        'action_runs_session_status_idx',
+        'action_runs_turn_action_idx',
+      ]));
+
+      const actionRuns = new ActionRunRepository(legacyDatabase);
+      expect(actionRuns.get('run-pending')).toEqual({
+        id: 'run-pending',
+        sessionId: 'session-legacy',
+        turnCorrelationId: 'legacy-0000000000000001',
+        action: pendingAction,
+        status: 'pending',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      expect(actionRuns.get('run-completed')).toEqual({
+        id: 'run-completed',
+        sessionId: 'session-legacy',
+        turnCorrelationId: 'legacy-0000000000000002',
+        action: completedAction,
+        status: 'succeeded',
+        result: completedResult,
+        resultWorld: {
+          cat: { position: { x: 0, y: 0 }, emotion: 'idle' },
+          objects: [],
+        },
+        resultWorldHash: '5c4f0f7b3d50292828cbe3cbee4e929cc73b77c6aed113b3a4eb7997175b2e71',
+        createdAt: timestamp,
+        updatedAt: laterTimestamp,
+      });
+      const pendingResult = {
+        actionId: 'pending-action',
+        type: 'wait' as const,
+        status: 'succeeded' as const,
+        completedAt: laterTimestamp,
+      };
+      actionRuns.complete(
+        'run-pending',
+        pendingResult,
+        world,
+        worldSnapshotHash(world),
+        laterTimestamp,
+      );
+      expect(actionRuns.get('run-pending')).toEqual(expect.objectContaining({
+        turnCorrelationId: 'legacy-0000000000000001',
+        status: 'succeeded',
+        result: pendingResult,
+        resultWorld: world,
+      }));
+
+      runMigrations(legacyDatabase);
+      expect(
+        legacyDatabase.prepare('SELECT COUNT(*) AS count FROM action_runs').get(),
+      ).toEqual({ count: 2 });
+      expect(
+        legacyDatabase.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      legacyDatabase.close();
+    }
   });
 
   it('persists complete durable session state across close and reopen', () => {
