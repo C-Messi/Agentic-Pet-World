@@ -36,6 +36,7 @@ const memories: MemoryRecord[] = [
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   localStorage.clear();
 });
 
@@ -136,6 +137,75 @@ describe('natural language game interface', () => {
     expect(subscribe).toHaveBeenCalledOnce();
     view.unmount();
     expect(runtime.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('keeps commands disabled after initialization failure and retries successfully', async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.initialize)
+      .mockRejectedValueOnce(new TypeError('Server unavailable'))
+      .mockResolvedValueOnce({ sessionId: 'session-retry', messages: [] });
+    render(<App runtimeFactory={() => runtime} />);
+
+    expect(await screen.findByRole('button', { name: 'Retry connection' })).toBeVisible();
+    expect(screen.getByLabelText('Tell the cat what to do')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry connection' }));
+    await screen.findByText('Ready');
+    expect(runtime.initialize).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText('Tell the cat what to do')).not.toBeDisabled();
+  });
+
+  it('continues with in-memory session state when localStorage throws', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError'); });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError'); });
+    const runtime = createRuntime();
+    const view = render(<App runtimeFactory={() => runtime} />);
+
+    await screen.findByText('Ready');
+    expect(runtime.initialize).toHaveBeenCalledWith(undefined);
+    expect(screen.getByLabelText('Tell the cat what to do')).not.toBeDisabled();
+    view.unmount();
+    expect(runtime.destroy).toHaveBeenCalledOnce();
+    getItem.mockRestore();
+    setItem.mockRestore();
+  });
+
+  it('traps focus, makes background inert, and restores focus on close', async () => {
+    const runtime = createRuntime();
+    render(<App runtimeFactory={() => runtime} />);
+    await screen.findByText('Ready');
+    const opener = screen.getByRole('button', { name: 'Open settings' });
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog');
+    const close = screen.getByRole('button', { name: 'Close settings' });
+    const sound = screen.getByRole('checkbox');
+    const background = screen.getByTestId('app-content');
+
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+    expect(dialog).toBeVisible();
+    expect(background).toHaveAttribute('inert');
+    sound.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(close).toHaveFocus();
+    opener.focus();
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(background).not.toHaveAttribute('aria-hidden');
+  });
+
+  it('renders drawer fetch errors and retries without an unhandled rejection', async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.loadMemories)
+      .mockRejectedValueOnce(new TypeError('Memory service offline'))
+      .mockResolvedValueOnce(memories);
+    render(<App runtimeFactory={() => runtime} />);
+    await screen.findByText('Ready');
+    fireEvent.click(screen.getByRole('button', { name: 'Open memories' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Memory service offline');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry memories' }));
+    expect(await screen.findByText('The player likes sunny windows.')).toBeVisible();
+    expect(runtime.loadMemories).toHaveBeenCalledTimes(2);
   });
 });
 

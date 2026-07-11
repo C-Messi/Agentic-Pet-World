@@ -15,6 +15,7 @@ import {
   type GridPoint,
 } from '../world/object-registry';
 import { WorldRuntimeState } from './world-runtime-state';
+import { layoutBubble, positionBubble, type BubbleLayout } from './bubble-layout';
 
 const DISPLAY_SCALE = 2;
 const DISPLAY_TILE_SIZE = ROOM_GRID.tileSize * DISPLAY_SCALE;
@@ -48,6 +49,8 @@ export class WorldScene extends Phaser.Scene {
   private bubbleBackground: Phaser.GameObjects.Graphics | undefined;
   private bubbleText: Phaser.GameObjects.Text | undefined;
   private removeBubbleListener: (() => void) | undefined;
+  private bubbleLayout: BubbleLayout | undefined;
+  private bubbleOwnerId: string | undefined;
   private readonly navigation = new NavigationSystem({
     width: ROOM_GRID.width,
     height: ROOM_GRID.height,
@@ -380,6 +383,8 @@ export class WorldScene extends Phaser.Scene {
     this.bubble = undefined;
     this.bubbleBackground = undefined;
     this.bubbleText = undefined;
+    this.bubbleLayout = undefined;
+    this.bubbleOwnerId = undefined;
   }
 
   private createBubble(): void {
@@ -391,7 +396,7 @@ export class WorldScene extends Phaser.Scene {
       lineSpacing: 2,
       wordWrap: { width: 196, useAdvancedWrap: true },
       align: 'center',
-    }).setOrigin(0, 0.5);
+    }).setOrigin(0.5);
     this.bubble = this.add.container(0, 0, [this.bubbleBackground, this.bubbleText])
       .setDepth(20_000)
       .setVisible(false);
@@ -400,34 +405,40 @@ export class WorldScene extends Phaser.Scene {
   private readonly handleBubbleChanged = ({
     kind,
     text,
+    ownerId,
   }: {
     kind: 'speech' | 'thought';
     text?: string;
+    ownerId?: string;
   }): void => {
     if (!this.bubble || !this.bubbleBackground || !this.bubbleText) return;
     if (!text) {
+      if (ownerId && this.bubbleOwnerId && ownerId !== this.bubbleOwnerId) return;
       this.bubble.setVisible(false);
+      this.bubbleOwnerId = undefined;
+      this.bubbleLayout = undefined;
       return;
     }
+    this.bubbleOwnerId = ownerId;
+    const layout = layoutBubble(text);
+    this.bubbleLayout = layout;
     const fill = kind === 'thought' ? 0xdce8df : 0xfff4d6;
     const border = kind === 'thought' ? 0x72947e : 0x8e665a;
     this.bubbleBackground.clear();
     this.bubbleBackground.fillStyle(fill, 0.97);
     this.bubbleBackground.lineStyle(3, border, 1);
-    this.bubbleBackground.fillRoundedRect(-110, -78, 220, 64, 8);
-    this.bubbleBackground.strokeRoundedRect(-110, -78, 220, 64, 8);
+    this.bubbleBackground.fillRoundedRect(-layout.width / 2, -layout.height - 14, layout.width, layout.height, 8);
+    this.bubbleBackground.strokeRoundedRect(-layout.width / 2, -layout.height - 14, layout.width, layout.height, 8);
     this.bubbleBackground.fillTriangle(-12, -14, 12, -14, 0, 0);
-    this.bubbleText.setText(text);
+    this.bubbleText.setPosition(0, -14 - layout.height / 2).setText(layout.text);
     this.bubble.setVisible(true);
     this.positionBubble();
   };
 
   private positionBubble(): void {
-    if (!this.bubble?.visible || !this.cat) return;
-    this.bubble.setPosition(
-      Phaser.Math.Clamp(this.cat.x, 116, 652),
-      Phaser.Math.Clamp(this.cat.y - 42, 82, 500),
-    );
+    if (!this.bubble?.visible || !this.cat || !this.bubbleLayout) return;
+    const position = positionBubble(this.cat, this.bubbleLayout, { width: 768, height: 512 });
+    this.bubble.setPosition(position.x, position.y);
   }
 
   private resolveMovementCompletion(): void {

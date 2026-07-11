@@ -39,27 +39,33 @@ class FakeWorld implements ActionWorldPort {
   }
 
   async moveTo(targetId: WorldObjectId, _signal: AbortSignal): Promise<void> {
+    void _signal;
     this.calls.push(`move_to:${targetId}`);
     if (this.failure) throw this.failure;
     if (this.pendingMove) await new Promise<void>((resolve) => (this.pendingMove = resolve));
   }
 
   async interact(targetId: WorldObjectId, interaction: Interaction, _signal: AbortSignal): Promise<void> {
+    void _signal;
     this.calls.push(`interact:${targetId}:${interaction}`);
     if (this.failure) throw this.failure;
   }
 
   async emote(emotion: Emotion, _durationMs: number, _signal: AbortSignal): Promise<void> {
+    void _durationMs;
+    void _signal;
     this.calls.push(`emote:${emotion}`);
     if (this.failure) throw this.failure;
   }
 
   async wait(durationMs: number, _signal: AbortSignal): Promise<void> {
+    void _signal;
     this.calls.push(`wait:${durationMs}`);
     if (this.failure) throw this.failure;
   }
 
   async speak(text: string, _signal: AbortSignal): Promise<void> {
+    void _signal;
     this.calls.push(`speak:${text}`);
     if (this.failure) throw this.failure;
   }

@@ -37,6 +37,15 @@ button {
   background: #302526;
 }
 
+.app-content {
+  position: absolute;
+  inset: 0;
+}
+
+.app-content[aria-hidden="true"] {
+  pointer-events: none;
+}
+
 .game-surface {
   position: absolute;
   inset: 0;
@@ -117,6 +126,26 @@ button {
   flex: 0 0 auto;
   gap: 6px;
   pointer-events: auto;
+}
+
+.retry-button,
+.panel-retry-button {
+  min-block-size: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: #2d2528;
+  background: #f0c96d;
+  border: 1px solid #fff0bd;
+  border-radius: 8px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.retry-button svg {
+  inline-size: 18px;
+  block-size: 18px;
 }
 
 .icon-button {
@@ -287,6 +316,11 @@ button {
 .panel-state,
 .settings-note {
   color: #cbb9ad;
+  line-height: 1.45;
+}
+
+.panel-error {
+  color: #ffe7dc;
   line-height: 1.45;
 }
 

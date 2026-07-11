@@ -24,6 +24,7 @@ export function Drawer({ title, open, onClose, returnFocusRef, children }: Drawe
   useEffect(() => {
     if (!open) return undefined;
     const drawer = drawerRef.current;
+    const returnFocus = returnFocusRef.current;
     const focusables = () => Array.from(
       drawer?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
     );
@@ -39,7 +40,10 @@ export function Drawer({ title, open, onClose, returnFocusRef, children }: Drawe
       const first = items[0];
       const last = items.at(-1);
       if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
+      if (!drawer?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -47,10 +51,16 @@ export function Drawer({ title, open, onClose, returnFocusRef, children }: Drawe
         first.focus();
       }
     };
+    const containFocus = (event: FocusEvent) => {
+      if (drawer?.contains(event.target as Node)) return;
+      focusables()[0]?.focus();
+    };
     document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('focusin', containFocus);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      returnFocusRef.current?.focus();
+      document.removeEventListener('focusin', containFocus);
+      returnFocus?.focus();
     };
   }, [onClose, open, returnFocusRef]);
 

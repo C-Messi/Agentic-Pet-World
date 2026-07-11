@@ -139,6 +139,60 @@ describe('AgentApiClient', () => {
 });
 
 describe('AgentBridge', () => {
+  it('shows maximum speech then thought and clears them on bounded timers', async () => {
+    vi.useFakeTimers();
+    const maxDecision: AgentDecision = {
+      speech: 's'.repeat(280),
+      thought: 't'.repeat(240),
+      emotion: 'curious',
+      actions: [],
+    };
+    const api = {
+      sendTurn: vi.fn(async () => ({ decision: maxDecision, degraded: false, correlationId: 'turn-bubbles' })),
+      postActionResult: vi.fn(async () => undefined),
+    };
+    const runner = { run: vi.fn(async () => []), cancel: vi.fn(), currentAction: undefined } as unknown as ActionRunner;
+    const events = new GameEventBus();
+    const bubbles: Array<{ kind: string; text?: string; ownerId?: string }> = [];
+    events.on('bubble-changed', (bubble) => bubbles.push(bubble));
+    const bridge = new AgentBridge(api, runner, events, () => world, { bubbleDurationMs: () => 100 });
+    bridge.replaceSession('session-1');
+
+    await bridge.sendPlayerMessage('Show both.');
+    expect(bubbles.at(-1)).toMatchObject({ kind: 'speech', text: maxDecision.speech, ownerId: 'turn-bubbles' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(bubbles.at(-1)).toMatchObject({ kind: 'thought', text: maxDecision.thought, ownerId: 'turn-bubbles' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(bubbles.at(-1)).toEqual({ kind: 'thought', ownerId: 'turn-bubbles' });
+    vi.useRealTimers();
+  });
+
+  it('clears owned bubbles and timers when a session is replaced', async () => {
+    vi.useFakeTimers();
+    const bubbleDecision = { ...decision, thought: 'Old thought.' };
+    const api = {
+      sendTurn: vi.fn(async () => ({ decision: bubbleDecision, degraded: false, correlationId: 'turn-old' })),
+      postActionResult: vi.fn(async () => undefined),
+    };
+    const runner = { run: vi.fn(async () => []), cancel: vi.fn(), currentAction: undefined } as unknown as ActionRunner;
+    const events = new GameEventBus();
+    const bubbles: Array<{ kind: string; text?: string; ownerId?: string }> = [];
+    events.on('bubble-changed', (bubble) => bubbles.push(bubble));
+    const bridge = new AgentBridge(api, runner, events, () => world, { bubbleDurationMs: () => 100 });
+    bridge.replaceSession('session-old');
+    await bridge.sendPlayerMessage('Old.');
+
+    bridge.replaceSession('session-new');
+    const countAfterReplacement = bubbles.length;
+    expect(bubbles.slice(-2)).toEqual([
+      { kind: 'speech', ownerId: 'turn-old' },
+      { kind: 'thought', ownerId: 'turn-old' },
+    ]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(bubbles).toHaveLength(countAfterReplacement);
+    vi.useRealTimers();
+  });
+
   it('ignores a stale turn response from an adapter that does not honor abort', async () => {
     const oldTurn = deferred<{
       decision: AgentDecision;
@@ -556,6 +610,7 @@ describe('AgentBridge', () => {
   });
 
   it('preserves the session and returns a local safe fallback after a network error', async () => {
+    vi.useFakeTimers();
     const api = {
       sendTurn: vi.fn(async () => { throw new TypeError('Network failed'); }),
       postActionResult: vi.fn(async () => undefined),
@@ -570,7 +625,7 @@ describe('AgentBridge', () => {
     const bubbles: string[] = [];
     events.on('connection-status', ({ status }) => statuses.push(status));
     events.on('bubble-changed', ({ text }) => { if (text) bubbles.push(text); });
-    const bridge = new AgentBridge(api, runner, events, () => world);
+    const bridge = new AgentBridge(api, runner, events, () => world, { bubbleDurationMs: () => 100 });
     bridge.replaceSession('session-1');
 
     const outcome = await bridge.sendPlayerMessage('Hello.');
@@ -579,8 +634,11 @@ describe('AgentBridge', () => {
     expect(statuses.at(-1)).toBe('offline');
     expect(outcome).toMatchObject({ source: 'local', degraded: true, fallbackReason: 'network_error' });
     expect(outcome.decision.actions).toEqual([]);
+    expect(bubbles).toEqual([outcome.decision.speech]);
+    await vi.advanceTimersByTimeAsync(100);
     expect(bubbles).toEqual([outcome.decision.speech, outcome.decision.thought]);
     expect(runner.run).toHaveBeenCalledTimes(1);
     expect(api.sendTurn).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

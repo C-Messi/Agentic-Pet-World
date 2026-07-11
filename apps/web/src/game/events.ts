@@ -18,7 +18,7 @@ export interface GameEventMap {
   'world-ready': WorldSnapshot;
   'world-snapshot': WorldSnapshot;
   'agent-busy': { busy: boolean };
-  'bubble-changed': { kind: 'speech' | 'thought'; text?: string };
+  'bubble-changed': { kind: 'speech' | 'thought'; text?: string; ownerId?: string };
   'action-started': { turnCorrelationId: string; action: AgentAction };
   'action-completed': CorrelatedResultPayload;
   'action-failed': CorrelatedResultPayload;
