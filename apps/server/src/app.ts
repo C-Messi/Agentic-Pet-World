@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   ActionResultsRequestSchema,
   ActionResultsResponseSchema,
@@ -50,7 +52,7 @@ export interface ApiStore {
     correlationId: string,
     createdAt: string,
   ): void;
-  completeActionRun(sessionId: string, result: ActionResult, updatedAt: string): void;
+  completeActionRun(sessionId: string, result: ActionResult, updatedAt: string): boolean;
   createActionResultsEvent(event: {
     id: string;
     sessionId: string;
@@ -61,7 +63,10 @@ export interface ApiStore {
 }
 
 export class ActionResultDomainError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    public readonly kind: 'conflict' | 'not_found',
+    message: string,
+  ) {
     super(message);
     this.name = 'ActionResultDomainError';
   }
@@ -90,7 +95,13 @@ export interface BuildAppDependencies {
   readonly idFactory: (
     prefix: 'session' | 'request' | 'event' | 'action-run',
   ) => string;
-  readonly rateLimit?: { readonly max: number; readonly windowMs: number };
+  readonly rateLimit?: {
+    readonly max: number;
+    readonly windowMs: number;
+    readonly maxEntries?: number;
+  };
+  readonly nowMs?: () => number;
+  readonly bodyLimitBytes?: number;
   readonly requestAbortSignal?: (
     request: FastifyRequest,
     reply: FastifyReply,
@@ -98,9 +109,12 @@ export interface BuildAppDependencies {
 }
 
 interface AbortEventSource {
-  once(event: 'aborted' | 'close', listener: () => void): unknown;
-  removeListener?(event: 'aborted' | 'close', listener: () => void): unknown;
+  once(event: 'aborted' | 'close' | 'finish', listener: () => void): unknown;
+  removeListener?(event: 'aborted' | 'close' | 'finish', listener: () => void): unknown;
   readonly aborted?: boolean;
+  readonly closed?: boolean;
+  readonly destroyed?: boolean;
+  readonly socket?: { readonly destroyed?: boolean };
   readonly writableEnded?: boolean;
 }
 
@@ -109,32 +123,56 @@ export function createRequestAbortSignal(
   response?: AbortEventSource,
 ): AbortSignal {
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  const cleanup = () => {
+    request.removeListener?.('aborted', abort);
+    response?.removeListener?.('close', close);
+    response?.removeListener?.('finish', finish);
+  };
+  const abort = () => {
+    cleanup();
+    controller.abort();
+  };
   const close = () => {
     if (response?.writableEnded !== true) {
-      controller.abort();
+      abort();
+      return;
     }
+    cleanup();
   };
-  if (request.aborted === true) {
+  const finish = () => cleanup();
+  if (
+    request.aborted === true
+    || request.socket?.destroyed === true
+    || response?.closed === true
+    || response?.destroyed === true
+    || response?.socket?.destroyed === true
+    || response?.writableEnded === true
+  ) {
     controller.abort();
     return controller.signal;
   }
   request.once('aborted', abort);
   response?.once('close', close);
-  controller.signal.addEventListener('abort', () => {
-    request.removeListener?.('aborted', abort);
-    response?.removeListener?.('close', close);
-  }, { once: true });
+  response?.once('finish', finish);
   return controller.signal;
 }
 
 export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
-  const rateLimit = dependencies.rateLimit ?? { max: 8, windowMs: 60_000 };
+  const rateLimit = dependencies.rateLimit ?? {
+    max: 8,
+    windowMs: 60_000,
+    maxEntries: 1_000,
+  };
   validateRateLimit(rateLimit);
-  const limiter = new FixedWindowRateLimiter(rateLimit.max, rateLimit.windowMs);
+  const limiter = new FixedWindowRateLimiter(
+    rateLimit.max,
+    rateLimit.windowMs,
+    rateLimit.maxEntries,
+  );
   const activeTurns = new Set<string>();
   const app = Fastify({
     logger: false,
+    bodyLimit: dependencies.bodyLimitBytes ?? 1_048_576,
     genReqId: (request) => {
       const supplied = request.headers['x-correlation-id'];
       const parsed = CorrelationIdSchema.safeParse(
@@ -165,13 +203,23 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
       });
       return;
     }
-    const statusCode = 'statusCode' in error && error.statusCode === 400 ? 400 : 500;
+    const clientError = mapFastifyClientError(error);
+    if (clientError !== undefined) {
+      sendError(
+        reply,
+        request.id,
+        clientError.statusCode,
+        clientError.code,
+        clientError.message,
+      );
+      return;
+    }
     sendError(
       reply,
       request.id,
-      statusCode,
-      statusCode === 400 ? 'INVALID_JSON' : 'INTERNAL_ERROR',
-      statusCode === 400 ? 'Request JSON is invalid' : 'The request could not be completed',
+      500,
+      'INTERNAL_ERROR',
+      'The request could not be completed',
     );
   });
 
@@ -219,7 +267,7 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
     if (activeTurns.has(sessionId)) {
       throw new ApiError(409, 'TURN_IN_PROGRESS', 'A turn is already running for this session');
     }
-    const limit = limiter.consume(sessionId, Date.now());
+    const limit = limiter.consume(sessionId, (dependencies.nowMs ?? Date.now)());
     if (!limit.allowed) {
       reply.header('retry-after', Math.ceil(limit.retryAfterMs / 1_000));
       throw new ApiError(
@@ -276,13 +324,21 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
     const updatedAt = dependencies.clock();
     try {
       dependencies.store.runInTransaction(() => {
+        let hasNewResult = false;
         for (const result of body.results) {
-          dependencies.store.completeActionRun(sessionId, result, updatedAt);
+          hasNewResult = dependencies.store.completeActionRun(
+            sessionId,
+            result,
+            updatedAt,
+          ) || hasNewResult;
+        }
+        if (!hasNewResult) {
+          return;
         }
         dependencies.store.upsertWorld(sessionId, body.world, updatedAt);
         dependencies.store.touchSession(sessionId, updatedAt);
         dependencies.store.createActionResultsEvent({
-          id: dependencies.idFactory('event'),
+          id: actionResultsEventId(sessionId, body.results),
           sessionId,
           type: 'actions.results.recorded',
           payload: { results: body.results, world: body.world },
@@ -292,6 +348,13 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
     } catch (error) {
       if (!(error instanceof ActionResultDomainError)) {
         throw error;
+      }
+      if (error.kind === 'conflict') {
+        throw new ApiError(
+          409,
+          'ACTION_RESULT_CONFLICT',
+          'Action result conflicts with an existing result',
+        );
       }
       throw new ApiError(
         422,
@@ -387,19 +450,34 @@ class ApiError extends Error {
   }
 }
 
-class FixedWindowRateLimiter {
+export class FixedWindowRateLimiter {
   private readonly windows = new Map<string, { count: number; startedAt: number }>();
+  private nextSweepAt = 0;
 
   public constructor(
     private readonly max: number,
     private readonly windowMs: number,
-  ) {}
+    private readonly maxEntries = 1_000,
+  ) {
+    validateRateLimit({ max, windowMs, maxEntries });
+  }
+
+  public get size(): number {
+    return this.windows.size;
+  }
 
   public consume(key: string, now: number):
     | { allowed: true }
     | { allowed: false; retryAfterMs: number } {
+    if (this.nextSweepAt === 0) {
+      this.nextSweepAt = now + this.windowMs;
+    } else if (now >= this.nextSweepAt) {
+      this.sweepExpired(now);
+      this.nextSweepAt = now + this.windowMs;
+    }
     const current = this.windows.get(key);
     if (current === undefined || now - current.startedAt >= this.windowMs) {
+      this.ensureCapacity(now);
       this.windows.set(key, { count: 1, startedAt: now });
       return { allowed: true };
     }
@@ -412,13 +490,106 @@ class FixedWindowRateLimiter {
     current.count += 1;
     return { allowed: true };
   }
+
+  private ensureCapacity(now: number): void {
+    if (this.windows.size < this.maxEntries) {
+      return;
+    }
+    this.sweepExpired(now);
+    while (this.windows.size >= this.maxEntries) {
+      const oldestKey = this.windows.keys().next().value as string | undefined;
+      if (oldestKey === undefined) {
+        return;
+      }
+      this.windows.delete(oldestKey);
+    }
+  }
+
+  private sweepExpired(now: number): void {
+    for (const [key, window] of this.windows) {
+      if (now - window.startedAt >= this.windowMs) {
+        this.windows.delete(key);
+      }
+    }
+  }
 }
 
-function validateRateLimit(rateLimit: { max: number; windowMs: number }): void {
+function validateRateLimit(rateLimit: {
+  max: number;
+  windowMs: number;
+  maxEntries?: number;
+}): void {
   if (!Number.isInteger(rateLimit.max) || rateLimit.max <= 0) {
     throw new Error('Rate limit max must be a positive integer');
   }
   if (!Number.isInteger(rateLimit.windowMs) || rateLimit.windowMs <= 0) {
     throw new Error('Rate limit windowMs must be a positive integer');
   }
+  if (
+    rateLimit.maxEntries !== undefined
+    && (!Number.isInteger(rateLimit.maxEntries) || rateLimit.maxEntries <= 0)
+  ) {
+    throw new Error('Rate limit maxEntries must be a positive integer');
+  }
+}
+
+function actionResultsEventId(
+  sessionId: string,
+  results: readonly ActionResult[],
+): string {
+  const identity = results.map(canonicalActionResult);
+  return `event-actions-${createHash('sha256')
+    .update(JSON.stringify({ sessionId, results: identity }))
+    .digest('hex')}`;
+}
+
+function canonicalActionResult(result: ActionResult): Record<string, unknown> {
+  return {
+    actionId: result.actionId,
+    type: result.type,
+    status: result.status,
+    completedAt: new Date(result.completedAt).toISOString(),
+    ...(result.message === undefined ? {} : { message: result.message }),
+    ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+  };
+}
+
+function mapFastifyClientError(error: unknown): {
+  statusCode: number;
+  code: string;
+  message: string;
+} | undefined {
+  if (typeof error !== 'object' || error === null || !('statusCode' in error)) {
+    return undefined;
+  }
+  const statusCode = error.statusCode;
+  if (
+    typeof statusCode !== 'number'
+    || !Number.isInteger(statusCode)
+    || statusCode < 400
+    || statusCode > 499
+  ) {
+    return undefined;
+  }
+  const fastifyCode = 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined;
+  if (statusCode === 413 || fastifyCode === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+    return { statusCode: 413, code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large' };
+  }
+  if (statusCode === 415 || fastifyCode === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+    return {
+      statusCode: 415,
+      code: 'UNSUPPORTED_MEDIA_TYPE',
+      message: 'Request media type is unsupported',
+    };
+  }
+  if (fastifyCode === 'FST_ERR_CTP_INVALID_JSON_BODY' || error instanceof SyntaxError) {
+    return { statusCode: 400, code: 'INVALID_JSON', message: 'Request JSON is invalid' };
+  }
+  return {
+    statusCode,
+    code: statusCode === 400 ? 'BAD_REQUEST' : 'REQUEST_REJECTED',
+    message: 'Request was rejected',
+  };
 }

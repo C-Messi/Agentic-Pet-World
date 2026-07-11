@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ActionResultDomainError,
+  FixedWindowRateLimiter,
   buildApp,
   createRequestAbortSignal,
   type ApiStore,
@@ -54,6 +55,8 @@ class MemoryApiStore implements ApiStore {
     result?: ActionResult;
   }> = [];
   public readonly events: unknown[] = [];
+  public worldUpdates = 0;
+  public sessionTouches = 0;
 
   public runInTransaction<T>(operation: () => T): T {
     return operation();
@@ -73,6 +76,7 @@ class MemoryApiStore implements ApiStore {
       throw new Error(`Session not found: ${id}`);
     }
     this.sessions.set(id, { ...session, updatedAt });
+    this.sessionTouches += 1;
   }
 
   public getWorld(sessionId: string) {
@@ -82,6 +86,7 @@ class MemoryApiStore implements ApiStore {
 
   public upsertWorld(sessionId: string, snapshot: WorldSnapshot, updatedAt: string): void {
     this.worlds.set(sessionId, { snapshot, updatedAt });
+    this.worldUpdates += 1;
   }
 
   public listMessages(sessionId: string): readonly MessageRecord[] {
@@ -105,15 +110,25 @@ class MemoryApiStore implements ApiStore {
     sessionId: string,
     result: ActionResult,
     _updatedAt: string,
-  ): void {
+  ): boolean {
     const run = this.actionRuns.find(
       (candidate) => candidate.sessionId === sessionId
         && candidate.action.id === result.actionId,
     );
     if (run === undefined || run.action.type !== result.type) {
-      throw new ActionResultDomainError(`Action run not found: ${result.actionId}`);
+      throw new ActionResultDomainError('not_found', `Action run not found: ${result.actionId}`);
+    }
+    if (run.result !== undefined) {
+      if (JSON.stringify(run.result) === JSON.stringify(result)) {
+        return false;
+      }
+      throw new ActionResultDomainError(
+        'conflict',
+        `Action result conflicts: ${result.actionId}`,
+      );
     }
     run.result = result;
+    return true;
   }
 
   public createActionResultsEvent(event: unknown): void {
@@ -377,6 +392,90 @@ describe('Fastify BFF', () => {
     expect(invalid.statusCode).toBe(422);
   });
 
+  it('accepts lost-response action retries idempotently without duplicate updates or events', async () => {
+    const { app, store } = createHarness();
+    const sessionId = await createSession(app);
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/turns`,
+      payload: turnPayload(),
+    });
+    const payload = {
+      world,
+      results: [{
+        actionId: 'move-window',
+        type: 'move_to' as const,
+        status: 'succeeded' as const,
+        completedAt: now,
+      }],
+    };
+    const beforeResults = {
+      worldUpdates: store.worldUpdates,
+      sessionTouches: store.sessionTouches,
+    };
+    const [first, retry] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/action-results`,
+        payload,
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/action-results`,
+        payload,
+      }),
+    ]);
+    await app.close();
+
+    expect(first.statusCode).toBe(202);
+    expect(retry.statusCode).toBe(202);
+    expect(first.json()).toEqual({ accepted: 1 });
+    expect(retry.json()).toEqual({ accepted: 1 });
+    expect(store.events).toHaveLength(1);
+    expect(store.worldUpdates - beforeResults.worldUpdates).toBe(1);
+    expect(store.sessionTouches - beforeResults.sessionTouches).toBe(1);
+  });
+
+  it('rejects a conflicting second result for a completed action', async () => {
+    const { app } = createHarness();
+    const sessionId = await createSession(app);
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/turns`,
+      payload: turnPayload(),
+    });
+    const succeeded = {
+      world,
+      results: [{
+        actionId: 'move-window',
+        type: 'move_to' as const,
+        status: 'succeeded' as const,
+        completedAt: now,
+      }],
+    };
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: succeeded,
+    });
+    const conflict = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: {
+        world,
+        results: [{
+          ...succeeded.results[0],
+          status: 'failed',
+          errorCode: 'PATH_BLOCKED',
+        }],
+      },
+    });
+    await app.close();
+
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error.code).toBe('ACTION_RESULT_CONFLICT');
+  });
+
   it('maps action domain mismatches to 422 and unexpected persistence faults to 500', async () => {
     const domain = createHarness();
     const domainSessionId = await createSession(domain.app);
@@ -433,6 +532,36 @@ describe('Fastify BFF', () => {
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();
   });
 
+  it('preserves standardized Fastify 400, 413, and 415 responses', async () => {
+    const { app } = createHarness({ bodyLimitBytes: 64 });
+    const malformed = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { 'content-type': 'application/json' },
+      payload: '{',
+    });
+    const tooLarge = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ padding: 'x'.repeat(128) }),
+    });
+    const unsupported = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { 'content-type': 'application/xml' },
+      payload: '<session />',
+    });
+    await app.close();
+
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json().error.code).toBe('INVALID_JSON');
+    expect(tooLarge.statusCode).toBe(413);
+    expect(tooLarge.json().error.code).toBe('PAYLOAD_TOO_LARGE');
+    expect(unsupported.statusCode).toBe(415);
+    expect(unsupported.json().error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+  });
+
   it('propagates caller disconnect cancellation to AgentService', async () => {
     const raw = new EventEmitter();
     const signal = createRequestAbortSignal(raw);
@@ -459,5 +588,41 @@ describe('Fastify BFF', () => {
     });
     await app.close();
     expect(receivedSignal).toBe(injectedSignal);
+  });
+
+  it('aborts immediately for closed transports and removes bridge listeners on finish', () => {
+    const closedResponse = Object.assign(new EventEmitter(), {
+      destroyed: true,
+      writableEnded: false,
+    });
+    expect(createRequestAbortSignal(new EventEmitter(), closedResponse).aborted).toBe(true);
+
+    const request = new EventEmitter();
+    const response = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writableEnded: false,
+    });
+    const signal = createRequestAbortSignal(request, response);
+    expect(request.listenerCount('aborted')).toBe(1);
+    expect(response.listenerCount('close')).toBe(1);
+    expect(response.listenerCount('finish')).toBe(1);
+    response.emit('finish');
+    expect(signal.aborted).toBe(false);
+    expect(request.listenerCount('aborted')).toBe(0);
+    expect(response.listenerCount('close')).toBe(0);
+    expect(response.listenerCount('finish')).toBe(0);
+  });
+});
+
+describe('FixedWindowRateLimiter', () => {
+  it('sweeps expired keys and caps live entry growth', () => {
+    const limiter = new FixedWindowRateLimiter(1, 1_000, 32);
+    for (let index = 0; index < 100; index += 1) {
+      limiter.consume(`session-${index}`, 0);
+    }
+    expect(limiter.size).toBe(32);
+
+    limiter.consume('session-fresh', 1_001);
+    expect(limiter.size).toBe(1);
   });
 });

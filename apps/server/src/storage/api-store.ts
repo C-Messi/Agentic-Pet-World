@@ -87,10 +87,10 @@ export class StorageApiStore implements ApiStore {
   public createActionRun(
     sessionId: string,
     action: AgentAction,
-    correlationId: string,
+    _correlationId: string,
     createdAt: string,
   ): void {
-    const id = actionRunId(sessionId, correlationId, action.id);
+    const id = actionRunId(sessionId, action.id);
     if (this.actionRuns.get(id) !== undefined) {
       return;
     }
@@ -108,13 +108,12 @@ export class StorageApiStore implements ApiStore {
     sessionId: string,
     result: ActionResult,
     updatedAt: string,
-  ): void {
+  ): boolean {
     const row = this.database
       .prepare(
         `SELECT id
          FROM action_runs
          WHERE session_id = ?
-           AND status IN ('pending', 'running')
            AND json_extract(action_json, '$.id') = ?
          ORDER BY created_at DESC, id DESC
          LIMIT 1`,
@@ -122,7 +121,27 @@ export class StorageApiStore implements ApiStore {
       .get(sessionId, result.actionId) as { id: string } | undefined;
     if (row === undefined) {
       throw new ActionResultDomainError(
+        'not_found',
         `Active action run not found: ${result.actionId}`,
+      );
+    }
+    const run = this.actionRuns.get(row.id);
+    if (run === undefined) {
+      throw new Error(`Action run disappeared: ${row.id}`);
+    }
+    if (run.result !== undefined) {
+      if (actionResultsEqual(run.result, result)) {
+        return false;
+      }
+      throw new ActionResultDomainError(
+        'conflict',
+        `Action result conflicts with completed run: ${result.actionId}`,
+      );
+    }
+    if (run.action.type !== result.type) {
+      throw new ActionResultDomainError(
+        'conflict',
+        `Action result type conflicts with active run: ${result.actionId}`,
       );
     }
     try {
@@ -130,11 +149,13 @@ export class StorageApiStore implements ApiStore {
     } catch (error) {
       if (error instanceof z.ZodError) {
         throw new ActionResultDomainError(
+          'conflict',
           `Action result does not match active run: ${result.actionId}`,
         );
       }
       throw error;
     }
+    return true;
   }
 
   public createActionResultsEvent(event: {
@@ -154,12 +175,22 @@ export class StorageApiStore implements ApiStore {
   }
 }
 
+function actionResultsEqual(left: ActionResult, right: ActionResult): boolean {
+  return (
+    left.actionId === right.actionId
+    && left.type === right.type
+    && left.status === right.status
+    && left.message === right.message
+    && left.errorCode === right.errorCode
+    && Date.parse(left.completedAt) === Date.parse(right.completedAt)
+  );
+}
+
 function actionRunId(
   sessionId: string,
-  correlationId: string,
   actionId: string,
 ): string {
   return `run-${createHash('sha256')
-    .update(`${sessionId}\0${correlationId}\0${actionId}`)
+    .update(`${sessionId}\0${actionId}`)
     .digest('hex')}`;
 }

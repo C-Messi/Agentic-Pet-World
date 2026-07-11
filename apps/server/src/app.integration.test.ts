@@ -90,6 +90,19 @@ describe('Fastify BFF production integration', () => {
       url: `/api/sessions/${sessionId}/action-results`,
       payload: { world, results: [result] },
     });
+    const retry = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: { world, results: [result] },
+    });
+    const conflict = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/action-results`,
+      payload: {
+        world,
+        results: [{ ...result, status: 'failed', errorCode: 'PATH_BLOCKED' }],
+      },
+    });
     const session = await fixture.app.inject({
       method: 'GET',
       url: `/api/sessions/${sessionId}`,
@@ -104,6 +117,8 @@ describe('Fastify BFF production integration', () => {
     expect(turn.statusCode).toBe(200);
     expect(turn.json().decision.actions[0].id).toBe('fake-window-move');
     expect(action.statusCode).toBe(202);
+    expect(retry.statusCode).toBe(202);
+    expect(conflict.statusCode).toBe(409);
     expect(session.json().messages.map((message: { role: string }) => message.role)).toEqual([
       'player',
       'agent',
@@ -117,6 +132,13 @@ describe('Fastify BFF production integration', () => {
         `SELECT status FROM action_runs WHERE session_id = ?`,
       ).get(sessionId),
     ).toEqual({ status: 'succeeded' });
+    expect(
+      fixture.database.prepare(
+        `SELECT COUNT(*) AS count
+         FROM events
+         WHERE session_id = ? AND type = 'actions.results.recorded'`,
+      ).get(sessionId),
+    ).toEqual({ count: 1 });
   });
 
   it('bridges request abort events to a provider-observed cancellation signal', async () => {
