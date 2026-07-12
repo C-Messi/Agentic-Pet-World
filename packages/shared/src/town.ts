@@ -446,8 +446,9 @@ function validateEvents(events: readonly z.infer<typeof TownEventSchema>[], cont
   addDuplicateIssues(events.map(({ sequence }) => String(sequence)), context);
   const startedActivityIds = new Set<string>();
   events.forEach((townEvent, index) => {
-    if (townEvent.type !== 'activity.started') return;
-    const activityId = townEvent.payload.activity.id;
+    const startedActivity = activityStartedByEvent(townEvent);
+    if (!startedActivity) return;
+    const activityId = startedActivity.id;
     if (startedActivityIds.has(activityId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: [index, 'payload', 'activity', 'id'] });
     startedActivityIds.add(activityId);
   });
@@ -461,40 +462,80 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const completedOccupiedCells = new Set<string>();
   const startedActivityIds = new Set<string>();
   const previouslyReferencedActivityIds = new Set<string>();
-  const startedActivityChains = new Map<string, {
+  const activityLifecycles = new Map<string, {
     activity: z.infer<typeof TownActivityInstanceSchema>;
     eventIndex: number;
+    closed: boolean;
   }>();
   value.events.forEach((townEvent, index) => {
     if (townEvent.sessionId !== value.projection.sessionId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event session does not match projection', path: ['events', index, 'sessionId'] });
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
     if (townEvent.sequence > value.projection.lastEventSequence) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event sequence is ahead of the projection', path: ['events', index, 'sequence'] });
     townEvent.participantIds.forEach((id) => { if (!residents.has(id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown resident', path: ['events', index, 'participantIds'] }); });
+    const startedActivity = activityStartedByEvent(townEvent);
+    if (startedActivity) {
+      if (startedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: ['events', index, 'payload'] });
+      if (previouslyReferencedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity was referenced before its start event', path: ['events', index, 'payload'] });
+      if (!startedActivityIds.has(startedActivity.id)) {
+        activityLifecycles.set(startedActivity.id, { activity: startedActivity, eventIndex: index, closed: false });
+      }
+      startedActivityIds.add(startedActivity.id);
+    }
     if (townEvent.type === 'residents.played') {
-      const startedChain = startedActivityChains.get(townEvent.payload.activityInstanceId);
-      const activity = startedChain?.activity ?? activities.get(townEvent.payload.activityInstanceId);
+      const lifecycle = activityLifecycles.get(townEvent.payload.activityInstanceId);
+      if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
+      const activity = lifecycle?.activity ?? activities.get(townEvent.payload.activityInstanceId);
       if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
       else {
-        const activityParticipants = new Set(activity.participantIds);
-        const participantsMatch = townEvent.participantIds.length === activityParticipants.size
-          && townEvent.participantIds.every((id) => activityParticipants.has(id));
-        if (!participantsMatch) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event participants must exactly match the activity', path: ['events', index, 'participantIds'] });
-        if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event zone must match the activity', path: ['events', index, 'zoneId'] });
-        if (startedChain) activity.version += 1;
+        validateExactActivityTransition(activity, townEvent, index, context);
+        if (lifecycle && activity.activityId !== 'social-play') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played lifecycle requires social-play', path: ['events', index, 'payload', 'activityInstanceId'] });
+        if (lifecycle) activity.version += 1;
       }
       previouslyReferencedActivityIds.add(townEvent.payload.activityInstanceId);
     }
-    if (townEvent.type === 'activity.started') {
-      const { activity } = townEvent.payload;
-      if (startedActivityIds.has(activity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: ['events', index, 'payload', 'activity', 'id'] });
-      if (previouslyReferencedActivityIds.has(activity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity was referenced before its start event', path: ['events', index, 'payload', 'activity', 'id'] });
-      if (!startedActivityIds.has(activity.id)) {
-        startedActivityChains.set(activity.id, {
-          activity: { ...activity, participantIds: [...activity.participantIds] },
-          eventIndex: index,
-        });
+    if (townEvent.type === 'fortune.revealed' || townEvent.type === 'fortune.interpreted') {
+      const lifecycle = activityLifecycles.get(townEvent.payload.fortuneId);
+      if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'fortuneId'] });
+      const activity = lifecycle?.activity ?? activities.get(townEvent.payload.fortuneId);
+      if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'fortuneId'] });
+      else {
+        validateExactActivityTransition(activity, townEvent, index, context);
+        if (lifecycle) {
+          if (activity.activityId !== 'fortune-draw') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'fortuneId'] });
+          activity.version += 1;
+          const state = jsonObjectValue(activity.state);
+          activity.state = townEvent.type === 'fortune.revealed'
+            ? { ...state, status: 'revealed', reading: townEvent.payload.reading }
+            : { ...state, status: 'interpreted', interpretation: townEvent.payload.interpretation };
+        }
       }
-      startedActivityIds.add(activity.id);
+      previouslyReferencedActivityIds.add(townEvent.payload.fortuneId);
+    }
+    if (townEvent.type === 'stall.visited') {
+      const lifecycle = activityLifecycles.get(townEvent.payload.stallId);
+      if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'stallId'] });
+      const activity = lifecycle?.activity ?? activities.get(townEvent.payload.stallId);
+      if (activity) {
+        if (!activity.participantIds.every((id) => townEvent.participantIds.includes(id))) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stall visit must include activity participants', path: ['events', index, 'participantIds'] });
+        if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stall visit zone must match the activity', path: ['events', index, 'zoneId'] });
+        if (lifecycle) {
+          if (activity.activityId !== 'showcase-stall') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stall lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'stallId'] });
+          activity.version += 1;
+          activity.state = { ...jsonObjectValue(activity.state), lastVisitorResidentId: townEvent.payload.visitorResidentId };
+        }
+      }
+      previouslyReferencedActivityIds.add(townEvent.payload.stallId);
+    }
+    if (townEvent.type === 'stall.closed') {
+      const lifecycle = activityLifecycles.get(townEvent.payload.stallId);
+      if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity is already closed', path: ['events', index, 'payload', 'stallId'] });
+      const activity = lifecycle?.activity ?? activities.get(townEvent.payload.stallId);
+      if (activity) validateExactActivityTransition(activity, townEvent, index, context);
+      if (lifecycle) {
+        if (lifecycle.activity.activityId !== 'showcase-stall') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stall lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'stallId'] });
+        lifecycle.closed = true;
+      }
+      previouslyReferencedActivityIds.add(townEvent.payload.stallId);
     }
     if (townEvent.type === 'build.completed') {
       const { modification } = townEvent.payload;
@@ -508,14 +549,86 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         if (completedOccupiedCells.has(key)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modifications overlap an occupied cell', path: ['events', index, 'payload', 'modification', 'occupiedCells', cellIndex] });
       });
       modification.occupiedCells.forEach(({ x, y }) => completedOccupiedCells.add(`${modification.plotId}:${x}:${y}`));
+      const lifecycle = activityLifecycles.get(modification.id);
+      if (lifecycle) {
+        if (lifecycle.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity is already closed', path: ['events', index, 'payload', 'modification', 'id'] });
+        validateExactActivityTransition(lifecycle.activity, townEvent, index, context);
+        const state = jsonObjectValue(lifecycle.activity.state);
+        if (lifecycle.activity.activityId !== `build:${modification.recipeId}`
+          || state.modificationId !== modification.id
+          || state.recipeId !== modification.recipeId
+          || state.plotId !== modification.plotId) {
+          context.addIssue({ code: z.ZodIssueCode.custom, message: 'Build completion does not match the started lifecycle', path: ['events', index, 'payload', 'modification'] });
+        }
+        lifecycle.closed = true;
+      }
+      previouslyReferencedActivityIds.add(modification.id);
     }
   });
-  startedActivityChains.forEach(({ activity, eventIndex }) => {
+  activityLifecycles.forEach(({ activity, eventIndex, closed }) => {
     const finalActivity = activities.get(activity.id);
-    if (!finalActivity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity is missing from the final projection', path: ['events', eventIndex, 'payload', 'activity', 'id'] });
-    else if (!activitiesEqual(activity, finalActivity)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Evolved started activity does not match the final projection', path: ['events', eventIndex, 'payload', 'activity'] });
+    if (closed && finalActivity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Closed activity remains in the final projection', path: ['events', eventIndex, 'payload'] });
+    if (!closed && !finalActivity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity is missing from the final projection', path: ['events', eventIndex, 'payload'] });
+    if (!closed && finalActivity && !activitiesEqual(activity, finalActivity)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Evolved started activity does not match the final projection', path: ['events', eventIndex, 'payload'] });
   });
   validateEventTransitionChain(value, context);
+}
+
+function activityStartedByEvent(
+  townEvent: z.infer<typeof TownEventSchema>,
+): z.infer<typeof TownActivityInstanceSchema> | undefined {
+  switch (townEvent.type) {
+    case 'activity.started':
+      return { ...townEvent.payload.activity, participantIds: [...townEvent.payload.activity.participantIds] };
+    case 'fortune.started':
+      return {
+        id: townEvent.payload.fortuneId,
+        activityId: 'fortune-draw',
+        zoneId: townEvent.zoneId ?? 'fortune-pavilion',
+        participantIds: [...townEvent.participantIds],
+        version: 1,
+        state: { status: 'started' },
+      };
+    case 'build.started':
+      return {
+        id: townEvent.payload.modificationId,
+        activityId: `build:${townEvent.payload.recipeId}`,
+        zoneId: townEvent.zoneId ?? 'build-plots',
+        participantIds: [...townEvent.participantIds],
+        version: 1,
+        state: {
+          status: 'started',
+          modificationId: townEvent.payload.modificationId,
+          recipeId: townEvent.payload.recipeId,
+          plotId: townEvent.payload.plotId,
+        },
+      };
+    case 'stall.opened':
+      return {
+        id: townEvent.payload.stallId,
+        activityId: 'showcase-stall',
+        zoneId: townEvent.zoneId ?? 'market',
+        participantIds: [...townEvent.participantIds],
+        version: 1,
+        state: { status: 'open', showcaseItemIds: [...townEvent.payload.showcaseItemIds] },
+      };
+    default:
+      return undefined;
+  }
+}
+
+function validateExactActivityTransition(
+  activity: z.infer<typeof TownActivityInstanceSchema>,
+  townEvent: z.infer<typeof TownEventSchema>,
+  eventIndex: number,
+  context: z.RefinementCtx,
+): void {
+  if (!sameIdentifierSet(townEvent.participantIds, activity.participantIds)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event participants must exactly match the activity', path: ['events', eventIndex, 'participantIds'] });
+  if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event zone must match the activity', path: ['events', eventIndex, 'zoneId'] });
+}
+
+function jsonObjectValue(state: TownJsonValue): Record<string, TownJsonValue> {
+  return state !== null && typeof state === 'object' && !Array.isArray(state) ? state : {};
 }
 
 function sameIdentifierSet(left: readonly string[], right: readonly string[]): boolean {

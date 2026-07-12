@@ -615,6 +615,257 @@ describe('public town responses', () => {
     })).toThrow();
   });
 
+  it('accepts generic showcase closure and rejects stale final activity state', () => {
+    const showcaseActivity = {
+      id: 'stall-generic-1',
+      activityId: 'showcase-stall',
+      zoneId: 'market',
+      participantIds: ['resident-1'],
+      version: 0,
+      state: { status: 'open', showcaseItemIds: ['item-1'] },
+    } as const;
+    const started = {
+      ...activityStartedEvent,
+      participantIds: ['resident-1'],
+      zoneId: 'market',
+      payload: { activity: showcaseActivity },
+    };
+    const closed = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      type: 'stall.closed',
+      zoneId: 'market',
+      payload: { stallId: showcaseActivity.id },
+    };
+    const finalProjection = {
+      ...validProjection,
+      version: 4,
+      lastEventSequence: 2,
+    };
+
+    expect(TownAdvanceResponseSchema.parse({
+      projection: finalProjection,
+      events: [started, closed],
+    }).events).toHaveLength(2);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...finalProjection,
+        residents: [{
+          ...resident,
+          zoneId: 'market',
+          availability: 'busy',
+          activityInstanceId: showcaseActivity.id,
+        }, npcResident],
+        activities: [showcaseActivity],
+      },
+      events: [started, closed],
+    })).toThrow();
+    const visitedAfterClose = {
+      ...event,
+      id: 'event-3',
+      sequence: 3,
+      baseVersion: 4,
+      type: 'stall.visited',
+      zoneId: 'market',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { stallId: showcaseActivity.id, visitorResidentId: 'resident-2' },
+    };
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...finalProjection, version: 5, lastEventSequence: 3 },
+      events: [started, closed, visitedAfterClose],
+    })).toThrow();
+  });
+
+  it('does not overconstrain a pre-event stall visited then closed in the batch', () => {
+    const visited = {
+      ...event,
+      type: 'stall.visited',
+      zoneId: 'market',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { stallId: 'preexisting-stall', visitorResidentId: 'resident-2' },
+    };
+    const closed = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      type: 'stall.closed',
+      zoneId: 'market',
+      payload: { stallId: 'preexisting-stall' },
+    };
+
+    expect(TownAdvanceResponseSchema.parse({
+      projection: { ...validProjection, version: 4, lastEventSequence: 2 },
+      events: [visited, closed],
+    }).events).toHaveLength(2);
+  });
+
+  it('evolves fortune start, reveal, and interpretation to the final projection', () => {
+    const fortuneStarted = {
+      ...event,
+      type: 'fortune.started',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { fortuneId: 'fortune-1' },
+    };
+    const fortuneRevealed = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      type: 'fortune.revealed',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { fortuneId: 'fortune-1', reading: 'Bright skies' },
+    };
+    const fortuneInterpreted = {
+      ...event,
+      id: 'event-3',
+      sequence: 3,
+      baseVersion: 4,
+      type: 'fortune.interpreted',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { fortuneId: 'fortune-1', interpretation: 'Try something new' },
+    };
+    const fortuneActivity = {
+      id: 'fortune-1',
+      activityId: 'fortune-draw',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      version: 3,
+      state: {
+        status: 'interpreted',
+        reading: 'Bright skies',
+        interpretation: 'Try something new',
+      },
+    } as const;
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      zoneId: 'fortune-pavilion',
+      availability: 'busy',
+      activityInstanceId: fortuneActivity.id,
+    }));
+    const finalProjection = {
+      ...validProjection,
+      version: 5,
+      lastEventSequence: 3,
+      residents: busyResidents,
+      activities: [fortuneActivity],
+    };
+    const events = [fortuneStarted, fortuneRevealed, fortuneInterpreted];
+
+    expect(TownAdvanceResponseSchema.parse({ projection: finalProjection, events }).events).toHaveLength(3);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...finalProjection,
+        activities: [{ ...fortuneActivity, version: 2 }],
+      },
+      events,
+    })).toThrow();
+  });
+
+  it('tracks build start through completion and rejects stale final build activity', () => {
+    const buildStarted = {
+      ...event,
+      type: 'build.started',
+      zoneId: 'build-plots',
+      payload: {
+        modificationId: completedModification.id,
+        recipeId: completedModification.recipeId,
+        plotId: completedModification.plotId,
+      },
+    };
+    const completed = {
+      ...buildCompletedEvent,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+    };
+    const finalProjection = {
+      ...validProjection,
+      version: 4,
+      lastEventSequence: 2,
+      modifications: [completedModification],
+    };
+
+    expect(TownAdvanceResponseSchema.parse({
+      projection: finalProjection,
+      events: [buildStarted, completed],
+    }).events).toHaveLength(2);
+    const buildActivity = {
+      id: completedModification.id,
+      activityId: `build:${completedModification.recipeId}`,
+      zoneId: 'build-plots',
+      participantIds: ['resident-1'],
+      version: 1,
+      state: {
+        status: 'started',
+        modificationId: completedModification.id,
+        recipeId: completedModification.recipeId,
+        plotId: completedModification.plotId,
+      },
+    } as const;
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...finalProjection,
+        residents: [{
+          ...resident,
+          zoneId: 'build-plots',
+          availability: 'busy',
+          activityInstanceId: buildActivity.id,
+        }, npcResident],
+        activities: [buildActivity],
+      },
+      events: [buildStarted, completed],
+    })).toThrow();
+  });
+
+  it('rejects specialized then generic starts claiming the same activity ID', () => {
+    const fortuneStarted = {
+      ...event,
+      type: 'fortune.started',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { fortuneId: 'fortune-duplicate' },
+    };
+    const activity = {
+      id: 'fortune-duplicate',
+      activityId: 'fortune-draw',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      version: 1,
+      state: { status: 'started' },
+    } as const;
+    const genericStarted = {
+      ...activityStartedEvent,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      zoneId: 'fortune-pavilion',
+      payload: { activity },
+    };
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      zoneId: 'fortune-pavilion',
+      availability: 'busy',
+      activityInstanceId: activity.id,
+    }));
+
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...validProjection,
+        version: 4,
+        lastEventSequence: 2,
+        residents: busyResidents,
+        activities: [activity],
+      },
+      events: [fortuneStarted, genericStarted],
+    })).toThrow();
+  });
+
   it('requires completed modifications to match the final projection canonically', () => {
     expect(
       TownAdvanceResponseSchema.parse({
