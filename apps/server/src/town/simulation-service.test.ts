@@ -660,4 +660,39 @@ describe('TownSimulationService event creation', () => {
       timestamp: '2026-07-13T09:00:00.000Z',
     });
   });
+
+  it('reduces a generated owner-only stall open followed by an external visit', () => {
+    const openEvent = service().createEvents(projection(), {
+      type: 'open-stall',
+      actorId: 'player',
+      stallId: 'stall-1',
+      showcaseItemIds: ['item-1'],
+    })[0]!;
+    const opened = reduceTownEvent(projection(), openEvent);
+    expect(opened.activities[0]?.participantIds).toEqual(['player']);
+
+    const visitEvent = TownEventSchema.parse({
+      id: 'external-visit-1',
+      sessionId: opened.sessionId,
+      sequence: opened.lastEventSequence + 1,
+      baseVersion: opened.version,
+      type: 'stall.visited',
+      zoneId: 'market',
+      participantIds: ['player', 'huihui'],
+      timestamp: '2026-07-13T09:01:00.000Z',
+      payload: { stallId: 'stall-1', visitorResidentId: 'huihui' },
+    });
+    const visited = reduceTownEvent(opened, visitEvent);
+
+    expect(visited.activities[0]?.participantIds).toEqual(['player']);
+    expect(visited.activities[0]?.state).toMatchObject({
+      lastVisitorResidentId: 'huihui',
+    });
+    expect(
+      visited.residents.find(({ residentId }) => residentId === 'huihui'),
+    ).toMatchObject({
+      availability: 'available',
+      zoneId: 'plaza',
+    });
+  });
 });

@@ -497,14 +497,14 @@ describe('reduceTownEvent', () => {
       event(
         'stall.opened',
         { stallId: 'stall-1', showcaseItemIds: ['item-1'] },
-        { participants: ['player', 'huihui'], zoneId: 'market' },
+        { participants: ['player'], zoneId: 'market' },
       ),
     );
     expect(opened.activities[0]).toEqual({
       id: 'stall-1',
       activityId: 'showcase-stall',
       zoneId: 'market',
-      participantIds: ['player', 'huihui'],
+      participantIds: ['player'],
       version: 1,
       state: { status: 'open', showcaseItemIds: ['item-1'] },
     });
@@ -525,13 +525,14 @@ describe('reduceTownEvent', () => {
     });
     expect(
       visited.residents.find(({ residentId }) => residentId === 'huihui'),
-    ).toMatchObject({ availability: 'busy', activityInstanceId: 'stall-1' });
+    ).toMatchObject({ availability: 'available', zoneId: 'plaza' });
+    expect(visited.activities[0]?.participantIds).toEqual(['player']);
 
     const closed = reduceTownEvent(visited, {
       ...event(
         'stall.closed',
         { stallId: 'stall-1' },
-        { participants: ['player', 'huihui'], zoneId: 'market' },
+        { participants: ['player'], zoneId: 'market' },
       ),
       baseVersion: 4,
       sequence: 7,
@@ -542,7 +543,7 @@ describe('reduceTownEvent', () => {
 
   it.each([
     ['cross-kind', 'fortune-draw', ['player', 'huihui'], 'market'],
-    ['wrong participants', 'showcase-stall', ['huihui'], 'market'],
+    ['missing owner', 'showcase-stall', ['huihui'], 'market'],
     ['wrong zone', 'showcase-stall', ['player', 'huihui'], 'garden'],
   ] as const)(
     'rejects a %s stall visit',
@@ -551,7 +552,7 @@ describe('reduceTownEvent', () => {
         id: 'stall-1',
         activityId,
         zoneId: 'market',
-        participantIds: ['player', 'huihui'],
+        participantIds: ['player'],
         version: 1,
         state: { status: 'open' },
       });
@@ -567,6 +568,57 @@ describe('reduceTownEvent', () => {
       ).toThrow(/activity kind|participants|zone/i);
     },
   );
+
+  it('rejects a stall visit from an unavailable visitor', () => {
+    const base = projection();
+    const input = TownProjectionSchema.parse({
+      ...base,
+      residents: base.residents.map((resident) => {
+        if (resident.residentId === 'player')
+          return {
+            ...resident,
+            zoneId: 'market',
+            availability: 'busy',
+            activityInstanceId: 'stall-1',
+          };
+        if (resident.residentId === 'huihui')
+          return {
+            ...resident,
+            availability: 'busy',
+            activityInstanceId: 'play-1',
+          };
+        return resident;
+      }),
+      activities: [
+        {
+          id: 'stall-1',
+          activityId: 'showcase-stall',
+          zoneId: 'market',
+          participantIds: ['player'],
+          version: 1,
+          state: { status: 'open' },
+        },
+        {
+          id: 'play-1',
+          activityId: 'social-play',
+          zoneId: 'plaza',
+          participantIds: ['huihui'],
+          version: 1,
+          state: {},
+        },
+      ],
+    });
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event(
+          'stall.visited',
+          { stallId: 'stall-1', visitorResidentId: 'huihui' },
+          { participants: ['player', 'huihui'], zoneId: 'market' },
+        ),
+      ),
+    ).toThrow(/visitor.*unavailable|visitor.*busy/i);
+  });
 
   it('starts and returns a player outing without touching other residents', () => {
     const started = reduceTownEvent(

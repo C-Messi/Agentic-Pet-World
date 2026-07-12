@@ -64,6 +64,35 @@ function assertActivityTransition(
   }
 }
 
+function assertStallVisit(
+  projection: TownProjection,
+  activity: TownActivityInstance,
+  event: Extract<TownEvent, { type: 'stall.visited' }>,
+): void {
+  if (activity.activityId !== 'showcase-stall') {
+    domainError(
+      `activity kind mismatch: expected showcase-stall, received ${activity.activityId}`,
+    );
+  }
+  if (event.zoneId === undefined || event.zoneId !== activity.zoneId) {
+    domainError('event zone does not match activity zone');
+  }
+  if (
+    !activity.participantIds.every((residentId) =>
+      event.participantIds.includes(residentId),
+    )
+  ) {
+    domainError('stall visit participants do not include the stall owner');
+  }
+  if (!event.participantIds.includes(event.payload.visitorResidentId)) {
+    domainError('stall visit participants do not include the visitor');
+  }
+  const visitor = requireResident(projection, event.payload.visitorResidentId);
+  if (visitor.availability !== 'available') {
+    domainError(`stall visitor is unavailable or busy: ${visitor.residentId}`);
+  }
+}
+
 function jsonObject(state: TownJsonValue): Record<string, TownJsonValue> {
   return state !== null && typeof state === 'object' && !Array.isArray(state)
     ? state
@@ -286,9 +315,8 @@ export function reduceTownEvent(
       break;
     }
     case 'stall.visited': {
-      requireResident(next, parsedEvent.payload.visitorResidentId);
       const activity = requireActivity(next, parsedEvent.payload.stallId);
-      assertActivityTransition(activity, parsedEvent, 'showcase-stall');
+      assertStallVisit(next, activity, parsedEvent);
       activity.version += 1;
       activity.state = {
         ...jsonObject(activity.state),
