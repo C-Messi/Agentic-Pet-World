@@ -1,4 +1,5 @@
 import {
+  TownAdvanceResponseSchema,
   TownEventSchema,
   TownIntentSchema,
   TownProjectionSchema,
@@ -10,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { reduceTownEvent } from './event-reducer.js';
 import {
   TownSimulationService,
+  TownSimulationError,
   townIntentWeight,
   type TownSimulationPorts,
 } from './simulation-service.js';
@@ -103,6 +105,49 @@ function ports(random = 0.5): TownSimulationPorts {
         ? `town-event-${++event}`
         : `activity-${++activity}`,
   };
+}
+
+function projectionWithExistingActivity(
+  id = 'activity-collision',
+  activityId = 'existing',
+): TownProjection {
+  const base = projection();
+  return TownProjectionSchema.parse({
+    ...base,
+    residents: base.residents.map((resident) =>
+      resident.residentId === 'reserved'
+        ? { ...resident, availability: 'busy', activityInstanceId: id }
+        : resident,
+    ),
+    activities: [
+      {
+        id,
+        activityId,
+        zoneId: 'plaza',
+        participantIds: ['reserved'],
+        version: 0,
+        state: {},
+      },
+    ],
+  });
+}
+
+function generatedActivityId(
+  events: readonly ReturnType<typeof TownEventSchema.parse>[],
+): string | undefined {
+  for (const generated of events) {
+    switch (generated.type) {
+      case 'activity.started':
+        return generated.payload.activity.id;
+      case 'fortune.started':
+        return generated.payload.fortuneId;
+      case 'build.started':
+        return generated.payload.modificationId;
+      default:
+        break;
+    }
+  }
+  return undefined;
 }
 
 function service(random = 0.5) {
@@ -237,6 +282,122 @@ describe('TownSimulationService candidates and selection', () => {
         townIntentWeight(town, lower),
       );
     }
+  });
+
+  it('uses relationship affinity in socialize weight', () => {
+    const relationship = {
+      residentIdA: 'huihui',
+      residentIdB: 'player',
+      affinity: 0.9,
+      sourceEventId: 'relationship-1',
+      sourceVersion: 0,
+    };
+    const positive = TownProjectionSchema.parse({
+      ...projection(),
+      relationships: [relationship],
+    });
+    const negative = TownProjectionSchema.parse({
+      ...projection(),
+      relationships: [{ ...relationship, affinity: -0.9 }],
+    });
+    const intent: TownIntent = {
+      type: 'socialize',
+      actorId: 'huihui',
+      targetResidentId: 'player',
+    };
+    expect(townIntentWeight(positive, intent)).toBeGreaterThan(
+      townIntentWeight(negative, intent),
+    );
+  });
+
+  it('removes cooldown candidates and filters activities at live capacity', () => {
+    const cooldown = new TownSimulationService(ports(), {
+      contextForResident: () => ({
+        cooldownIntentTypes: ['build'],
+        outingDurationMs: 0,
+      }),
+      recipes: ['stone-path'],
+      buildPlots: ['plot-1'],
+    });
+    expect(
+      cooldown
+        .candidates(projection(), 'huihui')
+        .some(({ type }) => type === 'build'),
+    ).toBe(false);
+
+    const fullTown = projectionWithExistingActivity('full-play', 'social-play');
+    const capacity = new TownSimulationService(ports(), {
+      activities: [{ id: 'social-play', zoneId: 'plaza', capacity: 1 }],
+    });
+    expect(capacity.candidates(fullTown, 'huihui')).not.toContainEqual(
+      expect.objectContaining({
+        type: 'start-activity',
+        activityId: 'social-play',
+      }),
+    );
+  });
+
+  it('unfinished goals and outing duration change deterministic selection', () => {
+    const baseOptions = {
+      accessibleZones: ['plaza', 'garden'] as const,
+      activities: [],
+      recipes: [],
+      buildPlots: [],
+    };
+    const withoutGoal = new TownSimulationService(ports(0.7), {
+      ...baseOptions,
+      contextForResident: () => ({
+        cooldownIntentTypes: [],
+        outingDurationMs: 0,
+      }),
+    });
+    const withGoal = new TownSimulationService(ports(0.7), {
+      ...baseOptions,
+      contextForResident: () => ({
+        cooldownIntentTypes: [],
+        unfinishedGoalType: 'visit-zone',
+        outingDurationMs: 0,
+      }),
+    });
+    expect(withoutGoal.select(projection(), 'huihui')?.type).not.toBe(
+      'visit-zone',
+    );
+    expect(withGoal.select(projection(), 'huihui')?.type).toBe('visit-zone');
+
+    const returnOptions = {
+      accessibleZones: ['plaza', 'gate'] as const,
+      activities: [],
+      recipes: [],
+      buildPlots: [],
+    };
+    const short = new TownSimulationService(ports(0.8), {
+      ...returnOptions,
+      contextForResident: () => ({
+        cooldownIntentTypes: [],
+        outingDurationMs: 0,
+      }),
+    });
+    const long = new TownSimulationService(ports(0.8), {
+      ...returnOptions,
+      contextForResident: () => ({
+        cooldownIntentTypes: [],
+        outingDurationMs: 604_800_000,
+      }),
+    });
+    expect(short.select(projection(), 'player')?.type).not.toBe('return-home');
+    expect(long.select(projection(), 'player')?.type).toBe('return-home');
+  });
+
+  it('evaluates resident context once during selection', () => {
+    let calls = 0;
+    const subject = new TownSimulationService(ports(), {
+      contextForResident: () => {
+        calls += 1;
+        return { cooldownIntentTypes: [], outingDurationMs: 0 };
+      },
+    });
+    subject.select(projection(), 'huihui');
+    expect(calls).toBe(1);
   });
 
   it('selects deterministically with injected clamped random values', () => {
@@ -427,6 +588,16 @@ describe('TownSimulationService validation', () => {
     ).toThrow();
   });
 
+  it('translates schema-invalid intents to a typed simulation error', () => {
+    expect(() =>
+      service().validateIntent(projection(), {
+        type: 'socialize',
+        actorId: 'huihui',
+        targetResidentId: 'huihui',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid-intent' }));
+  });
+
   it('rejects an actor included among invitees', () => {
     expect(() =>
       service().validateIntent(projection(), {
@@ -484,6 +655,21 @@ describe('TownSimulationService validation', () => {
         invitedResidentIds: ['reserved'],
       }),
     ).toThrow(/unavailable|busy/i);
+  });
+
+  it('rejects starting an activity whose live zone capacity is full', () => {
+    const fullTown = projectionWithExistingActivity('full-play', 'social-play');
+    const subject = new TownSimulationService(ports(), {
+      activities: [{ id: 'social-play', zoneId: 'plaza', capacity: 1 }],
+    });
+    expect(() =>
+      subject.validateIntent(fullTown, {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: [],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid-intent' }));
   });
 
   it('rejects an already-home player return', () => {
@@ -600,6 +786,178 @@ describe('TownSimulationService validation', () => {
   });
 });
 
+describe('TownSimulationService configuration boundaries', () => {
+  it.each([
+    ['non-array zones', { accessibleZones: 'plaza' }],
+    ['duplicate zones', { accessibleZones: ['plaza', 'plaza'] }],
+    ['non-array activities', { activities: 'social-play' }],
+    [
+      'too many activities',
+      {
+        activities: Array.from({ length: 17 }, (_, index) => ({
+          id: `activity-${index}`,
+          zoneId: 'plaza',
+          capacity: 1,
+        })),
+      },
+    ],
+    [
+      'duplicate activities',
+      {
+        activities: [
+          { id: 'same', zoneId: 'plaza', capacity: 1 },
+          { id: 'same', zoneId: 'garden', capacity: 1 },
+        ],
+      },
+    ],
+    [
+      'invalid activity ID',
+      { activities: [{ id: 'not valid', zoneId: 'plaza', capacity: 1 }] },
+    ],
+    [
+      'invalid activity enabled flag',
+      {
+        activities: [
+          { id: 'activity-1', zoneId: 'plaza', capacity: 1, enabled: 'yes' },
+        ],
+      },
+    ],
+    [
+      'extra activity fields',
+      {
+        activities: [
+          { id: 'activity-1', zoneId: 'plaza', capacity: 1, extra: true },
+        ],
+      },
+    ],
+    ['duplicate recipes', { recipes: ['stone-path', 'stone-path'] }],
+    [
+      'too many recipes',
+      { recipes: Array.from({ length: 33 }, (_, index) => `recipe-${index}`) },
+    ],
+    ['duplicate plots', { buildPlots: ['plot-1', 'plot-1'] }],
+    [
+      'too many plots',
+      { buildPlots: Array.from({ length: 33 }, (_, index) => `plot-${index}`) },
+    ],
+  ] as const)('rejects %s with a typed config error', (_label, options) => {
+    expect(() => new TownSimulationService(ports(), options as never)).toThrow(
+      expect.objectContaining({ code: 'invalid-config' }),
+    );
+  });
+
+  it('validates bounded unique public showcase callback results', () => {
+    const duplicate = new TownSimulationService(ports(), {
+      publicShowcaseItemIds: () => ['item-1', 'item-1'],
+    });
+    expect(() => duplicate.candidates(projection(), 'player')).toThrow(
+      expect.objectContaining({ code: 'invalid-config' }),
+    );
+    const oversized = new TownSimulationService(ports(), {
+      publicShowcaseItemIds: () =>
+        Array.from({ length: 13 }, (_, index) => `item-${index}`),
+    });
+    expect(() => oversized.candidates(projection(), 'player')).toThrow(
+      expect.objectContaining({ code: 'invalid-config' }),
+    );
+  });
+
+  it('passes deeply frozen projections to callbacks', () => {
+    const frozenChecks: boolean[] = [];
+    const subject = new TownSimulationService(ports(), {
+      recipes: ['stone-path'],
+      buildPlots: ['plot-1'],
+      isBuildPlotAvailable: (_plotId, town) => {
+        frozenChecks.push(
+          Object.isFrozen(town),
+          Object.isFrozen(town.residents),
+          Object.isFrozen(town.residents[0]?.position),
+        );
+        expect(() =>
+          (town.residents as TownProjection['residents']).push(
+            town
+              .residents[0]! as unknown as TownProjection['residents'][number],
+          ),
+        ).toThrow();
+        return true;
+      },
+      publicShowcaseItemIds: (_actorId, town) => {
+        frozenChecks.push(
+          Object.isFrozen(town),
+          Object.isFrozen(town.activities),
+        );
+        return ['item-1'];
+      },
+    });
+    subject.candidates(projection(), 'player');
+    expect(frozenChecks.every(Boolean)).toBe(true);
+  });
+
+  it('validates scoring context and passes it a frozen projection', () => {
+    let frozen = false;
+    const valid = new TownSimulationService(ports(), {
+      contextForResident: (_residentId, town) => {
+        frozen = Object.isFrozen(town) && Object.isFrozen(town.relationships);
+        return { cooldownIntentTypes: [], outingDurationMs: 1 };
+      },
+    });
+    valid.candidates(projection(), 'huihui');
+    expect(frozen).toBe(true);
+
+    for (const contextForResident of [
+      () => ({ cooldownIntentTypes: ['build', 'build'], outingDurationMs: 0 }),
+      () => ({ cooldownIntentTypes: [], outingDurationMs: -1 }),
+      () => ({
+        cooldownIntentTypes: [],
+        outingDurationMs: Number.POSITIVE_INFINITY,
+      }),
+      () => ({ cooldownIntentTypes: [], outingDurationMs: 0, extra: true }),
+    ]) {
+      const invalid = new TownSimulationService(ports(), {
+        contextForResident: contextForResident as never,
+      });
+      expect(() => invalid.candidates(projection(), 'huihui')).toThrow(
+        expect.objectContaining({ code: 'invalid-config' }),
+      );
+    }
+  });
+
+  it('captures and copies option values against later mutation', () => {
+    const zones = ['plaza', 'market'] as Array<'plaza' | 'market' | 'garden'>;
+    const recipes = ['stone-path'];
+    const plots = ['plot-1'];
+    const options = {
+      accessibleZones: zones,
+      recipes,
+      buildPlots: plots,
+      publicShowcaseItemIds: () => ['item-1'],
+    };
+    const subject = new TownSimulationService(ports(), options);
+    zones.push('garden');
+    recipes.push('flower-patch');
+    plots.push('plot-2');
+    options.publicShowcaseItemIds = () => ['item-2'];
+
+    expect(subject.candidates(projection(), 'player')).not.toContainEqual(
+      expect.objectContaining({ type: 'visit-zone', zoneId: 'garden' }),
+    );
+    expect(subject.candidates(projection(), 'player')).toContainEqual(
+      expect.objectContaining({
+        type: 'open-stall',
+        showcaseItemIds: ['item-1'],
+      }),
+    );
+    expect(() =>
+      subject.validateIntent(projection(), {
+        type: 'build',
+        actorId: 'player',
+        recipeId: 'flower-patch',
+        plotId: 'plot-2',
+      }),
+    ).toThrow();
+  });
+});
+
 describe('TownSimulationService event creation', () => {
   it.each<TownIntent>([
     { type: 'socialize', actorId: 'huihui', targetResidentId: 'player' },
@@ -630,7 +988,7 @@ describe('TownSimulationService event creation', () => {
     },
     { type: 'return-home', actorId: 'player' },
   ])(
-    'creates schema-valid, sequential, reducible events for $type',
+    'creates schema-valid reducible events with postconditions for $type',
     (intent) => {
       const events = service().createEvents(projection(), intent);
       expect(events.length).toBeGreaterThanOrEqual(1);
@@ -644,6 +1002,44 @@ describe('TownSimulationService event creation', () => {
         current = reduceTownEvent(current, generated);
       }
       expect(current.version).toBe(events.length);
+      switch (intent.type) {
+        case 'socialize':
+          expect(current.relationships).toEqual([]);
+          break;
+        case 'visit-zone':
+          expect(
+            current.residents.find(
+              ({ residentId }) => residentId === intent.actorId,
+            )?.zoneId,
+          ).toBe(intent.zoneId);
+          break;
+        case 'start-activity':
+          expect(
+            current.activities.some(
+              ({ activityId }) => activityId === intent.activityId,
+            ),
+          ).toBe(true);
+          break;
+        case 'build':
+          expect(
+            current.activities.some(
+              ({ activityId }) => activityId === `build:${intent.recipeId}`,
+            ),
+          ).toBe(true);
+          break;
+        case 'open-stall':
+          expect(
+            current.activities.some(({ id }) => id === intent.stallId),
+          ).toBe(true);
+          break;
+        case 'return-home':
+          expect(
+            current.residents.find(
+              ({ residentId }) => residentId === intent.actorId,
+            )?.zoneId,
+          ).toBe('gate');
+          break;
+      }
     },
   );
 
@@ -659,6 +1055,186 @@ describe('TownSimulationService event creation', () => {
       payload: { fortuneId: 'activity-1' },
       timestamp: '2026-07-13T09:00:00.000Z',
     });
+  });
+
+  it('creates an offset-correct move then activity-start chain for social play', () => {
+    const events = service().createEvents(projection(), {
+      type: 'start-activity',
+      actorId: 'huihui',
+      activityId: 'social-play',
+      invitedResidentIds: ['player'],
+    });
+    expect(
+      events.map(({ type, sequence, baseVersion }) => ({
+        type,
+        sequence,
+        baseVersion,
+      })),
+    ).toEqual([
+      { type: 'resident.moved', sequence: 1, baseVersion: 0 },
+      { type: 'activity.started', sequence: 2, baseVersion: 1 },
+    ]);
+
+    const final = events.reduce(
+      (current, generated) => reduceTownEvent(current, generated),
+      projection(),
+    );
+    expect(
+      TownAdvanceResponseSchema.parse({ projection: final, events }),
+    ).toBeDefined();
+    expect(final.activities).toEqual([
+      expect.objectContaining({
+        id: 'activity-1',
+        activityId: 'social-play',
+        zoneId: 'arcade-house',
+        participantIds: ['huihui', 'player'],
+        version: 0,
+        state: { schemaVersion: 'social-play.v1', phase: 'started' },
+      }),
+    ]);
+    expect(
+      final.residents.filter(({ residentId }) =>
+        ['huihui', 'player'].includes(residentId),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          availability: 'busy',
+          activityInstanceId: 'activity-1',
+          zoneId: 'arcade-house',
+        }),
+        expect.objectContaining({
+          availability: 'busy',
+          activityInstanceId: 'activity-1',
+          zoneId: 'arcade-house',
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    [
+      'fortune-draw',
+      {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'fortune-draw',
+        invitedResidentIds: [],
+      } as const,
+    ],
+    [
+      'social-play',
+      {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: [],
+      } as const,
+    ],
+    [
+      'build',
+      {
+        type: 'build',
+        actorId: 'huihui',
+        recipeId: 'stone-path',
+        plotId: 'plot-1',
+      } as const,
+    ],
+  ])('retries a colliding generated ID for %s', (_label, intent) => {
+    let activityCalls = 0;
+    const collisionPorts: TownSimulationPorts = {
+      random: () => 0,
+      now: () => '2026-07-13T09:00:00.000Z',
+      nextId: (prefix) =>
+        prefix === 'town-event'
+          ? `event-${activityCalls}`
+          : ++activityCalls === 1
+            ? 'activity-collision'
+            : 'activity-fresh',
+    };
+    const events = new TownSimulationService(collisionPorts, {
+      accessibleZones: [
+        'plaza',
+        'fortune-pavilion',
+        'arcade-house',
+        'build-plots',
+      ],
+      activities: [
+        { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 2 },
+        { id: 'social-play', zoneId: 'arcade-house', capacity: 2 },
+      ],
+      recipes: ['stone-path'],
+      buildPlots: ['plot-1'],
+    }).createEvents(
+      projectionWithExistingActivity(),
+      structuredClone(intent) as TownIntent,
+    );
+    expect(generatedActivityId(events)).toBe('activity-fresh');
+  });
+
+  it('rejects a caller stall ID collision and bounded generated-ID exhaustion', () => {
+    expect(() =>
+      service().createEvents(projectionWithExistingActivity('stall-1'), {
+        type: 'open-stall',
+        actorId: 'player',
+        stallId: 'stall-1',
+        showcaseItemIds: ['item-1'],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid-intent' }));
+
+    const exhausted = new TownSimulationService(
+      {
+        random: () => 0,
+        now: () => '2026-07-13T09:00:00.000Z',
+        nextId: (prefix) =>
+          prefix === 'activity' ? 'activity-collision' : 'event-1',
+      },
+      {
+        activities: [
+          { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 2 },
+        ],
+      },
+    );
+    try {
+      exhausted.createEvents(projectionWithExistingActivity(), {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'fortune-draw',
+        invitedResidentIds: [],
+      });
+      throw new Error('Expected ID exhaustion');
+    } catch (error) {
+      expect(error).toBeInstanceOf(TownSimulationError);
+      expect(error).toMatchObject({ code: 'id-exhaustion' });
+    }
+  });
+
+  it('retries an invalid injected activity ID before creating an event', () => {
+    let calls = 0;
+    const subject = new TownSimulationService(
+      {
+        random: () => 0,
+        now: () => '2026-07-13T09:00:00.000Z',
+        nextId: (prefix) =>
+          prefix === 'town-event'
+            ? `event-${calls}`
+            : ++calls === 1
+              ? 'not valid'
+              : 'activity-valid',
+      },
+      {
+        activities: [
+          { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 1 },
+        ],
+      },
+    );
+    const events = subject.createEvents(projection(), {
+      type: 'start-activity',
+      actorId: 'huihui',
+      activityId: 'fortune-draw',
+      invitedResidentIds: [],
+    });
+    expect(generatedActivityId(events)).toBe('activity-valid');
   });
 
   it('reduces a generated owner-only stall open followed by an external visit', () => {

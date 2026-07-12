@@ -8,8 +8,26 @@ import {
   type TownResidentState,
 } from '@cat-house/shared';
 
-function domainError(message: string): never {
-  throw new Error(`Town event rejected: ${message}`);
+export type TownReducerErrorCode =
+  'stale-version' | 'stale-sequence' | 'invalid-reference' | 'conflict';
+
+export class TownReducerError extends Error {
+  constructor(
+    readonly code: TownReducerErrorCode,
+    message: string,
+    readonly context: Readonly<Record<string, unknown>> = {},
+  ) {
+    super(`Town event rejected: ${message}`);
+    this.name = 'TownReducerError';
+  }
+}
+
+function domainError(
+  message: string,
+  code: TownReducerErrorCode = 'conflict',
+  context: Readonly<Record<string, unknown>> = {},
+): never {
+  throw new TownReducerError(code, message, context);
 }
 
 function requireResident(
@@ -19,7 +37,12 @@ function requireResident(
   const resident = projection.residents.find(
     (candidate) => candidate.residentId === residentId,
   );
-  return resident ?? domainError(`resident not found: ${residentId}`);
+  return (
+    resident ??
+    domainError(`resident not found: ${residentId}`, 'invalid-reference', {
+      residentId,
+    })
+  );
 }
 
 function requireActivity(
@@ -29,7 +52,12 @@ function requireActivity(
   const activity = projection.activities.find(
     (candidate) => candidate.id === activityId,
   );
-  return activity ?? domainError(`activity not found: ${activityId}`);
+  return (
+    activity ??
+    domainError(`activity not found: ${activityId}`, 'invalid-reference', {
+      activityId,
+    })
+  );
 }
 
 function requireFreshActivityId(
@@ -185,9 +213,19 @@ export function reduceTownEvent(
   if (parsedEvent.sessionId !== next.sessionId)
     domainError('event session does not match projection');
   if (parsedEvent.baseVersion !== next.version)
-    domainError('event base version does not match projection');
+    domainError(
+      'event base version does not match projection',
+      'stale-version',
+      {
+        expected: next.version,
+        received: parsedEvent.baseVersion,
+      },
+    );
   if (parsedEvent.sequence !== next.lastEventSequence + 1)
-    domainError('event sequence is not contiguous');
+    domainError('event sequence is not contiguous', 'stale-sequence', {
+      expected: next.lastEventSequence + 1,
+      received: parsedEvent.sequence,
+    });
   assertEventReferences(next, parsedEvent);
 
   switch (parsedEvent.type) {
@@ -208,6 +246,21 @@ export function reduceTownEvent(
       );
       assertActivityTransition(activity, parsedEvent, 'social-play');
       activity.version += 1;
+      break;
+    }
+    case 'activity.started': {
+      const { activity } = parsedEvent.payload;
+      requireFreshActivityId(next, activity.id);
+      for (const residentId of activity.participantIds) {
+        const resident = requireResident(next, residentId);
+        if (resident.availability !== 'available') {
+          domainError(`resident is busy: ${residentId}`, 'conflict', {
+            residentId,
+            activityId: resident.activityInstanceId,
+          });
+        }
+      }
+      upsertActivity(next, activity);
       break;
     }
     case 'fortune.started': {

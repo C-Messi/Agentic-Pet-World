@@ -6,7 +6,7 @@ import {
 } from '@cat-house/shared';
 import { describe, expect, it } from 'vitest';
 
-import { reduceTownEvent } from './event-reducer.js';
+import { reduceTownEvent, TownReducerError } from './event-reducer.js';
 
 const timestamp = '2026-07-13T08:00:00.000Z';
 
@@ -182,6 +182,89 @@ describe('reduceTownEvent', () => {
       ...input.activities[0],
       version: 8,
     });
+  });
+
+  it('starts a generic activity and sets reciprocal participant state', () => {
+    const activity = {
+      id: 'social-1',
+      activityId: 'social-play',
+      zoneId: 'arcade-house' as const,
+      participantIds: ['player', 'huihui'],
+      version: 0,
+      state: { schemaVersion: 'social-play.v1', phase: 'started' },
+    };
+    const result = reduceTownEvent(
+      projection(),
+      event(
+        'activity.started',
+        { activity },
+        { participants: ['huihui', 'player'], zoneId: 'arcade-house' },
+      ),
+    );
+
+    expect(result.activities).toEqual([activity]);
+    expect(result.residents.slice(0, 2)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          residentId: 'player',
+          availability: 'busy',
+          activityInstanceId: 'social-1',
+          zoneId: 'arcade-house',
+        }),
+        expect.objectContaining({
+          residentId: 'huihui',
+          availability: 'busy',
+          activityInstanceId: 'social-1',
+          zoneId: 'arcade-house',
+        }),
+      ]),
+    );
+  });
+
+  it('rejects duplicate, missing, and busy generic activity participants with stable codes', () => {
+    const activity = {
+      id: 'social-1',
+      activityId: 'social-play',
+      zoneId: 'arcade-house' as const,
+      participantIds: ['player'],
+      version: 0,
+      state: { phase: 'started' },
+    };
+    const existing = projectionWithActivity(activity);
+    expect(() =>
+      reduceTownEvent(
+        existing,
+        event('activity.started', { activity }, { zoneId: 'arcade-house' }),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'conflict' }));
+
+    const missingActivity = {
+      ...activity,
+      id: 'social-2',
+      participantIds: ['missing'],
+    };
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event(
+          'activity.started',
+          { activity: missingActivity },
+          { participants: ['missing'], zoneId: 'arcade-house' },
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'invalid-reference' }));
+
+    const busyActivity = { ...activity, id: 'social-2' };
+    expect(() =>
+      reduceTownEvent(
+        existing,
+        event(
+          'activity.started',
+          { activity: busyActivity },
+          { zoneId: 'arcade-house' },
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'conflict' }));
   });
 
   it.each([
@@ -730,6 +813,28 @@ describe('reduceTownEvent', () => {
         ...override,
       }),
     ).toThrow();
+  });
+
+  it('uses typed stale version and sequence errors with context', () => {
+    const base = event('resident.spoke', { residentId: 'player', text: 'Hi' });
+    try {
+      reduceTownEvent(projection(), { ...base, baseVersion: 1 });
+      throw new Error('Expected stale version');
+    } catch (error) {
+      expect(error).toBeInstanceOf(TownReducerError);
+      expect(error).toMatchObject({
+        code: 'stale-version',
+        context: { expected: 2, received: 1 },
+      });
+    }
+    expect(() =>
+      reduceTownEvent(projection(), { ...base, sequence: 9 }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'stale-sequence',
+        context: { expected: 5, received: 9 },
+      }),
+    );
   });
 
   it('rejects missing resident and activity references with domain errors', () => {
