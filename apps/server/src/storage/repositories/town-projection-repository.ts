@@ -232,7 +232,17 @@ export class TownProjectionRepository {
              WHERE session_id = ? AND recovery_window_id = ?`,
           )
           .get(parsed.sessionId, windowId) as RecoveryWindowRow | undefined;
-        if (storedClaim === undefined || storedClaim.outing_json !== outingJson) {
+        if (storedClaim === undefined) {
+          throw new Error(`Stored recovery claim disappeared: ${parsed.sessionId}/${windowId}`);
+        }
+        const storedOuting = parseJsonCompatible(storedClaim.outing_json, TownOutingSchema);
+        if (storedOuting.sessionId !== parsed.sessionId) {
+          throw new Error(
+            `Stored recovery claim columns do not match payload: ${parsed.sessionId}/${windowId}`,
+          );
+        }
+        const storedOutingJson = serializeJsonCompatible(storedOuting, TownOutingSchema);
+        if (storedOutingJson !== outingJson) {
           throw new Error(`Town outing recovery conflict: ${parsed.sessionId}/${windowId}`);
         }
         if (claim.changes === 0) return;

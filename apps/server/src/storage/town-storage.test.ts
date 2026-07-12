@@ -10,6 +10,7 @@ import type {
   TownOuting,
   TownProjection,
 } from '@cat-house/shared';
+import { ZodError } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase, type StorageDatabase } from './database.js';
@@ -284,6 +285,34 @@ describe('pet town storage', () => {
     } finally {
       otherDatabase.close();
     }
+  });
+
+  it('rejects schema-invalid stored recovery claim JSON', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    const storedOuting = outing();
+    repository.saveOuting(storedOuting, 'recovery-window-1');
+    database.prepare(
+      `UPDATE town_recovery_windows
+       SET outing_json = ?
+       WHERE session_id = ? AND recovery_window_id = ?`,
+    ).run(JSON.stringify({ sessionId: 'session-1' }), 'session-1', 'recovery-window-1');
+
+    expect(() => repository.saveOuting(storedOuting, 'recovery-window-1')).toThrow(ZodError);
+  });
+
+  it('rejects stored recovery claim JSON for another session', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    const storedOuting = outing();
+    repository.saveOuting(storedOuting, 'recovery-window-1');
+    database.prepare(
+      `UPDATE town_recovery_windows
+       SET outing_json = ?
+       WHERE session_id = ? AND recovery_window_id = ?`,
+    ).run(JSON.stringify(outing('session-2')), 'session-1', 'recovery-window-1');
+
+    expect(() => repository.saveOuting(storedOuting, 'recovery-window-1')).toThrow(/columns do not match payload/i);
   });
 
   it('rejects cross-session card event references', () => {
