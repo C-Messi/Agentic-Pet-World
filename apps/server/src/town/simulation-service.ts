@@ -752,11 +752,11 @@ export class TownSimulationService {
           ...parsedIntent.invitedResidentIds,
         ];
         if (parsedIntent.activityId === 'fortune-draw') {
-          const fortuneId = this.#freshActivityId(parsedProjection);
+          const activityInstanceId = this.#freshActivityId(parsedProjection);
           return [
             create(
               'fortune.started',
-              { fortuneId },
+              { activityInstanceId },
               participants,
               definition.zoneId,
             ),

@@ -140,7 +140,7 @@ function generatedActivityId(
       case 'activity.started':
         return generated.payload.activity.id;
       case 'fortune.started':
-        return generated.payload.fortuneId;
+        return generated.payload.activityInstanceId;
       case 'build.started':
         return generated.payload.modificationId;
       default:
@@ -1080,7 +1080,7 @@ describe('TownSimulationService event creation', () => {
     });
     expect(events[0]).toMatchObject({
       id: 'town-event-1',
-      payload: { fortuneId: 'activity-1' },
+      payload: { activityInstanceId: 'activity-1' },
       timestamp: '2026-07-13T09:00:00.000Z',
     });
   });

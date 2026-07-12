@@ -267,9 +267,9 @@ export function reduceTownEvent(
       break;
     }
     case 'fortune.started': {
-      requireFreshActivityId(next, parsedEvent.payload.fortuneId);
+      requireFreshActivityId(next, parsedEvent.payload.activityInstanceId);
       const activity: TownActivityInstance = {
-        id: parsedEvent.payload.fortuneId,
+        id: parsedEvent.payload.activityInstanceId,
         activityId: 'fortune-draw',
         zoneId: parsedEvent.zoneId ?? 'fortune-pavilion',
         participantIds: [...parsedEvent.participantIds],
@@ -280,22 +280,39 @@ export function reduceTownEvent(
       break;
     }
     case 'fortune.revealed': {
-      const activity = requireActivity(next, parsedEvent.payload.fortuneId);
+      const activity = requireActivity(
+        next,
+        parsedEvent.payload.activityInstanceId,
+      );
       assertActivityTransition(activity, parsedEvent, 'fortune-draw');
+      const state = jsonObject(activity.state);
+      if (state.status !== 'started' || state.fortuneId !== undefined) {
+        domainError('fortune activity has already been revealed');
+      }
       activity.version += 1;
       activity.state = {
-        ...jsonObject(activity.state),
         status: 'revealed',
-        reading: parsedEvent.payload.reading,
+        fortuneId: parsedEvent.payload.fortuneId,
+        rank: parsedEvent.payload.rank,
       };
       break;
     }
     case 'fortune.interpreted': {
-      const activity = requireActivity(next, parsedEvent.payload.fortuneId);
+      const activity = requireActivity(
+        next,
+        parsedEvent.payload.activityInstanceId,
+      );
       assertActivityTransition(activity, parsedEvent, 'fortune-draw');
+      const state = jsonObject(activity.state);
+      if (state.status !== 'revealed' || typeof state.fortuneId !== 'string') {
+        domainError('fortune must be revealed before interpretation');
+      }
+      if (state.fortuneId !== parsedEvent.payload.fortuneId) {
+        domainError('selected fortune ID does not match the reveal');
+      }
       activity.version += 1;
       activity.state = {
-        ...jsonObject(activity.state),
+        ...state,
         status: 'interpreted',
         interpretation: parsedEvent.payload.interpretation,
       };

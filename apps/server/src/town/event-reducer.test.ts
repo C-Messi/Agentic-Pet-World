@@ -295,12 +295,61 @@ describe('reduceTownEvent', () => {
     },
   );
 
+  it('rejects interpretation before reveal and a changed selected fortune ID', () => {
+    const started = projectionWithActivity({
+      id: 'fortune-1',
+      activityId: 'fortune-draw',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['player'],
+      version: 1,
+      state: { status: 'started' },
+    });
+    const interpretation = event(
+      'fortune.interpreted',
+      {
+        activityInstanceId: 'fortune-1',
+        fortuneId: 'fortune-record-1',
+        interpretation: 'Meaning',
+      },
+      { zoneId: 'fortune-pavilion' },
+    );
+    expect(() => reduceTownEvent(started, interpretation)).toThrow(/reveal/i);
+
+    const revealed = TownProjectionSchema.parse({
+      ...started,
+      activities: [
+        {
+          ...started.activities[0]!,
+          version: 2,
+          state: {
+            status: 'revealed',
+            fortuneId: 'fortune-record-1',
+            rank: 'good',
+          },
+        },
+      ],
+    });
+    expect(() =>
+      reduceTownEvent(
+        revealed,
+        TownEventSchema.parse({
+          ...interpretation,
+          payload: {
+            activityInstanceId: 'fortune-1',
+            fortuneId: 'fortune-record-2',
+            interpretation: 'Meaning',
+          },
+        }),
+      ),
+    ).toThrow(/fortune.*match|selected/i);
+  });
+
   it('starts, reveals, and interprets a fortune using explicit protocol state', () => {
     const started = reduceTownEvent(
       projection(),
       event(
         'fortune.started',
-        { fortuneId: 'fortune-1' },
+        { activityInstanceId: 'fortune-1' },
         { participants: ['player', 'huihui'], zoneId: 'fortune-pavilion' },
       ),
     );
@@ -321,7 +370,11 @@ describe('reduceTownEvent', () => {
     const revealedEvent = {
       ...event(
         'fortune.revealed',
-        { fortuneId: 'fortune-1', reading: 'Bright skies' },
+        {
+          activityInstanceId: 'fortune-1',
+          fortuneId: 'fortune-record-1',
+          rank: 'great',
+        },
         { participants: ['player', 'huihui'], zoneId: 'fortune-pavilion' },
       ),
       baseVersion: 3,
@@ -330,13 +383,18 @@ describe('reduceTownEvent', () => {
     const revealed = reduceTownEvent(started, revealedEvent);
     expect(revealed.activities[0]?.state).toEqual({
       status: 'revealed',
-      reading: 'Bright skies',
+      fortuneId: 'fortune-record-1',
+      rank: 'great',
     });
 
     const interpretedEvent = {
       ...event(
         'fortune.interpreted',
-        { fortuneId: 'fortune-1', interpretation: 'Try something new' },
+        {
+          activityInstanceId: 'fortune-1',
+          fortuneId: 'fortune-record-1',
+          interpretation: 'Try something new',
+        },
         { participants: ['player', 'huihui'], zoneId: 'fortune-pavilion' },
       ),
       baseVersion: 4,
@@ -345,7 +403,8 @@ describe('reduceTownEvent', () => {
     const interpreted = reduceTownEvent(revealed, interpretedEvent);
     expect(interpreted.activities[0]?.state).toEqual({
       status: 'interpreted',
-      reading: 'Bright skies',
+      fortuneId: 'fortune-record-1',
+      rank: 'great',
       interpretation: 'Try something new',
     });
     expect(interpreted.activities[0]?.version).toBe(3);
@@ -371,7 +430,11 @@ describe('reduceTownEvent', () => {
           input,
           event(
             'fortune.revealed',
-            { fortuneId: 'fortune-1', reading: 'No' },
+            {
+              activityInstanceId: 'fortune-1',
+              fortuneId: 'fortune-record-1',
+              rank: 'good',
+            },
             { participants: [...participants], zoneId },
           ),
         ),
@@ -393,7 +456,7 @@ describe('reduceTownEvent', () => {
         fortune,
         event(
           'fortune.started',
-          { fortuneId: 'fortune-1' },
+          { activityInstanceId: 'fortune-1' },
           { zoneId: 'fortune-pavilion' },
         ),
       ),
@@ -553,7 +616,7 @@ describe('reduceTownEvent', () => {
           : type === 'fortune.started'
             ? event(
                 type,
-                { fortuneId: 'shared-id' },
+                { activityInstanceId: 'shared-id' },
                 { zoneId: 'fortune-pavilion' },
               )
             : event(
@@ -922,7 +985,11 @@ describe('reduceTownEvent', () => {
     expect(() =>
       reduceTownEvent(
         projection(),
-        event('fortune.revealed', { fortuneId: 'missing', reading: 'No' }),
+        event('fortune.revealed', {
+          activityInstanceId: 'missing',
+          fortuneId: 'fortune-record-1',
+          rank: 'good',
+        }),
       ),
     ).toThrow(/activity not found/i);
     expect(() =>
