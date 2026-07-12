@@ -18,8 +18,11 @@ CREATE TABLE town_events (
   PRIMARY KEY (session_id, event_id),
   UNIQUE (session_id, sequence)
 );
-CREATE INDEX town_events_session_sequence_idx ON town_events(session_id, sequence);
-CREATE INDEX town_events_session_created_idx ON town_events(session_id, created_at, event_id);
+
+CREATE INDEX town_events_session_sequence_idx
+  ON town_events(session_id, sequence);
+CREATE INDEX town_events_session_created_idx
+  ON town_events(session_id, created_at, event_id);
 
 CREATE TABLE town_relationships (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -29,8 +32,10 @@ CREATE TABLE town_relationships (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (session_id, resident_id_a, resident_id_b),
   CHECK (resident_id_a < resident_id_b),
-  FOREIGN KEY (session_id, resident_id_a) REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE,
-  FOREIGN KEY (session_id, resident_id_b) REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id, resident_id_a)
+    REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE,
+  FOREIGN KEY (session_id, resident_id_b)
+    REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE
 );
 
 CREATE TABLE town_world_states (
@@ -50,18 +55,29 @@ CREATE TABLE town_activity_instances (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (session_id, activity_instance_id)
 );
-CREATE INDEX town_activity_instances_active_idx ON town_activity_instances(session_id, activity_id, updated_at);
+
+CREATE INDEX town_activity_instances_active_idx
+  ON town_activity_instances(session_id, activity_id, updated_at);
 
 CREATE TABLE town_outings (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   resident_id TEXT NOT NULL,
   outing_json TEXT NOT NULL CHECK (json_valid(outing_json)),
-  recovery_window_id TEXT,
   updated_at TEXT NOT NULL,
-  UNIQUE (session_id, recovery_window_id),
-  FOREIGN KEY (session_id, resident_id) REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id, resident_id)
+    REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE
 );
-CREATE INDEX town_outings_active_idx ON town_outings(session_id, resident_id, updated_at);
+
+CREATE INDEX town_outings_active_idx
+  ON town_outings(session_id, resident_id, updated_at);
+
+CREATE TABLE town_recovery_windows (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  recovery_window_id TEXT NOT NULL,
+  outing_json TEXT NOT NULL CHECK (json_valid(outing_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, recovery_window_id)
+);
 
 CREATE TABLE town_experience_cards (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -70,7 +86,9 @@ CREATE TABLE town_experience_cards (
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, card_id)
 );
-CREATE INDEX town_experience_cards_created_idx ON town_experience_cards(session_id, created_at, card_id);
+
+CREATE INDEX town_experience_cards_created_idx
+  ON town_experience_cards(session_id, created_at, card_id);
 
 CREATE TABLE town_experience_card_events (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -79,8 +97,10 @@ CREATE TABLE town_experience_card_events (
   ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
   PRIMARY KEY (session_id, card_id, ordinal),
   UNIQUE (session_id, card_id, event_id),
-  FOREIGN KEY (session_id, card_id) REFERENCES town_experience_cards(session_id, card_id) ON DELETE CASCADE,
-  FOREIGN KEY (session_id, event_id) REFERENCES town_events(session_id, event_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id, card_id)
+    REFERENCES town_experience_cards(session_id, card_id) ON DELETE CASCADE,
+  FOREIGN KEY (session_id, event_id)
+    REFERENCES town_events(session_id, event_id) ON DELETE CASCADE
 );
 
 CREATE TABLE public_showcase_items (

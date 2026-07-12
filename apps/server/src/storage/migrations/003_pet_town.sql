@@ -62,15 +62,21 @@ CREATE TABLE town_outings (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   resident_id TEXT NOT NULL,
   outing_json TEXT NOT NULL CHECK (json_valid(outing_json)),
-  recovery_window_id TEXT,
   updated_at TEXT NOT NULL,
-  UNIQUE (session_id, recovery_window_id),
   FOREIGN KEY (session_id, resident_id)
     REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE
 );
 
 CREATE INDEX town_outings_active_idx
   ON town_outings(session_id, resident_id, updated_at);
+
+CREATE TABLE town_recovery_windows (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  recovery_window_id TEXT NOT NULL,
+  outing_json TEXT NOT NULL CHECK (json_valid(outing_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, recovery_window_id)
+);
 
 CREATE TABLE town_experience_cards (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

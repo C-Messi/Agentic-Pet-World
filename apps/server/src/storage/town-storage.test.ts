@@ -205,6 +205,25 @@ describe('pet town storage', () => {
     expect(() => repository.listByIds('session-1', ['event-1', 'event-1'])).toThrow(/duplicate/i);
   });
 
+  it('serializes event retries and conflicts across database connections', () => {
+    const otherDatabase = openDatabase(databasePath);
+    try {
+      const first = new TownEventRepository(database);
+      const second = new TownEventRepository(otherDatabase);
+      const original = event();
+
+      expect(first.append(original)).toEqual({ inserted: true, sequence: 1 });
+      expect(second.append(original)).toEqual({ inserted: false, sequence: 1 });
+      expect(() => second.append({
+        ...original,
+        payload: { ...original.payload, text: 'Changed elsewhere' },
+      })).toThrow(/event conflict/i);
+      expect(() => second.append(event('event-2', 1))).toThrow(/sequence conflict/i);
+    } finally {
+      otherDatabase.close();
+    }
+  });
+
   it('returns false on optimistic projection conflicts without changing stored state', () => {
     const repository = new TownProjectionRepository(database);
     expect(repository.save('session-1', 0, projection())).toBe(false);
@@ -224,6 +243,47 @@ describe('pet town storage', () => {
     repository.saveOuting(storedOuting, 'recovery-window-1');
     expect(() => repository.saveOuting({ ...storedOuting, lastConfirmedAt: laterTimestamp }, 'recovery-window-1')).toThrow(/conflict/i);
     expect(repository.loadOuting('session-1')).toEqual(storedOuting);
+  });
+
+  it('keeps historical recovery claims idempotent across restart', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    const outingA = outing();
+    const outingB = { ...outingA, lastConfirmedAt: laterTimestamp };
+
+    repository.saveOuting(outingA, 'recovery-window-a');
+    repository.saveOuting(outingB, 'recovery-window-b');
+    database.close();
+    database = openDatabase(databasePath);
+
+    const reopened = new TownProjectionRepository(database);
+    reopened.saveOuting(outingA, 'recovery-window-a');
+    expect(reopened.loadOuting('session-1')).toEqual(outingB);
+    expect(() => reopened.saveOuting(
+      { ...outingA, recoveryWindowEndsAt: '2026-07-12T08:32:00.000Z' },
+      'recovery-window-a',
+    )).toThrow(/recovery conflict/i);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM town_recovery_windows').get()).toEqual({ count: 2 });
+  });
+
+  it('serializes recovery claims across database connections', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    const otherDatabase = openDatabase(databasePath);
+    try {
+      const otherRepository = new TownProjectionRepository(otherDatabase);
+      const storedOuting = outing();
+
+      repository.saveOuting(storedOuting, 'recovery-window-1');
+      otherRepository.saveOuting(storedOuting, 'recovery-window-1');
+      expect(() => otherRepository.saveOuting(
+        { ...storedOuting, lastConfirmedAt: laterTimestamp },
+        'recovery-window-1',
+      )).toThrow(/recovery conflict/i);
+      expect(repository.loadOuting('session-1')).toEqual(storedOuting);
+    } finally {
+      otherDatabase.close();
+    }
   });
 
   it('rejects cross-session card event references', () => {
@@ -280,6 +340,7 @@ describe('pet town storage', () => {
       'town_world_states',
       'town_activity_instances',
       'town_outings',
+      'town_recovery_windows',
       'town_experience_cards',
       'town_experience_card_events',
       'public_showcase_items',

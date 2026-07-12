@@ -32,7 +32,10 @@ interface OutingRow {
   session_id: string;
   resident_id: string;
   outing_json: string;
-  recovery_window_id: string | null;
+}
+
+interface RecoveryWindowRow {
+  outing_json: string;
 }
 
 interface CardRow {
@@ -193,7 +196,7 @@ export class TownProjectionRepository {
     const id = IdentifierSchema.parse(sessionId);
     const row = this.database
       .prepare(
-        `SELECT session_id, resident_id, outing_json, recovery_window_id
+        `SELECT session_id, resident_id, outing_json
          FROM town_outings
          WHERE session_id = ?`,
       )
@@ -212,37 +215,41 @@ export class TownProjectionRepository {
       ? undefined
       : IdentifierSchema.parse(recoveryWindowId);
     const outingJson = serializeJsonCompatible(parsed, TownOutingSchema);
-    const existing = this.database
-      .prepare(
-        `SELECT session_id, resident_id, outing_json, recovery_window_id
-         FROM town_outings
-         WHERE session_id = ?`,
-      )
-      .get(parsed.sessionId) as OutingRow | undefined;
-
-    if (
-      existing !== undefined
-      && existing.recovery_window_id === windowId
-      && windowId !== undefined
-    ) {
-      if (existing.outing_json !== outingJson) {
-        throw new Error(`Town outing recovery conflict: ${parsed.sessionId}/${windowId}`);
+    this.database.transaction(() => {
+      if (windowId !== undefined) {
+        const claim = this.database
+          .prepare(
+            `INSERT INTO town_recovery_windows
+               (session_id, recovery_window_id, outing_json, created_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(session_id, recovery_window_id) DO NOTHING`,
+          )
+          .run(parsed.sessionId, windowId, outingJson, new Date().toISOString());
+        const storedClaim = this.database
+          .prepare(
+            `SELECT outing_json
+             FROM town_recovery_windows
+             WHERE session_id = ? AND recovery_window_id = ?`,
+          )
+          .get(parsed.sessionId, windowId) as RecoveryWindowRow | undefined;
+        if (storedClaim === undefined || storedClaim.outing_json !== outingJson) {
+          throw new Error(`Town outing recovery conflict: ${parsed.sessionId}/${windowId}`);
+        }
+        if (claim.changes === 0) return;
       }
-      return;
-    }
 
-    this.database
-      .prepare(
-        `INSERT INTO town_outings
-           (session_id, resident_id, outing_json, recovery_window_id, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(session_id) DO UPDATE SET
-           resident_id = excluded.resident_id,
-           outing_json = excluded.outing_json,
-           recovery_window_id = excluded.recovery_window_id,
-           updated_at = excluded.updated_at`,
-      )
-      .run(parsed.sessionId, parsed.residentId, outingJson, windowId ?? null, new Date().toISOString());
+      this.database
+        .prepare(
+          `INSERT INTO town_outings
+             (session_id, resident_id, outing_json, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET
+             resident_id = excluded.resident_id,
+             outing_json = excluded.outing_json,
+             updated_at = excluded.updated_at`,
+        )
+        .run(parsed.sessionId, parsed.residentId, outingJson, new Date().toISOString());
+    }).immediate();
   }
 
   public listCards(sessionId: string): readonly ExperienceCard[] {
