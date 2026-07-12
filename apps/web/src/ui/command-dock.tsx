@@ -36,7 +36,16 @@ export function CommandDock({
         autoComplete="off"
       />
       {busy ? (
-        <button className="icon-button cancel-button" type="button" onClick={onCancel} aria-label="Cancel current request" title="Cancel current request">
+        <button
+          className="icon-button cancel-button"
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            onCancel();
+          }}
+          aria-label="Cancel current request"
+          title="Cancel current request"
+        >
           <Ban aria-hidden="true" />
         </button>
       ) : (

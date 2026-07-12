@@ -1,8 +1,9 @@
 import type { AgentDecision } from '@cat-house/shared';
 
-import type {
-  ProviderAdapter,
-  ProviderCompletionRequest,
+import {
+  ProviderError,
+  type ProviderAdapter,
+  type ProviderCompletionRequest,
 } from './provider.js';
 
 const WINDOW_DECISION: AgentDecision = {
@@ -67,6 +68,9 @@ const GENERAL_DECISION: AgentDecision = {
 export class FakeProvider implements ProviderAdapter {
   public async complete(request: ProviderCompletionRequest): Promise<unknown> {
     const latestMessage = request.messages.at(-1)?.content.toLocaleLowerCase() ?? '';
+    if (latestMessage.includes('hold this turn for cancellation')) {
+      return waitForCancellation(request.signal, request.correlationId);
+    }
     if (latestMessage.includes('window')) {
       return WINDOW_DECISION;
     }
@@ -78,4 +82,16 @@ export class FakeProvider implements ProviderAdapter {
     }
     return GENERAL_DECISION;
   }
+}
+
+async function waitForCancellation(signal: AbortSignal, correlationId: string): Promise<never> {
+  if (signal.aborted) throw new ProviderError('cancelled', { correlationId });
+  await new Promise<void>((_resolve, reject) => {
+    signal.addEventListener(
+      'abort',
+      () => reject(new ProviderError('cancelled', { correlationId })),
+      { once: true },
+    );
+  });
+  throw new ProviderError('cancelled', { correlationId });
 }

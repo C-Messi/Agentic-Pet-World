@@ -41,6 +41,7 @@ export function App({ runtimeFactory }: { runtimeFactory: RuntimeFactory }) {
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const mountedRef = useRef(false);
   const panelRequestRef = useRef(0);
+  const cancelRequestedRef = useRef(false);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [statusMessage, setStatusMessage] = useState<string>();
   const [draft, setDraft] = useState('');
@@ -56,6 +57,7 @@ export function App({ runtimeFactory }: { runtimeFactory: RuntimeFactory }) {
 
   const initializeRuntime = useCallback(async (runtime: GameUiRuntime) => {
     setStatus('connecting');
+    cancelRequestedRef.current = false;
     setStatusMessage(undefined);
     setInitializationError(undefined);
     setHasSession(false);
@@ -82,6 +84,7 @@ export function App({ runtimeFactory }: { runtimeFactory: RuntimeFactory }) {
     runtimeRef.current = runtime;
     mountedRef.current = true;
     const offStatus = runtime.events.on('connection-status', (next) => {
+      if (cancelRequestedRef.current && next.status !== 'cancelled') return;
       setStatus(next.status);
       setStatusMessage(next.message);
     });
@@ -102,6 +105,7 @@ export function App({ runtimeFactory }: { runtimeFactory: RuntimeFactory }) {
     const runtime = runtimeRef.current;
     const message = draft.trim();
     if (!runtime || !message || busy || unavailable) return;
+    cancelRequestedRef.current = false;
     setSubmitting(true);
     try {
       const outcome = await runtime.sendMessage(message);
@@ -151,6 +155,12 @@ export function App({ runtimeFactory }: { runtimeFactory: RuntimeFactory }) {
     setMuted(nextMuted);
     runtimeRef.current?.setMuted(nextMuted);
   };
+  const cancel = () => {
+    cancelRequestedRef.current = true;
+    runtimeRef.current?.cancel();
+    setStatus('cancelled');
+    setStatusMessage(undefined);
+  };
 
   const returnFocusRef = drawer === 'memory'
     ? memoryButtonRef
@@ -189,7 +199,7 @@ export function App({ runtimeFactory }: { runtimeFactory: RuntimeFactory }) {
           disabled={busy || unavailable}
           onDraftChange={setDraft}
           onSubmit={() => void submit()}
-          onCancel={() => runtimeRef.current?.cancel()}
+          onCancel={cancel}
         />
         </div>
       </div>

@@ -1,13 +1,26 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { createRequire } from 'node:module';
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import { hasRenderedRoom, inspectCanvas, type CanvasInspection } from './canvas-inspection';
 
-const execFileAsync = promisify(execFile);
+const Database = createRequire(import.meta.url)(
+  '../../apps/server/node_modules/better-sqlite3',
+) as typeof import('../../apps/server/node_modules/better-sqlite3').default;
 
-async function openReady(page: Page, url = '/') {
+interface E2EMetadata {
+  primaryDatabasePath: string;
+  primaryApiUrl: string;
+  degradedApiUrl: string;
+  webUrl: string;
+  degradedWebUrl: string;
+}
+
+function metadata(): E2EMetadata {
+  return test.info().config.metadata as unknown as E2EMetadata;
+}
+
+async function openReady(page: Page, url = metadata().webUrl) {
   await page.goto(url);
   await expect(page.getByRole('status')).toContainText('Ready', { timeout: 15_000 });
   await expect(page.locator('.game-surface canvas')).toBeVisible();
@@ -30,7 +43,7 @@ async function sessionId(page: Page): Promise<string> {
 }
 
 async function loadSession(request: APIRequestContext, id: string) {
-  const response = await request.get(`http://127.0.0.1:8787/api/sessions/${id}`);
+  const response = await request.get(`${metadata().primaryApiUrl}/api/sessions/${id}`);
   expect(response.ok()).toBe(true);
   return response.json();
 }
@@ -115,44 +128,32 @@ test('opens the rendered arcade placeholder and restores the same persisted room
   expect(persistedAfterReturn.world).toEqual(persistedBeforeReturn.world);
 });
 
-test('prevents a concurrent submit and supports cancellation', async ({ page }) => {
-  let releaseTurn!: () => void;
-  const turnReleased = new Promise<void>((resolve) => { releaseTurn = resolve; });
-  let abortTurn = false;
-  const turnRequests: string[] = [];
-  await page.route('**/turns', async (route) => {
-    if (route.request().method() !== 'POST') {
-      await route.continue();
-      return;
-    }
-    turnRequests.push(`${route.request().url()} ${route.request().postData() ?? ''}`);
-    await turnReleased;
-    if (abortTurn) {
-      await route.abort('aborted');
-    } else {
-      await route.continue();
-    }
-  });
+test('prevents a concurrent submit and aborts a slow turn without durable records', async ({ page, request }) => {
   await openReady(page);
+  const id = await sessionId(page);
   const input = page.getByLabel('Tell the cat what to do');
-  await input.fill('go to the window');
+  const failedTurn = page.waitForEvent('requestfailed', (outgoing) => outgoing.url().endsWith('/turns'));
+  await input.fill('hold this turn for cancellation');
   await page.getByRole('button', { name: 'Send command' }).click();
+  await expect(page.getByRole('status')).toContainText('Thinking');
   await expect(page.getByRole('button', { name: 'Cancel current request' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send command' })).toHaveCount(0);
   await expect(input).toBeDisabled();
-  await expect.poll(() => turnRequests.length).toBe(1);
   await page.getByRole('button', { name: 'Cancel current request' }).click();
-  abortTurn = true;
-  releaseTurn();
+  const failedRequest = await failedTurn;
+  expect(failedRequest.failure()?.errorText).toBeTruthy();
+  await expect(page.getByRole('status')).toContainText('Canceled');
   await expect(page.getByRole('button', { name: 'Cancel current request' })).toHaveCount(0);
   await expect(input).toBeEnabled();
+  await expect.poll(async () => (await loadSession(request, id)).messages).toEqual([]);
+  expect(durableCancellationState(id)).toEqual({ messages: 0, events: 0, actionRuns: 0 });
 });
 
 test('uses a server fallback when provider configuration is unavailable', async ({ page, request }) => {
-  const health = await request.get('http://127.0.0.1:8788/health');
+  const health = await request.get(`${metadata().degradedApiUrl}/health`);
   expect(health.status()).toBe(503);
   expect((await health.json()).checks.config).toBe(false);
-  await openReady(page, 'http://127.0.0.1:5174');
+  await openReady(page, metadata().degradedWebUrl);
   await submitAndWaitForTurn(page, 'go to the window', 503);
   await expect(page.getByRole('status')).toContainText('Provider error');
   await expect.poll(() => inspectCanvas(page).then((fallback) =>
@@ -178,7 +179,7 @@ test('replaying an observed action result is idempotent', async ({ page, request
   expect(beforeReplay.eventCount).toBe(1);
   const replay = await request.post(delivery!.url, {
     data: JSON.parse(delivery!.body),
-    headers: { origin: 'http://127.0.0.1:5173' },
+    headers: { origin: metadata().webUrl },
   });
   expect(replay.status()).toBe(202);
   expect(await replay.json()).toEqual({ accepted: 1 });
@@ -188,15 +189,32 @@ test('replaying an observed action result is idempotent', async ({ page, request
 
 async function durableActionState(id: string) {
   expect(id).toMatch(/^[A-Za-z0-9._:-]+$/);
-  const databasePath = test.info().config.metadata.primaryDatabasePath;
-  if (typeof databasePath !== 'string') throw new Error('Playwright primary database metadata is unavailable');
-  const sql = [
-    `SELECT COUNT(*) FROM events WHERE session_id = '${id}' AND type = 'actions.results.recorded';`,
-    `SELECT quote(snapshot_json) || '|' || updated_at FROM world_states WHERE session_id = '${id}';`,
-  ].join(' ');
-  const { stdout } = await execFileAsync('/usr/bin/sqlite3', [databasePath, sql]);
-  const [eventCount, worldIdentity] = stdout.trim().split('\n');
-  return { eventCount: Number(eventCount), worldIdentity };
+  const database = new Database(metadata().primaryDatabasePath, { readonly: true, fileMustExist: true });
+  try {
+    const event = database.prepare(
+      `SELECT COUNT(*) AS count
+       FROM events
+       WHERE session_id = ? AND type = 'actions.results.recorded'`,
+    ).get(id) as { count: number };
+    const world = database.prepare(
+      'SELECT snapshot_json AS snapshotJson, updated_at AS updatedAt FROM world_states WHERE session_id = ?',
+    ).get(id) as { snapshotJson: string; updatedAt: string };
+    return { eventCount: event.count, worldIdentity: world };
+  } finally {
+    database.close();
+  }
+}
+
+function durableCancellationState(id: string) {
+  const database = new Database(metadata().primaryDatabasePath, { readonly: true, fileMustExist: true });
+  try {
+    const count = (table: 'messages' | 'events' | 'action_runs') => (
+      database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE session_id = ?`).get(id) as { count: number }
+    ).count;
+    return { messages: count('messages'), events: count('events'), actionRuns: count('action_runs') };
+  } finally {
+    database.close();
+  }
 }
 
 for (const viewport of [
@@ -251,7 +269,7 @@ for (const viewport of [
     expect(drawerLayout.overlap && !(drawerLayout.inert && drawerLayout.drawerZ > drawerLayout.overlayZ)).toBe(false);
     await page.getByRole('button', { name: 'Close memories' }).click();
 
-    await page.goto('http://127.0.0.1:5174');
+    await page.goto(metadata().degradedWebUrl);
     await expect(page.getByRole('status')).toContainText('Ready', { timeout: 15_000 });
     await submitAndWaitForTurn(page, 'go to the window', 503);
     await expect(page.getByRole('status')).toContainText('Provider error');

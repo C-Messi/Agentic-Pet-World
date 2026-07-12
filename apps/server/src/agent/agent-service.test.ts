@@ -417,10 +417,8 @@ describe('AgentService', () => {
     expect(decision.actions).toEqual([]);
     expect(providerCalls).toBe(0);
     expect(harness.delays).toEqual([]);
-    expect(harness.events[1]?.payload).toMatchObject({
-      usedFallback: true,
-      fallbackReason: 'cancelled',
-    });
+    expect(harness.messages).toEqual([]);
+    expect(harness.events).toEqual([]);
   });
 
   it('rechecks cancellation after retry backoff before the second provider call', async () => {
@@ -452,10 +450,8 @@ describe('AgentService', () => {
 
     expect(decision.actions).toEqual([]);
     expect(providerCalls).toBe(1);
-    expect(harness.events.at(-1)?.payload).toMatchObject({
-      usedFallback: true,
-      fallbackReason: 'cancelled',
-    });
+    expect(harness.messages).toEqual([]);
+    expect(harness.events).toEqual([]);
   });
 
   it.each([
@@ -567,6 +563,18 @@ describe('AgentService', () => {
 });
 
 describe('FakeProvider', () => {
+  it('holds the explicit cancellation fixture until its caller aborts', async () => {
+    const controller = new AbortController();
+    const pending = new FakeProvider().complete({
+      ...providerRequest('hold this turn for cancellation'),
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+  });
+
   it.each([
     ['window', 'window'],
     ['bed', 'bed'],

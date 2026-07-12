@@ -268,9 +268,7 @@ export class AgentBridge {
     let resultDeliveryFailed = false;
 
     try {
-      recordE2EPhase('turn-requested');
       const response = await this.api.sendTurn(request, operation.controller.signal);
-      recordE2EPhase('turn-received');
       this.assertOwnership(operation, capturedSessionGeneration);
       responseReceived = true;
       this.bubbles.showDecision(response.correlationId, response.decision.speech, response.decision.thought);
@@ -485,8 +483,4 @@ function staleOperationError(): DOMException {
 
 function stableDecision(decision: AgentTurnResponse['decision']): string {
   return JSON.stringify(decision);
-}
-
-function recordE2EPhase(phase: string): void {
-  if (import.meta.env.DEV) window.__CAT_HOUSE_E2E__?.phases.push(phase);
 }

@@ -10,7 +10,7 @@
     "test": "pnpm --filter @cat-house/shared build && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "test:e2e": "playwright test"
+    "test:e2e": "pnpm --filter @cat-house/shared build && playwright test"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",

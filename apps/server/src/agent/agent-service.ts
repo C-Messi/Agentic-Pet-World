@@ -163,6 +163,9 @@ export class AgentService {
     }
 
     const outcome = await this.decide(request, context, correlationId, signal);
+    if (outcome.fallbackReason === 'cancelled') {
+      return outcome;
+    }
     return this.persistTurn(request, correlationId, outcome);
   }
 
