@@ -11,6 +11,7 @@ import {
   FortunePoolSchema,
   type FortuneState,
   loadFortunePool,
+  safeFortuneInterpretation,
   selectFortune,
   validateFortuneInterpretation,
 } from './fortune.js';
@@ -34,7 +35,8 @@ function context(overrides: Partial<ActivityContext> = {}): ActivityContext {
     participantIds: ['resident-1', 'resident-2'],
     zoneId: 'fortune-pavilion',
     now: '2026-07-13T10:00:00.000Z',
-    nextEventId: () => `unused-${++eventNumber}`,
+    emittedEventTypes: [],
+    nextEventId: () => `event-${++eventNumber}`,
     ...overrides,
   };
 }
@@ -301,6 +303,10 @@ describe('fortune interpretation safety', () => {
     '投资必然发财。',
     '法院诉讼命中注定。',
     '灾难和死亡一定会发生。',
+    'You will have a heart attack.',
+    'You will go bankrupt.',
+    '你会心脏病发作。',
+    '你将破产。',
   ])('rejects representative prohibited prediction language: %s', (text) => {
     const fortune = FORTUNE_POOL.fortunes[0]!;
     expect(() =>
@@ -311,10 +317,21 @@ describe('fortune interpretation safety', () => {
       }),
     ).toThrow(/prohibited/i);
   });
+
+  it('routes unsafe interpretation output to the deterministic fallback', () => {
+    const fortune = FORTUNE_POOL.fortunes[0]!;
+    expect(
+      safeFortuneInterpretation(fortune, {
+        fortuneId: fortune.id,
+        text: 'You will have a heart attack.',
+        themes: fortune.themes,
+      }),
+    ).toEqual(createFallbackFortuneInterpretation(fortune));
+  });
 });
 
 describe('fortune result events', () => {
-  it('emits deterministic protocol-valid reveal and interpretation facts', () => {
+  it('emits two distinct sequential facts from completed state with an empty cursor', () => {
     const { activityContext, revealed } = advanceToRevealed();
     const fortune = FORTUNE_POOL.fortunes.find(
       ({ id }) => id === revealed.fortuneId,
@@ -330,52 +347,116 @@ describe('fortune result events', () => {
       activityContext,
     );
 
-    const first = FORTUNE_ACTIVITY_DEFINITION.resultEvents(
+    const events = FORTUNE_ACTIVITY_DEFINITION.resultEvents(
       completed,
       activityContext,
     );
-    const second = FORTUNE_ACTIVITY_DEFINITION.resultEvents(
-      completed,
-      context(),
-    );
-    expect(first).toEqual(second);
-    expect(first.map(({ type }) => type)).toEqual([
+    expect(events.map(({ type }) => type)).toEqual([
       'fortune.revealed',
       'fortune.interpreted',
     ]);
-    expect(first[0]).toMatchObject({
+    expect(events[0]).toMatchObject({
+      id: 'event-1',
       sessionId: 'session-1',
       sequence: 21,
       baseVersion: 10,
       zoneId: 'fortune-pavilion',
       participantIds: ['resident-1', 'resident-2'],
       payload: {
-        fortuneId: 'fortune-session-1',
-        reading: fortune.verse,
+        activityInstanceId: 'fortune-session-1',
+        fortuneId: fortune.id,
+        rank: fortune.rank,
       },
     });
-    expect(first[1]).toMatchObject({
+    expect(events[1]).toMatchObject({
+      id: 'event-2',
       sequence: 22,
       baseVersion: 11,
       payload: {
-        fortuneId: 'fortune-session-1',
+        activityInstanceId: 'fortune-session-1',
+        fortuneId: fortune.id,
         interpretation: fortune.baseInterpretation,
       },
     });
-    for (const event of first)
+    for (const event of events)
       expect(TownEventSchema.parse(event)).toEqual(event);
-    expect(new Set(first.map(({ id }) => id)).size).toBe(2);
+    expect(new Set(events.map(({ id }) => id)).size).toBe(2);
   });
 
-  it('emits nothing before reveal and only the reveal fact before interpretation', () => {
+  it('emits reveal once, then only interpretation after the persisted cursor advances', () => {
     const { activityContext, drawing, revealed } = advanceToRevealed();
     expect(
       FORTUNE_ACTIVITY_DEFINITION.resultEvents(drawing, activityContext),
     ).toEqual([]);
+    const [reveal] = FORTUNE_ACTIVITY_DEFINITION.resultEvents(
+      revealed,
+      activityContext,
+    );
+    expect(reveal).toMatchObject({
+      id: 'event-1',
+      type: 'fortune.revealed',
+      sequence: 21,
+      baseVersion: 10,
+      payload: {
+        activityInstanceId: 'fortune-session-1',
+        fortuneId: revealed.fortuneId,
+      },
+    });
+
+    const fortune = FORTUNE_POOL.fortunes.find(
+      ({ id }) => id === revealed.fortuneId,
+    )!;
+    const interpreted = FORTUNE_ACTIVITY_DEFINITION.transition(
+      revealed,
+      { type: 'interpret', ...createFallbackFortuneInterpretation(fortune) },
+      activityContext,
+    );
+    const completed = FORTUNE_ACTIVITY_DEFINITION.transition(
+      interpreted,
+      { type: 'complete' },
+      activityContext,
+    );
+    const [interpretation] = FORTUNE_ACTIVITY_DEFINITION.resultEvents(
+      completed,
+      context({
+        baseVersion: 11,
+        lastEventSequence: 21,
+        emittedEventTypes: ['fortune.revealed'],
+        nextEventId: () => 'event-2',
+      }),
+    );
+    expect(interpretation).toMatchObject({
+      id: 'event-2',
+      type: 'fortune.interpreted',
+      sequence: 22,
+      baseVersion: 11,
+      payload: {
+        activityInstanceId: 'fortune-session-1',
+        fortuneId: revealed.fortuneId,
+      },
+    });
     expect(
-      FORTUNE_ACTIVITY_DEFINITION.resultEvents(revealed, activityContext).map(
-        ({ type }) => type,
+      FORTUNE_ACTIVITY_DEFINITION.resultEvents(
+        completed,
+        context({
+          baseVersion: 12,
+          lastEventSequence: 22,
+          emittedEventTypes: ['fortune.revealed', 'fortune.interpreted'],
+          nextEventId: () => {
+            throw new Error('cursor should suppress all emitted facts');
+          },
+        }),
       ),
-    ).toEqual(['fortune.revealed']);
+    ).toEqual([]);
+  });
+
+  it('translates an invalid injected event ID into a typed activity error', () => {
+    const { activityContext, revealed } = advanceToRevealed();
+    expect(() =>
+      FORTUNE_ACTIVITY_DEFINITION.resultEvents(revealed, {
+        ...activityContext,
+        nextEventId: () => 'bad id!',
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
   });
 });

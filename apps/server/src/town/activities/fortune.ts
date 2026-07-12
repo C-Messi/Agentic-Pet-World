@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import {
   IdentifierSchema,
   TownEventSchema,
@@ -125,13 +123,13 @@ export const FortuneInterpretationSchema = z
 export type FortuneInterpretation = z.infer<typeof FortuneInterpretationSchema>;
 
 const PROHIBITED_INTERPRETATION_PATTERNS = [
-  /\b(?:diagnos(?:e|ed|is)|disease|cancer|medicine|medical|treatment|doctor)\b/i,
-  /\b(?:stock|investment|profit|lottery|financial|guaranteed returns?)\b/i,
+  /\b(?:diagnos(?:e|ed|is)|disease|cancer|medicine|medical|treatment|doctor|heart attack|cardiac arrest)\b/i,
+  /\b(?:stock|investment|profit|lottery|financial|guaranteed returns?|bankrupt|bankruptcy)\b/i,
   /\b(?:lawsuit|court|lawyer|legal)\b/i,
   /\b(?:disaster|earthquake|flood|deadly|death|die|fatal)\b/i,
   /\b(?:destined|inevitable|will happen|guaranteed)\b/i,
-  /(?:\u533b\u7597|\u75be\u75c5|\u751f\u75c5|\u764c|\u836f\u7269|\u6cbb\u7597|\u533b\u751f)/u,
-  /(?:\u80a1\u7968|\u6295\u8d44|\u53d1\u8d22|\u5f69\u7968|\u8d22\u52a1)/u,
+  /(?:\u533b\u7597|\u75be\u75c5|\u751f\u75c5|\u764c|\u836f\u7269|\u6cbb\u7597|\u533b\u751f|\u5fc3\u810f\u75c5\u53d1\u4f5c)/u,
+  /(?:\u80a1\u7968|\u6295\u8d44|\u53d1\u8d22|\u5f69\u7968|\u8d22\u52a1|\u7834\u4ea7)/u,
   /(?:\u6cd5\u5f8b|\u8bc9\u8bbc|\u6cd5\u9662|\u5f8b\u5e08)/u,
   /(?:\u707e\u96be|\u5730\u9707|\u6d2a\u6c34|\u6b7b\u4ea1|\u53bb\u4e16|\u5fc5\u6b7b)/u,
   /(?:\u547d\u4e2d\u6ce8\u5b9a|\u4e00\u5b9a\u4f1a|\u5fc5\u7136)/u,
@@ -173,6 +171,17 @@ export function createFallbackFortuneInterpretation(
     text: fortune.baseInterpretation,
     themes: fortune.themes,
   });
+}
+
+export function safeFortuneInterpretation(
+  fortune: Readonly<FortuneRecord>,
+  value: unknown,
+): Readonly<FortuneInterpretation> {
+  try {
+    return validateFortuneInterpretation(fortune, value);
+  } catch {
+    return createFallbackFortuneInterpretation(fortune);
+  }
 }
 
 const ParticipantIdsSchema = z
@@ -274,7 +283,10 @@ export const FortuneToolSchema = z.discriminatedUnion('type', [
 export type FortuneTool = z.infer<typeof FortuneToolSchema>;
 
 export type FortuneActivityErrorCode =
-  'illegal-transition' | 'invalid-participant' | 'invalid-interpretation';
+  | 'illegal-transition'
+  | 'invalid-participant'
+  | 'invalid-interpretation'
+  | 'invalid-result-event';
 
 export class FortuneActivityError extends Error {
   constructor(
@@ -412,56 +424,79 @@ function transitionFortune(
   }
 }
 
-function deterministicEventId(context: ActivityContext, kind: string): string {
-  const digest = createHash('sha256')
-    .update(context.sessionId)
-    .update('\0')
-    .update(context.activityInstanceId)
-    .digest('hex')
-    .slice(0, 24);
-  return `fortune-event:${digest}:${kind}`;
-}
-
 function resultEvents(
   state: Readonly<FortuneState>,
   context: ActivityContext,
 ): readonly TownEvent[] {
   if (state.phase !== 'revealed' && state.phase !== 'completed') return [];
-  const events: TownEvent[] = [
-    TownEventSchema.parse({
-      id: deterministicEventId(context, 'revealed'),
-      sessionId: context.sessionId,
-      sequence: context.lastEventSequence + 1,
-      baseVersion: context.baseVersion,
-      type: 'fortune.revealed',
-      zoneId: context.zoneId,
-      participantIds: context.participantIds,
-      timestamp: context.now,
-      payload: {
-        fortuneId: context.activityInstanceId,
-        reading: state.reading,
-      },
-    }),
-  ];
-  if (state.interpretation !== undefined) {
-    events.push(
-      TownEventSchema.parse({
-        id: deterministicEventId(context, 'interpreted'),
-        sessionId: context.sessionId,
-        sequence: context.lastEventSequence + 2,
-        baseVersion: context.baseVersion + 1,
+  try {
+    const emitted = new Set(context.emittedEventTypes);
+    const fortune = findFortune(state.fortuneId);
+    const facts: Array<
+      | {
+          type: 'fortune.revealed';
+          payload: {
+            activityInstanceId: string;
+            fortuneId: string;
+            rank: FortuneRecord['rank'];
+          };
+        }
+      | {
+          type: 'fortune.interpreted';
+          payload: {
+            activityInstanceId: string;
+            fortuneId: string;
+            interpretation: string;
+          };
+        }
+    > = [];
+    if (!emitted.has('fortune.revealed')) {
+      facts.push({
+        type: 'fortune.revealed',
+        payload: {
+          activityInstanceId: context.activityInstanceId,
+          fortuneId: state.fortuneId,
+          rank: fortune.rank,
+        },
+      });
+    }
+    if (
+      state.interpretation !== undefined &&
+      !emitted.has('fortune.interpreted')
+    ) {
+      facts.push({
         type: 'fortune.interpreted',
+        payload: {
+          activityInstanceId: context.activityInstanceId,
+          fortuneId: state.fortuneId,
+          interpretation: state.interpretation,
+        },
+      });
+    }
+
+    const events = facts.map((fact, index) =>
+      TownEventSchema.parse({
+        id: context.nextEventId(),
+        sessionId: context.sessionId,
+        sequence: context.lastEventSequence + index + 1,
+        baseVersion: context.baseVersion + index,
         zoneId: context.zoneId,
         participantIds: context.participantIds,
         timestamp: context.now,
-        payload: {
-          fortuneId: context.activityInstanceId,
-          interpretation: state.interpretation,
-        },
+        ...fact,
       }),
     );
+    if (new Set(events.map(({ id }) => id)).size !== events.length) {
+      throw new TypeError('Fortune result event IDs must be unique');
+    }
+    return events;
+  } catch (error) {
+    throw new FortuneActivityError(
+      'invalid-result-event',
+      'Invalid fortune result event',
+      { cause: error },
+    );
   }
-  return events;
 }
 
 const FortuneActivityDefinition: TownActivityDefinition<

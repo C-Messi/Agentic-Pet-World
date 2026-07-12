@@ -29,6 +29,7 @@ function context(overrides: Partial<ActivityContext> = {}): ActivityContext {
     participantIds: ['resident-1'],
     zoneId: 'plaza',
     now: '2026-07-13T10:00:00.000Z',
+    emittedEventTypes: [],
     nextEventId: () => `event-${++eventNumber}`,
     ...overrides,
   };
@@ -184,11 +185,39 @@ describe('TownActivityRegistry execution boundary', () => {
     context({ participantIds: ['resident-1', 'resident-1'] }),
     context({ zoneId: 'garden' }),
     context({ now: 'today' }),
+    context({ emittedEventTypes: ['fortune.revealed', 'fortune.revealed'] }),
+    context({ emittedEventTypes: ['resident.spoke' as 'fortune.revealed'] }),
+    context({ emittedEventTypes: ['fortune.interpreted'] }),
   ])('rejects invalid activity context (%s)', (value) => {
     const registry = new TownActivityRegistry().register(definition());
     expect(() => registry.createInitialState('counter', value)).toThrowError(
       expect.objectContaining({ code: 'invalid-context' }),
     );
+  });
+
+  it('captures and freezes the context cursor and callback', () => {
+    let received: ActivityContext | undefined;
+    const registry = new TownActivityRegistry().register(
+      definition({
+        createInitialState: (activityContext) => {
+          received = activityContext;
+          return { count: 0 };
+        },
+      }),
+    );
+    const source = context({ emittedEventTypes: ['fortune.revealed'] });
+    const callback = source.nextEventId;
+
+    registry.createInitialState('counter', source);
+    source.emittedEventTypes = [];
+    source.nextEventId = () => 'changed-event';
+
+    expect(received?.emittedEventTypes).toEqual(['fortune.revealed']);
+    expect(received?.nextEventId).not.toBe(callback);
+    expect(Object.isFrozen(received)).toBe(true);
+    expect(Object.isFrozen(received?.emittedEventTypes)).toBe(true);
+    expect(Object.isFrozen(received?.nextEventId)).toBe(true);
+    expect(received?.nextEventId()).toBe('event-1');
   });
 
   it('isolates definition input and state input from implementation mutation', () => {
@@ -251,6 +280,94 @@ describe('TownActivityRegistry execution boundary', () => {
 
     expect(() =>
       registry.resultEvents('counter', { count: 0 }, context()),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+  });
+
+  it('validates fortune lifecycle events by activity instance ID', () => {
+    const registry = new TownActivityRegistry().register(
+      definition({
+        resultEvents: (_state, activityContext) => [
+          TownEventSchema.parse({
+            id: activityContext.nextEventId(),
+            sessionId: activityContext.sessionId,
+            sequence: activityContext.lastEventSequence + 1,
+            baseVersion: activityContext.baseVersion,
+            type: 'fortune.revealed',
+            zoneId: activityContext.zoneId,
+            participantIds: activityContext.participantIds,
+            timestamp: activityContext.now,
+            payload: {
+              activityInstanceId: activityContext.activityInstanceId,
+              fortuneId: 'selected-fortune',
+              rank: 'good',
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(
+      registry.resultEvents('counter', { count: 0 }, context()),
+    ).toHaveLength(1);
+    const mismatched = new TownActivityRegistry().register(
+      definition({
+        resultEvents: (_state, activityContext) => [
+          TownEventSchema.parse({
+            id: activityContext.nextEventId(),
+            sessionId: activityContext.sessionId,
+            sequence: activityContext.lastEventSequence + 1,
+            baseVersion: activityContext.baseVersion,
+            type: 'fortune.revealed',
+            zoneId: activityContext.zoneId,
+            participantIds: activityContext.participantIds,
+            timestamp: activityContext.now,
+            payload: {
+              activityInstanceId: 'other-activity',
+              fortuneId: 'selected-fortune',
+              rank: 'good',
+            },
+          }),
+        ],
+      }),
+    );
+    expect(() =>
+      mismatched.resultEvents('counter', { count: 0 }, context()),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+  });
+
+  it('validates fortune start events by the new activity instance field', () => {
+    const registryFor = (activityInstanceId: string) =>
+      new TownActivityRegistry().register(
+        definition({
+          resultEvents: (_state, activityContext) => [
+            TownEventSchema.parse({
+              id: activityContext.nextEventId(),
+              sessionId: activityContext.sessionId,
+              sequence: activityContext.lastEventSequence + 1,
+              baseVersion: activityContext.baseVersion,
+              type: 'fortune.started',
+              zoneId: activityContext.zoneId,
+              participantIds: activityContext.participantIds,
+              timestamp: activityContext.now,
+              payload: { activityInstanceId },
+            }),
+          ],
+        }),
+      );
+
+    expect(
+      registryFor('activity-1').resultEvents(
+        'counter',
+        { count: 0 },
+        context(),
+      ),
+    ).toHaveLength(1);
+    expect(() =>
+      registryFor('other-activity').resultEvents(
+        'counter',
+        { count: 0 },
+        context(),
+      ),
     ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
   });
 

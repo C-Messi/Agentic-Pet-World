@@ -11,6 +11,8 @@ export interface TownActivityTool {
   type: string;
 }
 
+export type FortuneResultEventType = 'fortune.revealed' | 'fortune.interpreted';
+
 export interface ActivityContext {
   sessionId: string;
   activityInstanceId: string;
@@ -19,6 +21,7 @@ export interface ActivityContext {
   participantIds: readonly string[];
   zoneId: TownZoneId;
   now: string;
+  emittedEventTypes: readonly FortuneResultEventType[];
   nextEventId(): string;
 }
 
@@ -89,6 +92,9 @@ const ContextSchema = z
     participantIds: z.array(IdentifierSchema).min(1).max(4),
     zoneId: TownZoneIdSchema,
     now: z.string().datetime({ offset: true }),
+    emittedEventTypes: z
+      .array(z.enum(['fortune.revealed', 'fortune.interpreted']))
+      .max(2),
     nextEventId: z.custom<() => string>((value) => typeof value === 'function'),
   })
   .strict();
@@ -115,9 +121,13 @@ function parseContext(
   value: ActivityContext,
   definition: AnyDefinition,
 ): ActivityContext {
+  const sourceNextEventId = value.nextEventId;
+  const nextEventId = Object.freeze(() => sourceNextEventId());
   const result = ContextSchema.safeParse({
     ...value,
     participantIds: [...value.participantIds],
+    emittedEventTypes: [...value.emittedEventTypes],
+    nextEventId,
   });
   if (!result.success) {
     throw registryError(
@@ -131,6 +141,25 @@ function parseContext(
     throw registryError(
       'invalid-context',
       'Activity participants must be unique',
+    );
+  }
+  if (
+    new Set(parsed.emittedEventTypes).size !== parsed.emittedEventTypes.length
+  ) {
+    throw registryError(
+      'invalid-context',
+      'Emitted activity event types must be unique',
+    );
+  }
+  if (
+    (parsed.emittedEventTypes.length >= 1 &&
+      parsed.emittedEventTypes[0] !== 'fortune.revealed') ||
+    (parsed.emittedEventTypes.length === 2 &&
+      parsed.emittedEventTypes[1] !== 'fortune.interpreted')
+  ) {
+    throw registryError(
+      'invalid-context',
+      'Emitted activity event types must follow semantic order',
     );
   }
   if (parsed.participantIds.length > definition.capacity) {
@@ -167,9 +196,10 @@ function referencedActivityId(event: TownEvent): string | undefined {
     case 'residents.played':
       return event.payload.activityInstanceId;
     case 'fortune.started':
+      return event.payload.activityInstanceId;
     case 'fortune.revealed':
     case 'fortune.interpreted':
-      return event.payload.fortuneId;
+      return event.payload.activityInstanceId;
     case 'build.started':
       return event.payload.modificationId;
     case 'build.completed':
