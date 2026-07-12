@@ -46,7 +46,8 @@ export class TownEventRepository {
 
       if (storedRow !== undefined) {
         const stored = this.parseRow(storedRow);
-        if (storedRow.event_json !== eventJson) {
+        const storedJson = serializeJsonCompatible(stored, TownEventSchema);
+        if (storedJson !== eventJson) {
           throw new Error(`Town event conflict: ${parsed.sessionId}/${parsed.id}`);
         }
         return { inserted: insert.changes === 1, sequence: stored.sequence };

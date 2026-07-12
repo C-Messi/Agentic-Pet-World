@@ -19,8 +19,6 @@ CREATE TABLE town_events (
   UNIQUE (session_id, sequence)
 );
 
-CREATE INDEX town_events_session_sequence_idx
-  ON town_events(session_id, sequence);
 CREATE INDEX town_events_session_created_idx
   ON town_events(session_id, created_at, event_id);
 
@@ -68,13 +66,11 @@ CREATE TABLE town_outings (
     REFERENCES town_residents(session_id, resident_id) ON DELETE CASCADE
 );
 
-CREATE INDEX town_outings_active_idx
-  ON town_outings(session_id, resident_id, updated_at);
-
 CREATE TABLE town_recovery_windows (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   recovery_window_id TEXT NOT NULL,
   outing_json TEXT NOT NULL CHECK (json_valid(outing_json)),
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, recovery_window_id)
 );
