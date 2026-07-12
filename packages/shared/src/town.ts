@@ -157,6 +157,15 @@ function boundedJsonSchema(depth: number): z.ZodType<TownJsonValue> {
   ]);
   if (depth === 0) return primitive;
   const child = boundedJsonSchema(depth - 1);
+  const array = z.preprocess(
+    (value) => {
+      if (Array.isArray(value) && Reflect.ownKeys(value).some((key) => !isJsonArrayKey(key))) {
+        return Symbol('invalid-json-array');
+      }
+      return value;
+    },
+    z.array(child).max(32),
+  );
   const object = z.preprocess(
     (value) => {
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -172,7 +181,14 @@ function boundedJsonSchema(depth: number): z.ZodType<TownJsonValue> {
       }
     }),
   );
-  return z.union([primitive, z.array(child).max(32), object]) as z.ZodType<TownJsonValue>;
+  return z.union([primitive, array, object]) as z.ZodType<TownJsonValue>;
+}
+
+function isJsonArrayKey(key: string | symbol): boolean {
+  if (key === 'length') return true;
+  if (typeof key === 'symbol' || !/^(0|[1-9][0-9]*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < 4_294_967_295;
 }
 
 export const TownActivityStateSchema = boundedJsonSchema(5);
@@ -418,12 +434,28 @@ function validateEvents(events: readonly z.infer<typeof TownEventSchema>[], cont
 
 function validateProjectionEventsResponse(value: { projection: z.infer<typeof TownProjectionSchema>; events: z.infer<typeof TownEventSchema>[] }, context: z.RefinementCtx) {
   const residents = new Set(value.projection.residents.map(({ residentId }) => residentId));
+  const activities = new Map(value.projection.activities.map((activity) => [activity.id, activity]));
   value.events.forEach((townEvent, index) => {
     if (townEvent.sessionId !== value.projection.sessionId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event session does not match projection', path: ['events', index, 'sessionId'] });
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
     if (townEvent.sequence > value.projection.lastEventSequence) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event sequence is ahead of the projection', path: ['events', index, 'sequence'] });
     townEvent.participantIds.forEach((id) => { if (!residents.has(id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown resident', path: ['events', index, 'participantIds'] }); });
+    if (townEvent.type === 'residents.played' && !activities.has(townEvent.payload.activityInstanceId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
   });
+  validateEventTransitionChain(value, context);
+}
+
+function validateEventTransitionChain(value: { projection: z.infer<typeof TownProjectionSchema>; events: z.infer<typeof TownEventSchema>[] }, context: z.RefinementCtx) {
+  if (value.events.length === 0) return;
+  for (let index = 1; index < value.events.length; index += 1) {
+    const previous = value.events[index - 1]!;
+    const current = value.events[index]!;
+    if (current.sequence !== previous.sequence + 1) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event sequences must be ascending and contiguous', path: ['events', index, 'sequence'] });
+    if (current.baseVersion !== previous.baseVersion + 1) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base versions must progress by one', path: ['events', index, 'baseVersion'] });
+  }
+  const last = value.events[value.events.length - 1]!;
+  if (last.sequence !== value.projection.lastEventSequence) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Final event sequence must match the projection', path: ['events', value.events.length - 1, 'sequence'] });
+  if (last.baseVersion + 1 !== value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Final event version must produce the projection version', path: ['events', value.events.length - 1, 'baseVersion'] });
 }
 
 function validateCardEventReferences(value: { events: z.infer<typeof TownEventSchema>[]; experienceCards: z.infer<typeof ExperienceCardSchema>[] }, context: z.RefinementCtx) {

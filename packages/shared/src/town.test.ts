@@ -255,6 +255,24 @@ describe('activity state', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects arrays with non-JSON own properties while accepting normal arrays', () => {
+    const symbolState = [1, 2] as unknown[] & Record<PropertyKey, unknown>;
+    symbolState[Symbol('hidden')] = 'not-json';
+    const namedState = [1, 2] as unknown[] & Record<PropertyKey, unknown>;
+    namedState.metadata = 'not-json';
+    const base = {
+      id: 'activity-1',
+      activityId: 'chess',
+      zoneId: 'arcade-house',
+      participantIds: ['resident-1'],
+      version: 1,
+    };
+
+    expect(TownActivityInstanceSchema.parse({ ...base, state: [1, null, true] }).state).toEqual([1, null, true]);
+    expect(() => TownActivityInstanceSchema.parse({ ...base, state: symbolState })).toThrow();
+    expect(() => TownActivityInstanceSchema.parse({ ...base, state: namedState })).toThrow();
+  });
 });
 
 describe('public town responses', () => {
@@ -279,6 +297,39 @@ describe('public town responses', () => {
       TownAdvanceResponseSchema.parse({
         projection: validProjection,
         events: [{ ...event, sequence: 2 }],
+      }),
+    ).toThrow();
+  });
+
+  it('requires ordered contiguous event sequences and version progression', () => {
+    const secondEvent = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+    };
+    const finalProjection = { ...validProjection, version: 4, lastEventSequence: 2 };
+
+    expect(TownAdvanceResponseSchema.parse({ projection: finalProjection, events: [event, secondEvent] }).events).toHaveLength(2);
+    expect(() => TownAdvanceResponseSchema.parse({ projection: finalProjection, events: [secondEvent, event] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection: finalProjection, events: [event, { ...secondEvent, sequence: 3 }] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection: finalProjection, events: [event, { ...secondEvent, baseVersion: 4 }] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection: { ...finalProjection, version: 5 }, events: [event, secondEvent] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection: { ...finalProjection, lastEventSequence: 3 }, events: [event, secondEvent] })).toThrow();
+    expect(TownAdvanceResponseSchema.parse({ projection: validProjection, events: [] }).events).toEqual([]);
+  });
+
+  it('rejects played events referencing an activity absent from the projection', () => {
+    expect(() =>
+      TownAdvanceResponseSchema.parse({
+        projection: validProjection,
+        events: [
+          {
+            ...event,
+            type: 'residents.played',
+            payload: { activityInstanceId: 'missing-activity' },
+          },
+        ],
       }),
     ).toThrow();
   });
