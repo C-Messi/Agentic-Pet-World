@@ -1,17 +1,27 @@
 import { PetDefinitionSchema, type PetDefinition } from '@cat-house/shared';
 
-import { PLAYER_PET_DEFINITION, RESIDENT_DEFINITIONS } from './residents.js';
+import { createAuthoredPetDefinitions } from './residents.js';
 
-function deepFreeze<T>(value: T): T {
+export type DeepReadonly<T> = T extends (...arguments_: never[]) => unknown
+  ? T
+  : T extends readonly (infer Item)[]
+    ? readonly DeepReadonly<Item>[]
+    : T extends object
+      ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+      : T;
+
+export type ReadonlyPetDefinition = DeepReadonly<PetDefinition>;
+
+function deepFreeze<T>(value: T): DeepReadonly<T> {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
-    return value;
+    return value as DeepReadonly<T>;
   }
 
   for (const nestedValue of Object.values(value)) {
     deepFreeze(nestedValue);
   }
 
-  return Object.freeze(value);
+  return Object.freeze(value) as DeepReadonly<T>;
 }
 
 function duplicateError(field: string, value: string): Error {
@@ -19,9 +29,9 @@ function duplicateError(field: string, value: string): Error {
 }
 
 export class PetCatalog {
-  readonly #definitions: readonly PetDefinition[];
-  readonly #byId: ReadonlyMap<string, PetDefinition>;
-  readonly #playerPet: PetDefinition;
+  readonly #definitions: readonly ReadonlyPetDefinition[];
+  readonly #byId: ReadonlyMap<string, ReadonlyPetDefinition>;
+  readonly #playerPet: ReadonlyPetDefinition;
 
   constructor(definitions: readonly PetDefinition[]) {
     const parsedDefinitions = definitions.map((definition) =>
@@ -37,14 +47,17 @@ export class PetCatalog {
       }
       ids.add(definition.id);
 
-      const normalizedDisplayName = definition.displayName.trim().toLowerCase();
+      const normalizedDisplayName = definition.displayName
+        .trim()
+        .normalize('NFC')
+        .toLowerCase();
       if (displayNames.has(normalizedDisplayName)) {
         throw duplicateError('display name', definition.displayName);
       }
       displayNames.add(normalizedDisplayName);
 
       if (spriteIds.has(definition.spriteId)) {
-        throw duplicateError('sprite id', definition.spriteId);
+        throw duplicateError('sprite ID', definition.spriteId);
       }
       spriteIds.add(definition.spriteId);
     }
@@ -66,11 +79,11 @@ export class PetCatalog {
     this.#playerPet = playerPets[0]!;
   }
 
-  get(id: string): PetDefinition | undefined {
+  get(id: string): ReadonlyPetDefinition | undefined {
     return this.#byId.get(id);
   }
 
-  require(id: string): PetDefinition {
+  require(id: string): ReadonlyPetDefinition {
     const definition = this.get(id);
     if (definition === undefined) {
       throw new Error(`Pet definition not found: ${id}`);
@@ -78,21 +91,22 @@ export class PetCatalog {
     return definition;
   }
 
-  list(): readonly PetDefinition[] {
+  list(): readonly ReadonlyPetDefinition[] {
     return this.#definitions;
   }
 
-  playerPet(): PetDefinition {
+  playerPet(): ReadonlyPetDefinition {
     return this.#playerPet;
   }
 }
 
-export const DEFAULT_PET_DEFINITIONS: readonly PetDefinition[] = deepFreeze(
-  [PLAYER_PET_DEFINITION, ...RESIDENT_DEFINITIONS].map((definition) =>
-    PetDefinitionSchema.parse(structuredClone(definition)),
-  ),
-);
+export const DEFAULT_PET_DEFINITIONS: readonly ReadonlyPetDefinition[] =
+  deepFreeze(
+    createAuthoredPetDefinitions().map((definition) =>
+      PetDefinitionSchema.parse(structuredClone(definition)),
+    ),
+  );
 
 export function createDefaultPetCatalog(): PetCatalog {
-  return new PetCatalog(DEFAULT_PET_DEFINITIONS);
+  return new PetCatalog(createAuthoredPetDefinitions());
 }

@@ -1,12 +1,14 @@
 import { PetDefinitionSchema, type PetDefinition } from '@cat-house/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   createDefaultPetCatalog,
   DEFAULT_PET_DEFINITIONS,
+  type DeepReadonly,
   PetCatalog,
+  type ReadonlyPetDefinition,
 } from './pet-catalog.js';
-import { PLAYER_PET_DEFINITION, RESIDENT_DEFINITIONS } from './residents.js';
+import { createAuthoredPetDefinitions } from './residents.js';
 
 function expectDeeplyFrozen(value: unknown): void {
   if (value === null || typeof value !== 'object') {
@@ -19,8 +21,16 @@ function expectDeeplyFrozen(value: unknown): void {
   }
 }
 
-function mutableClone(definition: PetDefinition): PetDefinition {
-  return structuredClone(definition);
+function mutableClone(definition: ReadonlyPetDefinition): PetDefinition {
+  return structuredClone(definition) as PetDefinition;
+}
+
+function defaultPlayerPet(): ReadonlyPetDefinition {
+  return DEFAULT_PET_DEFINITIONS.find(({ source }) => source === 'player-pet')!;
+}
+
+function defaultResident(): ReadonlyPetDefinition {
+  return DEFAULT_PET_DEFINITIONS.find(({ source }) => source === 'resident')!;
 }
 
 describe('default pet definitions', () => {
@@ -32,16 +42,15 @@ describe('default pet definitions', () => {
     expect(
       DEFAULT_PET_DEFINITIONS.filter(({ source }) => source === 'resident'),
     ).toHaveLength(4);
-    expect(PLAYER_PET_DEFINITION).toMatchObject({
+    expect(defaultPlayerPet()).toMatchObject({
       id: 'player-cat',
       source: 'player-pet',
       spriteId: 'player-cat',
     });
     expect(
-      RESIDENT_DEFINITIONS.map(({ displayName, spriteId }) => [
-        displayName,
-        spriteId,
-      ]),
+      DEFAULT_PET_DEFINITIONS.filter(({ source }) => source === 'resident').map(
+        ({ displayName, spriteId }) => [displayName, spriteId],
+      ),
     ).toEqual([
       ['Mikan', 'orange-cat'],
       ['Huihui', 'gray-cat'],
@@ -88,6 +97,24 @@ describe('default pet definitions', () => {
       }
     }
   });
+
+  it('is deeply frozen and isolated from mutable authored factory results', () => {
+    expectDeeplyFrozen(DEFAULT_PET_DEFINITIONS);
+    expect(() => {
+      (DEFAULT_PET_DEFINITIONS[0]!.palette as { primary: string }).primary =
+        '#000000';
+    }).toThrow(TypeError);
+
+    const authoredDefinitions = createAuthoredPetDefinitions();
+    authoredDefinitions[0]!.displayName = 'Changed authored name';
+    authoredDefinitions[0]!.palette.primary = '#000000';
+    authoredDefinitions.push(mutableClone(defaultResident()));
+
+    const catalog = createDefaultPetCatalog();
+    expect(catalog.list()).toHaveLength(5);
+    expect(catalog.playerPet().displayName).toBe('Sunny');
+    expect(catalog.playerPet().palette.primary).toBe('#E9953D');
+  });
 });
 
 describe('PetCatalog', () => {
@@ -124,11 +151,38 @@ describe('PetCatalog', () => {
       (requiredPet.palette as { primary: string }).primary = '#000000';
     }).toThrow(TypeError);
     expect(() => {
-      (catalog.list() as PetDefinition[]).push(requiredPet);
+      (catalog.list() as PetDefinition[]).push(requiredPet as PetDefinition);
     }).toThrow(TypeError);
     expect(catalog.require('resident-mikan').palette.primary).not.toBe(
       '#000000',
     );
+  });
+
+  it('exposes recursively readonly result types', () => {
+    const catalog = createDefaultPetCatalog();
+
+    expectTypeOf(catalog.get('resident-mikan')).toEqualTypeOf<
+      ReadonlyPetDefinition | undefined
+    >();
+    expectTypeOf(
+      catalog.require('resident-mikan'),
+    ).toEqualTypeOf<ReadonlyPetDefinition>();
+    expectTypeOf(catalog.list()).toEqualTypeOf<
+      readonly ReadonlyPetDefinition[]
+    >();
+    expectTypeOf(catalog.playerPet()).toEqualTypeOf<ReadonlyPetDefinition>();
+    expectTypeOf(DEFAULT_PET_DEFINITIONS).toEqualTypeOf<
+      readonly ReadonlyPetDefinition[]
+    >();
+    expectTypeOf(catalog.playerPet().palette).toEqualTypeOf<
+      DeepReadonly<PetDefinition['palette']>
+    >();
+    expectTypeOf(catalog.playerPet().voice.catchphrases).toEqualTypeOf<
+      readonly string[]
+    >();
+    expectTypeOf(catalog.playerPet().interests).toEqualTypeOf<
+      readonly string[]
+    >();
   });
 
   it('isolates catalog state from later mutations to constructor input', () => {
@@ -137,7 +191,7 @@ describe('PetCatalog', () => {
 
     definitions[0]!.displayName = 'Changed outside';
     definitions[0]!.palette.primary = '#000000';
-    definitions.push(mutableClone(RESIDENT_DEFINITIONS[0]!));
+    definitions.push(mutableClone(defaultResident()));
 
     expect(catalog.playerPet().displayName).not.toBe('Changed outside');
     expect(catalog.playerPet().palette.primary).not.toBe('#000000');
@@ -148,55 +202,73 @@ describe('PetCatalog', () => {
     [
       'id',
       (definition: PetDefinition) => ({ ...definition, id: 'player-cat' }),
+      'Duplicate pet id: player-cat',
     ],
     [
-      'spriteId',
+      'sprite ID',
       (definition: PetDefinition) => ({
         ...definition,
         spriteId: 'player-cat',
       }),
+      'Duplicate pet sprite ID: player-cat',
     ],
     [
       'display name',
       (definition: PetDefinition) => ({
         ...definition,
-        displayName: `  ${PLAYER_PET_DEFINITION.displayName.toUpperCase()}  `,
+        displayName: `  ${defaultPlayerPet().displayName.toUpperCase()}  `,
       }),
+      'Duplicate pet display name: SUNNY',
     ],
-  ])('rejects duplicate %s values', (_field, makeDuplicate) => {
-    const duplicate = makeDuplicate(mutableClone(RESIDENT_DEFINITIONS[0]!));
+  ])('rejects duplicate %s values', (_field, makeDuplicate, expectedError) => {
+    const duplicate = makeDuplicate(mutableClone(defaultResident()));
 
     expect(
-      () => new PetCatalog([mutableClone(PLAYER_PET_DEFINITION), duplicate]),
-    ).toThrow(/Duplicate pet/);
+      () => new PetCatalog([mutableClone(defaultPlayerPet()), duplicate]),
+    ).toThrowError(expectedError);
+  });
+
+  it('rejects canonically equivalent display names', () => {
+    const playerPet = {
+      ...mutableClone(defaultPlayerPet()),
+      displayName: 'Caf\u00e9',
+    };
+    const resident = {
+      ...mutableClone(defaultResident()),
+      displayName: 'Cafe\u0301',
+    };
+
+    expect(() => new PetCatalog([playerPet, resident])).toThrowError(
+      'Duplicate pet display name: Cafe\u0301',
+    );
   });
 
   it('parses every constructor input through PetDefinitionSchema', () => {
-    const invalid = { ...mutableClone(PLAYER_PET_DEFINITION), species: '' };
+    const invalid = { ...mutableClone(defaultPlayerPet()), species: '' };
 
     expect(
-      () => new PetCatalog([invalid, mutableClone(RESIDENT_DEFINITIONS[0]!)]),
+      () => new PetCatalog([invalid, mutableClone(defaultResident())]),
     ).toThrow();
   });
 
   it('requires exactly one player pet and at least one resident', () => {
-    expect(
-      () => new PetCatalog([mutableClone(RESIDENT_DEFINITIONS[0]!)]),
-    ).toThrow('Pet catalog requires exactly one player pet');
+    expect(() => new PetCatalog([mutableClone(defaultResident())])).toThrow(
+      'Pet catalog requires exactly one player pet',
+    );
     expect(
       () =>
         new PetCatalog([
-          mutableClone(PLAYER_PET_DEFINITION),
+          mutableClone(defaultPlayerPet()),
           {
-            ...mutableClone(PLAYER_PET_DEFINITION),
+            ...mutableClone(defaultPlayerPet()),
             id: 'second-player',
             displayName: 'Second Player',
             spriteId: 'second-player',
           },
-          mutableClone(RESIDENT_DEFINITIONS[0]!),
+          mutableClone(defaultResident()),
         ]),
     ).toThrow('Pet catalog requires exactly one player pet');
-    expect(() => new PetCatalog([mutableClone(PLAYER_PET_DEFINITION)])).toThrow(
+    expect(() => new PetCatalog([mutableClone(defaultPlayerPet())])).toThrow(
       'Pet catalog requires at least one resident',
     );
   });

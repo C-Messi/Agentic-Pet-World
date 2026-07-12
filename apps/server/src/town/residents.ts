@@ -1,6 +1,6 @@
 import type { PetDefinition } from '@cat-house/shared';
 
-export const PLAYER_PET_DEFINITION: PetDefinition = {
+const PLAYER_PET_DEFINITION: PetDefinition = {
   schemaVersion: 'pet-definition.v1',
   id: 'player-cat',
   displayName: 'Sunny',
@@ -27,7 +27,7 @@ export const PLAYER_PET_DEFINITION: PetDefinition = {
     'A warm orange cat who enjoys exploring the town alongside new friends.',
 };
 
-export const RESIDENT_DEFINITIONS: readonly PetDefinition[] = [
+const RESIDENT_DEFINITIONS: readonly PetDefinition[] = [
   {
     schemaVersion: 'pet-definition.v1',
     id: 'resident-mikan',
@@ -138,3 +138,7 @@ export const RESIDENT_DEFINITIONS: readonly PetDefinition[] = [
       'A reserved maker who likes turning careful plans into useful things for the town.',
   },
 ];
+
+export function createAuthoredPetDefinitions(): PetDefinition[] {
+  return structuredClone([PLAYER_PET_DEFINITION, ...RESIDENT_DEFINITIONS]);
+}
