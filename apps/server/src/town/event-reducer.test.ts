@@ -1,0 +1,480 @@
+import {
+  TownEventSchema,
+  TownProjectionSchema,
+  type TownEvent,
+  type TownProjection,
+} from '@cat-house/shared';
+import { describe, expect, it } from 'vitest';
+
+import { reduceTownEvent } from './event-reducer.js';
+
+const timestamp = '2026-07-13T08:00:00.000Z';
+
+function pet(id: string, source: 'player-pet' | 'resident') {
+  return {
+    schemaVersion: 'pet-definition.v1' as const,
+    id,
+    displayName: id,
+    source,
+    species: 'cat',
+    spriteId: id,
+    palette: {
+      primary: '#112233' as const,
+      secondary: '#445566' as const,
+      accent: '#778899' as const,
+    },
+    personality: {
+      curiosity: 0.5,
+      sociability: 0.5,
+      playfulness: 0.5,
+      creativity: 0.5,
+    },
+    voice: { style: 'Plain', catchphrases: [] },
+    interests: [],
+    publicBio: 'A town cat.',
+  };
+}
+
+function projection(): TownProjection {
+  return TownProjectionSchema.parse({
+    sessionId: 'session-1',
+    version: 2,
+    lastEventSequence: 4,
+    residents: [
+      {
+        residentId: 'player',
+        pet: pet('player-pet', 'player-pet'),
+        position: { x: 1, y: 1 },
+        zoneId: 'plaza',
+        availability: 'available',
+      },
+      {
+        residentId: 'huihui',
+        pet: pet('huihui-pet', 'resident'),
+        position: { x: 2, y: 1 },
+        zoneId: 'plaza',
+        availability: 'available',
+      },
+      {
+        residentId: 'doubao',
+        pet: pet('doubao-pet', 'resident'),
+        position: { x: 3, y: 1 },
+        zoneId: 'plaza',
+        availability: 'available',
+      },
+    ],
+    relationships: [],
+    modifications: [],
+    activities: [],
+  });
+}
+
+function event(
+  type: TownEvent['type'],
+  payload: unknown,
+  options: { participants?: string[]; zoneId?: string; id?: string } = {},
+): TownEvent {
+  return TownEventSchema.parse({
+    id: options.id ?? `event-${type.replace('.', '-')}`,
+    sessionId: 'session-1',
+    sequence: 5,
+    baseVersion: 2,
+    type,
+    zoneId: options.zoneId ?? 'plaza',
+    participantIds: options.participants ?? ['player'],
+    timestamp,
+    payload,
+  });
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    Object.freeze(value);
+    for (const nested of Object.values(value)) deepFreeze(nested);
+  }
+  return value;
+}
+
+describe('reduceTownEvent', () => {
+  it('moves a referenced resident without mutating a frozen projection', () => {
+    const input = deepFreeze(projection());
+    const before = structuredClone(input);
+    const result = reduceTownEvent(
+      input,
+      event(
+        'resident.moved',
+        {
+          residentId: 'player',
+          position: { x: 9, y: 7 },
+        },
+        { zoneId: 'garden' },
+      ),
+    );
+
+    expect(result.residents[0]).toMatchObject({
+      position: { x: 9, y: 7 },
+      zoneId: 'garden',
+    });
+    expect(input).toEqual(before);
+    expect(result).not.toBe(input);
+    expect(result.residents).not.toBe(input.residents);
+  });
+
+  it('applies version-only speech and increments version exactly once', () => {
+    const input = projection();
+    const result = reduceTownEvent(
+      input,
+      event('resident.spoke', { residentId: 'player', text: 'Hello' }),
+    );
+
+    expect(result).toEqual({ ...input, version: 3, lastEventSequence: 5 });
+  });
+
+  it('updates only the referenced played activity version and preserves bounded state', () => {
+    const input = TownProjectionSchema.parse({
+      ...projection(),
+      residents: projection().residents.map((resident) =>
+        ['player', 'huihui'].includes(resident.residentId)
+          ? { ...resident, availability: 'busy', activityInstanceId: 'play-1' }
+          : resident,
+      ),
+      activities: [
+        {
+          id: 'play-1',
+          activityId: 'social-play',
+          zoneId: 'plaza',
+          participantIds: ['player', 'huihui'],
+          version: 7,
+          state: { rounds: [1, null, true] },
+        },
+      ],
+    });
+    const result = reduceTownEvent(
+      input,
+      event(
+        'residents.played',
+        { activityInstanceId: 'play-1' },
+        { participants: ['player', 'huihui'] },
+      ),
+    );
+
+    expect(result.activities[0]).toEqual({
+      ...input.activities[0],
+      version: 8,
+    });
+  });
+
+  it('starts, reveals, and interprets a fortune using explicit protocol state', () => {
+    const started = reduceTownEvent(
+      projection(),
+      event(
+        'fortune.started',
+        { fortuneId: 'fortune-1' },
+        { participants: ['player', 'huihui'], zoneId: 'fortune-pavilion' },
+      ),
+    );
+    expect(started.activities[0]).toEqual({
+      id: 'fortune-1',
+      activityId: 'fortune-draw',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['player', 'huihui'],
+      version: 1,
+      state: { status: 'started' },
+    });
+    expect(
+      started.residents
+        .slice(0, 2)
+        .every(({ availability }) => availability === 'busy'),
+    ).toBe(true);
+
+    const revealedEvent = {
+      ...event(
+        'fortune.revealed',
+        { fortuneId: 'fortune-1', reading: 'Bright skies' },
+        { participants: ['player', 'huihui'], zoneId: 'fortune-pavilion' },
+      ),
+      baseVersion: 3,
+      sequence: 6,
+    };
+    const revealed = reduceTownEvent(started, revealedEvent);
+    expect(revealed.activities[0]?.state).toEqual({
+      status: 'revealed',
+      reading: 'Bright skies',
+    });
+
+    const interpretedEvent = {
+      ...event(
+        'fortune.interpreted',
+        { fortuneId: 'fortune-1', interpretation: 'Try something new' },
+        { participants: ['player', 'huihui'], zoneId: 'fortune-pavilion' },
+      ),
+      baseVersion: 4,
+      sequence: 7,
+    };
+    const interpreted = reduceTownEvent(revealed, interpretedEvent);
+    expect(interpreted.activities[0]?.state).toEqual({
+      status: 'interpreted',
+      reading: 'Bright skies',
+      interpretation: 'Try something new',
+    });
+    expect(interpreted.activities[0]?.version).toBe(3);
+  });
+
+  it('tracks a build start and adds the exact completed modification once', () => {
+    const started = reduceTownEvent(
+      projection(),
+      event(
+        'build.started',
+        { modificationId: 'mod-1', recipeId: 'stone-path', plotId: 'plot-1' },
+        { zoneId: 'build-plots' },
+      ),
+    );
+    expect(started.activities[0]).toMatchObject({
+      id: 'mod-1',
+      activityId: 'build:stone-path',
+      version: 1,
+    });
+
+    const modification = {
+      id: 'mod-1',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 4, y: 5 }],
+      atlasFrame: 2,
+      collision: false,
+    };
+    const completed = reduceTownEvent(started, {
+      ...event('build.completed', { modification }, { zoneId: 'build-plots' }),
+      baseVersion: 3,
+      sequence: 6,
+    });
+    expect(completed.modifications).toEqual([modification]);
+    expect(completed.activities).toEqual([]);
+    expect(completed.residents[0]).toMatchObject({ availability: 'available' });
+  });
+
+  it('opens, visits, and closes a stall while maintaining activity membership', () => {
+    const opened = reduceTownEvent(
+      projection(),
+      event(
+        'stall.opened',
+        { stallId: 'stall-1', showcaseItemIds: ['item-1'] },
+        { zoneId: 'market' },
+      ),
+    );
+    expect(opened.activities[0]).toEqual({
+      id: 'stall-1',
+      activityId: 'showcase-stall',
+      zoneId: 'market',
+      participantIds: ['player'],
+      version: 1,
+      state: { status: 'open', showcaseItemIds: ['item-1'] },
+    });
+
+    const visited = reduceTownEvent(opened, {
+      ...event(
+        'stall.visited',
+        { stallId: 'stall-1', visitorResidentId: 'huihui' },
+        { participants: ['huihui'], zoneId: 'market' },
+      ),
+      baseVersion: 3,
+      sequence: 6,
+    });
+    expect(visited.activities[0]?.state).toEqual({
+      status: 'open',
+      showcaseItemIds: ['item-1'],
+      lastVisitorResidentId: 'huihui',
+    });
+    expect(
+      visited.residents.find(({ residentId }) => residentId === 'huihui'),
+    ).toMatchObject({ availability: 'available' });
+
+    const closed = reduceTownEvent(visited, {
+      ...event('stall.closed', { stallId: 'stall-1' }, { zoneId: 'market' }),
+      baseVersion: 4,
+      sequence: 7,
+    });
+    expect(closed.activities).toEqual([]);
+    expect(closed.residents[0]).toMatchObject({ availability: 'available' });
+  });
+
+  it('starts and returns a player outing without touching other residents', () => {
+    const started = reduceTownEvent(
+      projection(),
+      event('outing.started', { residentId: 'player' }, { zoneId: 'gate' }),
+    );
+    expect(started.residents[0]).toMatchObject({
+      zoneId: 'gate',
+      availability: 'available',
+    });
+    const returned = reduceTownEvent(started, {
+      ...event(
+        'outing.returned',
+        { residentId: 'player' },
+        { zoneId: 'plaza' },
+      ),
+      baseVersion: 3,
+      sequence: 6,
+    });
+    expect(returned.residents[0]).toMatchObject({
+      zoneId: 'plaza',
+      availability: 'available',
+    });
+    expect(returned.residents.slice(1)).toEqual(
+      projection().residents.slice(1),
+    );
+  });
+
+  it('stores absolute relationship affinity with stable unordered identity and source', () => {
+    const first = reduceTownEvent(
+      projection(),
+      event(
+        'relationship.changed',
+        { residentIdA: 'huihui', residentIdB: 'player', affinity: 1 },
+        { participants: ['huihui', 'player'], id: 'relationship-event' },
+      ),
+    );
+    expect(first.relationships).toEqual([
+      {
+        residentIdA: 'huihui',
+        residentIdB: 'player',
+        affinity: 1,
+        sourceEventId: 'relationship-event',
+        sourceVersion: 3,
+      },
+    ]);
+
+    const changed = reduceTownEvent(first, {
+      ...event(
+        'relationship.changed',
+        { residentIdA: 'player', residentIdB: 'huihui', affinity: -1 },
+        { participants: ['player', 'huihui'], id: 'relationship-event-2' },
+      ),
+      baseVersion: 3,
+      sequence: 6,
+    });
+    expect(changed.relationships).toEqual([
+      {
+        residentIdA: 'huihui',
+        residentIdB: 'player',
+        affinity: -1,
+        sourceEventId: 'relationship-event-2',
+        sourceVersion: 4,
+      },
+    ]);
+  });
+
+  it('preserves an existing relationship pair identity regardless of payload order', () => {
+    const input = TownProjectionSchema.parse({
+      ...projection(),
+      relationships: [
+        {
+          residentIdA: 'player',
+          residentIdB: 'huihui',
+          affinity: 0.2,
+          sourceEventId: 'old-event',
+          sourceVersion: 2,
+        },
+      ],
+    });
+    const result = reduceTownEvent(
+      input,
+      event(
+        'relationship.changed',
+        { residentIdA: 'huihui', residentIdB: 'player', affinity: 0.7 },
+        { participants: ['huihui', 'player'], id: 'new-event' },
+      ),
+    );
+
+    expect(result.relationships).toEqual([
+      {
+        residentIdA: 'player',
+        residentIdB: 'huihui',
+        affinity: 0.7,
+        sourceEventId: 'new-event',
+        sourceVersion: 3,
+      },
+    ]);
+  });
+
+  it.each([
+    ['session', { sessionId: 'other-session' }],
+    ['base version', { baseVersion: 1 }],
+    ['sequence', { sequence: 9 }],
+  ])('rejects a wrong %s', (_label, override) => {
+    expect(() =>
+      reduceTownEvent(projection(), {
+        ...event('resident.spoke', { residentId: 'player', text: 'Hi' }),
+        ...override,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects missing resident and activity references with domain errors', () => {
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event(
+          'resident.moved',
+          { residentId: 'missing', position: { x: 1, y: 1 } },
+          { participants: ['missing'] },
+        ),
+      ),
+    ).toThrow(/resident not found/i);
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event('residents.played', { activityInstanceId: 'missing' }),
+      ),
+    ).toThrow(/activity not found/i);
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event('fortune.revealed', { fortuneId: 'missing', reading: 'No' }),
+      ),
+    ).toThrow(/activity not found/i);
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event('stall.closed', { stallId: 'missing' }),
+      ),
+    ).toThrow(/activity not found/i);
+  });
+
+  it('rejects duplicate modification IDs and occupied cells', () => {
+    const existing = {
+      id: 'mod-1',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 1, y: 1 }],
+      atlasFrame: 1,
+      collision: false,
+    };
+    const input = TownProjectionSchema.parse({
+      ...projection(),
+      modifications: [existing],
+    });
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event('build.completed', { modification: existing }),
+      ),
+    ).toThrow(/modification.*already exists/i);
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event('build.completed', {
+          modification: { ...existing, id: 'mod-2' },
+        }),
+      ),
+    ).toThrow(/occupied cell/i);
+  });
+
+  it('returns schema-valid output for every accepted event', () => {
+    const result = reduceTownEvent(
+      projection(),
+      event('resident.spoke', { residentId: 'player', text: 'Valid' }),
+    );
+    expect(TownProjectionSchema.parse(result)).toEqual(result);
+  });
+});
