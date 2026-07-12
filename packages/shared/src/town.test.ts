@@ -8,6 +8,7 @@ import {
   TownActivityInstanceSchema,
   TownAdvanceResponseSchema,
   TownEventSchema,
+  TownEventTypeSchema,
   TownHistoryResponseSchema,
   TownIntentSchema,
   TownProjectionSchema,
@@ -69,6 +70,23 @@ const buildCompletedEvent = {
   type: 'build.completed',
   zoneId: 'build-plots',
   payload: { modification: completedModification },
+} as const;
+
+const startedActivity = {
+  id: 'activity-social-1',
+  activityId: 'social-play',
+  zoneId: 'garden',
+  participantIds: ['resident-1', 'resident-2'],
+  version: 0,
+  state: { round: 0, prompt: 'Find something green.' },
+} as const;
+
+const activityStartedEvent = {
+  ...event,
+  type: 'activity.started',
+  zoneId: 'garden',
+  participantIds: ['resident-1', 'resident-2'],
+  payload: { activity: startedActivity },
 } as const;
 
 const validProjection = {
@@ -227,6 +245,26 @@ describe('town projection', () => {
 });
 
 describe('town events and intents', () => {
+  it('exposes the exhaustive town event type union', () => {
+    expect(TownEventTypeSchema.options).toEqual([
+      'resident.moved',
+      'resident.spoke',
+      'residents.played',
+      'activity.started',
+      'fortune.started',
+      'fortune.revealed',
+      'fortune.interpreted',
+      'build.started',
+      'build.completed',
+      'stall.opened',
+      'stall.visited',
+      'stall.closed',
+      'outing.started',
+      'outing.returned',
+      'relationship.changed',
+    ]);
+  });
+
   it('rejects payload/type mismatches, duplicate participants, and extra fields', () => {
     expect(() =>
       TownEventSchema.parse({ ...event, payload: { residentId: 'resident-1', text: 'Hi' } }),
@@ -282,6 +320,24 @@ describe('town events and intents', () => {
           recipeId: 'conflicting-recipe',
           plotId: 'conflicting-plot',
         },
+      }),
+    ).toThrow();
+  });
+
+  it('accepts a strict bounded generic activity start payload', () => {
+    const parsed = TownEventSchema.parse(activityStartedEvent);
+
+    expect(parsed.payload).toEqual({ activity: startedActivity });
+    expect(() =>
+      TownEventSchema.parse({
+        ...activityStartedEvent,
+        payload: { activity: startedActivity, plugin: 'arbitrary-code' },
+      }),
+    ).toThrow();
+    expect(() =>
+      TownEventSchema.parse({
+        ...activityStartedEvent,
+        payload: { activity: { ...startedActivity, version: -1 } },
       }),
     ).toThrow();
   });
@@ -442,6 +498,83 @@ describe('public town responses', () => {
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1', 'resident-3'] }] })).toThrow();
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1', 'resident-2', 'resident-3'] }] })).toThrow();
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, zoneId: 'plaza' }] })).toThrow();
+  });
+
+  it('validates a generic activity start against participants, zone, and final projection', () => {
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      position: { x: 1, y: 1 },
+      zoneId: 'garden',
+      availability: 'busy',
+      activityInstanceId: startedActivity.id,
+    }));
+    const finalProjection = {
+      ...validProjection,
+      residents: busyResidents,
+      activities: [startedActivity],
+    };
+
+    expect(TownAdvanceResponseSchema.parse({
+      projection: finalProjection,
+      events: [activityStartedEvent],
+    }).events).toHaveLength(1);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: finalProjection,
+      events: [{ ...activityStartedEvent, participantIds: ['resident-1'] }],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: finalProjection,
+      events: [{ ...activityStartedEvent, zoneId: 'plaza' }],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...finalProjection, residents: [resident, npcResident], activities: [] },
+      events: [activityStartedEvent],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...finalProjection,
+        activities: [{ ...startedActivity, state: { round: 1 } }],
+      },
+      events: [activityStartedEvent],
+    })).toThrow();
+  });
+
+  it('rejects duplicate or observably preexisting activity starts', () => {
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      zoneId: 'garden',
+      availability: 'busy',
+      activityInstanceId: startedActivity.id,
+    }));
+    const projection = {
+      ...validProjection,
+      version: 4,
+      lastEventSequence: 2,
+      residents: busyResidents,
+      activities: [startedActivity],
+    };
+    const secondStart = {
+      ...activityStartedEvent,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+    };
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection,
+      events: [activityStartedEvent, secondStart],
+    })).toThrow();
+
+    const priorPlay = {
+      ...event,
+      type: 'residents.played',
+      zoneId: 'garden',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: startedActivity.id },
+    };
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection,
+      events: [priorPlay, secondStart],
+    })).toThrow();
   });
 
   it('requires completed modifications to match the final projection canonically', () => {

@@ -27,6 +27,7 @@ export const TownEventTypeSchema = z.enum([
   'resident.moved',
   'resident.spoke',
   'residents.played',
+  'activity.started',
   'fortune.started',
   'fortune.revealed',
   'fortune.interpreted',
@@ -248,6 +249,7 @@ export const TownEventSchema = z.discriminatedUnion('type', [
   event('resident.moved', z.object({ residentId: IdentifierSchema, position: PositionSchema }).strict()),
   event('resident.spoke', z.object({ residentId: IdentifierSchema, text: TextSchema }).strict()),
   event('residents.played', z.object({ activityInstanceId: IdentifierSchema }).strict()),
+  event('activity.started', z.object({ activity: TownActivityInstanceSchema }).strict()),
   event('fortune.started', FortunePayload),
   event('fortune.revealed', z.object({ fortuneId: IdentifierSchema, reading: TextSchema }).strict()),
   event('fortune.interpreted', z.object({ fortuneId: IdentifierSchema, interpretation: TextSchema }).strict()),
@@ -267,6 +269,10 @@ export const TownEventSchema = z.discriminatedUnion('type', [
     }
   }
   if (value.type === 'stall.opened') addDuplicateIssues(value.payload.showcaseItemIds, context, ['payload', 'showcaseItemIds']);
+  if (value.type === 'activity.started') {
+    if (!sameIdentifierSet(value.participantIds, value.payload.activity.participantIds)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity start participants must exactly match the activity', path: ['participantIds'] });
+    if (value.zoneId !== value.payload.activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity start zone must match the activity', path: ['zoneId'] });
+  }
 });
 export type TownEvent = z.infer<typeof TownEventSchema>;
 
@@ -438,6 +444,13 @@ function eventResidentIds(value: z.infer<typeof TownEventSchema>): string[] {
 function validateEvents(events: readonly z.infer<typeof TownEventSchema>[], context: z.RefinementCtx) {
   addDuplicateIssues(events.map(({ id }) => id), context);
   addDuplicateIssues(events.map(({ sequence }) => String(sequence)), context);
+  const startedActivityIds = new Set<string>();
+  events.forEach((townEvent, index) => {
+    if (townEvent.type !== 'activity.started') return;
+    const activityId = townEvent.payload.activity.id;
+    if (startedActivityIds.has(activityId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: [index, 'payload', 'activity', 'id'] });
+    startedActivityIds.add(activityId);
+  });
 }
 
 function validateProjectionEventsResponse(value: { projection: z.infer<typeof TownProjectionSchema>; events: z.infer<typeof TownEventSchema>[] }, context: z.RefinementCtx) {
@@ -446,6 +459,8 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const finalModifications = new Map(value.projection.modifications.map((modification) => [modification.id, modification]));
   const completedModificationIds = new Set<string>();
   const completedOccupiedCells = new Set<string>();
+  const startedActivityIds = new Set<string>();
+  const previouslyReferencedActivityIds = new Set<string>();
   value.events.forEach((townEvent, index) => {
     if (townEvent.sessionId !== value.projection.sessionId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event session does not match projection', path: ['events', index, 'sessionId'] });
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
@@ -461,6 +476,16 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         if (!participantsMatch) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event participants must exactly match the activity', path: ['events', index, 'participantIds'] });
         if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event zone must match the activity', path: ['events', index, 'zoneId'] });
       }
+      previouslyReferencedActivityIds.add(townEvent.payload.activityInstanceId);
+    }
+    if (townEvent.type === 'activity.started') {
+      const { activity } = townEvent.payload;
+      const finalActivity = activities.get(activity.id);
+      if (!finalActivity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity is missing from the final projection', path: ['events', index, 'payload', 'activity', 'id'] });
+      else if (!activitiesEqual(activity, finalActivity)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity does not match the final projection', path: ['events', index, 'payload', 'activity'] });
+      if (startedActivityIds.has(activity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: ['events', index, 'payload', 'activity', 'id'] });
+      if (previouslyReferencedActivityIds.has(activity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity was referenced before its start event', path: ['events', index, 'payload', 'activity', 'id'] });
+      startedActivityIds.add(activity.id);
     }
     if (townEvent.type === 'build.completed') {
       const { modification } = townEvent.payload;
@@ -477,6 +502,37 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     }
   });
   validateEventTransitionChain(value, context);
+}
+
+function sameIdentifierSet(left: readonly string[], right: readonly string[]): boolean {
+  const rightIds = new Set(right);
+  return left.length === rightIds.size && left.every((id) => rightIds.has(id));
+}
+
+function activitiesEqual(
+  left: z.infer<typeof TownActivityInstanceSchema>,
+  right: z.infer<typeof TownActivityInstanceSchema>,
+): boolean {
+  return left.id === right.id
+    && left.activityId === right.activityId
+    && left.zoneId === right.zoneId
+    && left.version === right.version
+    && sameIdentifierSet(left.participantIds, right.participantIds)
+    && jsonValuesEqual(left.state, right.state);
+}
+
+function jsonValuesEqual(left: TownJsonValue, right: TownJsonValue): boolean {
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return left === right;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((value, index) => jsonValuesEqual(value, right[index]!));
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index] && jsonValuesEqual(left[key]!, right[key]!));
 }
 
 function modificationsEqual(
