@@ -168,6 +168,77 @@ describe('TownSimulationService candidates and selection', () => {
     );
   });
 
+  it('weights curiosity, playfulness, and creativity for their matching intents', () => {
+    const town = projection();
+    const comparisons: readonly [TownIntent, TownIntent][] = [
+      [
+        { type: 'visit-zone', actorId: 'reserved', zoneId: 'garden' },
+        { type: 'visit-zone', actorId: 'huihui', zoneId: 'garden' },
+      ],
+      [
+        {
+          type: 'start-activity',
+          actorId: 'reserved',
+          activityId: 'fortune-draw',
+          invitedResidentIds: [],
+        },
+        {
+          type: 'start-activity',
+          actorId: 'huihui',
+          activityId: 'fortune-draw',
+          invitedResidentIds: [],
+        },
+      ],
+      [
+        {
+          type: 'start-activity',
+          actorId: 'reserved',
+          activityId: 'social-play',
+          invitedResidentIds: [],
+        },
+        {
+          type: 'start-activity',
+          actorId: 'huihui',
+          activityId: 'social-play',
+          invitedResidentIds: [],
+        },
+      ],
+      [
+        {
+          type: 'build',
+          actorId: 'reserved',
+          recipeId: 'stone-path',
+          plotId: 'plot-1',
+        },
+        {
+          type: 'build',
+          actorId: 'huihui',
+          recipeId: 'stone-path',
+          plotId: 'plot-1',
+        },
+      ],
+      [
+        {
+          type: 'open-stall',
+          actorId: 'reserved',
+          stallId: 'stall-reserved',
+          showcaseItemIds: ['reserved-item'],
+        },
+        {
+          type: 'open-stall',
+          actorId: 'huihui',
+          stallId: 'stall-huihui',
+          showcaseItemIds: ['huihui-item'],
+        },
+      ],
+    ];
+    for (const [higher, lower] of comparisons) {
+      expect(townIntentWeight(town, higher)).toBeGreaterThan(
+        townIntentWeight(town, lower),
+      );
+    }
+  });
+
   it('selects deterministically with injected clamped random values', () => {
     expect(service(-10).select(projection(), 'huihui')).toEqual(
       service(-10).candidates(projection(), 'huihui')[0],
@@ -208,6 +279,27 @@ describe('TownSimulationService candidates and selection', () => {
         .candidates(home, 'player')
         .some(({ type }) => type === 'return-home'),
     ).toBe(false);
+  });
+
+  it('filters candidates whose derived destination is inaccessible', () => {
+    const restricted = new TownSimulationService(ports(), {
+      accessibleZones: ['plaza'],
+      activities: [
+        { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 2 },
+        { id: 'social-play', zoneId: 'arcade-house', capacity: 3 },
+      ],
+      recipes: ['stone-path'],
+      buildPlots: ['plot-1'],
+      publicShowcaseItemIds: () => ['item-1'],
+    });
+    const types = restricted
+      .candidates(projection(), 'player')
+      .map(({ type }) => type);
+    expect(types).toContain('socialize');
+    expect(types).not.toContain('start-activity');
+    expect(types).not.toContain('build');
+    expect(types).not.toContain('open-stall');
+    expect(types).not.toContain('return-home');
   });
 });
 
@@ -333,6 +425,128 @@ describe('TownSimulationService validation', () => {
         showcaseItemIds: ['item-1', 'item-2', 'item-3', 'item-4'],
       }),
     ).toThrow();
+  });
+
+  it('rejects an actor included among invitees', () => {
+    expect(() =>
+      service().validateIntent(projection(), {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: ['huihui'],
+      }),
+    ).toThrow(/actor|invited/i);
+  });
+
+  it('rejects a disabled activity and a busy invitee', () => {
+    const disabled = new TownSimulationService(ports(), {
+      activities: [
+        {
+          id: 'social-play',
+          zoneId: 'arcade-house',
+          capacity: 3,
+          enabled: false,
+        },
+      ],
+    });
+    expect(() =>
+      disabled.validateIntent(projection(), {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: [],
+      }),
+    ).toThrow(/unavailable/i);
+
+    const busy = TownProjectionSchema.parse({
+      ...projection(),
+      residents: projection().residents.map((resident) =>
+        resident.residentId === 'reserved'
+          ? { ...resident, availability: 'busy', activityInstanceId: 'busy-1' }
+          : resident,
+      ),
+      activities: [
+        {
+          id: 'busy-1',
+          activityId: 'social-play',
+          zoneId: 'plaza',
+          participantIds: ['reserved'],
+          version: 0,
+          state: {},
+        },
+      ],
+    });
+    expect(() =>
+      service().validateIntent(busy, {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: ['reserved'],
+      }),
+    ).toThrow(/unavailable|busy/i);
+  });
+
+  it('rejects an already-home player return', () => {
+    const home = TownProjectionSchema.parse({
+      ...projection(),
+      residents: projection().residents.map((resident) =>
+        resident.residentId === 'player'
+          ? { ...resident, zoneId: 'gate' }
+          : resident,
+      ),
+    });
+    expect(() =>
+      service().validateIntent(home, {
+        type: 'return-home',
+        actorId: 'player',
+      }),
+    ).toThrow(/already home/i);
+  });
+
+  it.each<TownIntent>([
+    { type: 'socialize', actorId: 'huihui', targetResidentId: 'player' },
+    {
+      type: 'start-activity',
+      actorId: 'huihui',
+      activityId: 'fortune-draw',
+      invitedResidentIds: [],
+    },
+    {
+      type: 'start-activity',
+      actorId: 'huihui',
+      activityId: 'social-play',
+      invitedResidentIds: [],
+    },
+    {
+      type: 'build',
+      actorId: 'huihui',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+    },
+    {
+      type: 'open-stall',
+      actorId: 'player',
+      stallId: 'stall-1',
+      showcaseItemIds: ['item-1'],
+    },
+    { type: 'return-home', actorId: 'player' },
+  ])('rejects $type when its derived destination is inaccessible', (intent) => {
+    const restricted = new TownSimulationService(ports(), {
+      accessibleZones: ['garden'],
+      activities: [
+        { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 2 },
+        { id: 'social-play', zoneId: 'arcade-house', capacity: 3 },
+      ],
+      recipes: ['stone-path'],
+      buildPlots: ['plot-1'],
+      publicShowcaseItemIds: () => ['item-1'],
+    });
+    expect(() => restricted.validateIntent(projection(), intent)).toThrow(
+      /inaccessible/i,
+    );
+    expect(() => restricted.createEvents(projection(), intent)).toThrow(
+      /inaccessible/i,
+    );
   });
 
   it('rejects busy actors and targets', () => {

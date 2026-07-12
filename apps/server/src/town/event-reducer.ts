@@ -32,6 +32,38 @@ function requireActivity(
   return activity ?? domainError(`activity not found: ${activityId}`);
 }
 
+function requireFreshActivityId(
+  projection: TownProjection,
+  activityId: string,
+): void {
+  if (projection.activities.some(({ id }) => id === activityId)) {
+    domainError(`activity already exists: ${activityId}`);
+  }
+}
+
+function assertActivityTransition(
+  activity: TownActivityInstance,
+  event: TownEvent,
+  expectedActivityId: string,
+): void {
+  if (activity.activityId !== expectedActivityId) {
+    domainError(
+      `activity kind mismatch: expected ${expectedActivityId}, received ${activity.activityId}`,
+    );
+  }
+  if (
+    event.participantIds.length !== activity.participantIds.length ||
+    !event.participantIds.every((residentId) =>
+      activity.participantIds.includes(residentId),
+    )
+  ) {
+    domainError('event participants do not match activity participants');
+  }
+  if (event.zoneId === undefined || event.zoneId !== activity.zoneId) {
+    domainError('event zone does not match activity zone');
+  }
+}
+
 function jsonObject(state: TownJsonValue): Record<string, TownJsonValue> {
   return state !== null && typeof state === 'object' && !Array.isArray(state)
     ? state
@@ -145,19 +177,18 @@ export function reduceTownEvent(
         next,
         parsedEvent.payload.activityInstanceId,
       );
+      assertActivityTransition(activity, parsedEvent, 'social-play');
       activity.version += 1;
       break;
     }
     case 'fortune.started': {
-      const existing = next.activities.find(
-        ({ id }) => id === parsedEvent.payload.fortuneId,
-      );
+      requireFreshActivityId(next, parsedEvent.payload.fortuneId);
       const activity: TownActivityInstance = {
         id: parsedEvent.payload.fortuneId,
         activityId: 'fortune-draw',
-        zoneId: parsedEvent.zoneId ?? existing?.zoneId ?? 'fortune-pavilion',
+        zoneId: parsedEvent.zoneId ?? 'fortune-pavilion',
         participantIds: [...parsedEvent.participantIds],
-        version: existing === undefined ? 1 : existing.version + 1,
+        version: 1,
         state: { status: 'started' },
       };
       upsertActivity(next, activity);
@@ -165,6 +196,7 @@ export function reduceTownEvent(
     }
     case 'fortune.revealed': {
       const activity = requireActivity(next, parsedEvent.payload.fortuneId);
+      assertActivityTransition(activity, parsedEvent, 'fortune-draw');
       activity.version += 1;
       activity.state = {
         ...jsonObject(activity.state),
@@ -175,6 +207,7 @@ export function reduceTownEvent(
     }
     case 'fortune.interpreted': {
       const activity = requireActivity(next, parsedEvent.payload.fortuneId);
+      assertActivityTransition(activity, parsedEvent, 'fortune-draw');
       activity.version += 1;
       activity.state = {
         ...jsonObject(activity.state),
@@ -184,15 +217,22 @@ export function reduceTownEvent(
       break;
     }
     case 'build.started': {
-      const existing = next.activities.find(
-        ({ id }) => id === parsedEvent.payload.modificationId,
-      );
+      requireFreshActivityId(next, parsedEvent.payload.modificationId);
+      if (
+        next.modifications.some(
+          ({ id }) => id === parsedEvent.payload.modificationId,
+        )
+      ) {
+        domainError(
+          `modification already exists: ${parsedEvent.payload.modificationId}`,
+        );
+      }
       const activity: TownActivityInstance = {
         id: parsedEvent.payload.modificationId,
         activityId: `build:${parsedEvent.payload.recipeId}`,
-        zoneId: parsedEvent.zoneId ?? existing?.zoneId ?? 'build-plots',
+        zoneId: parsedEvent.zoneId ?? 'build-plots',
         participantIds: [...parsedEvent.participantIds],
-        version: existing === undefined ? 1 : existing.version + 1,
+        version: 1,
         state: {
           status: 'started',
           modificationId: parsedEvent.payload.modificationId,
@@ -203,27 +243,40 @@ export function reduceTownEvent(
       upsertActivity(next, activity);
       break;
     }
-    case 'build.completed':
+    case 'build.completed': {
       assertModificationCanBeAdded(next, parsedEvent);
+      const buildActivity = next.activities.find(
+        ({ id }) => id === parsedEvent.payload.modification.id,
+      );
+      if (buildActivity !== undefined) {
+        const { modification } = parsedEvent.payload;
+        assertActivityTransition(
+          buildActivity,
+          parsedEvent,
+          `build:${modification.recipeId}`,
+        );
+        const state = jsonObject(buildActivity.state);
+        if (state.modificationId !== modification.id)
+          domainError('build modification ID does not match started activity');
+        if (state.recipeId !== modification.recipeId)
+          domainError('build recipe does not match started activity');
+        if (state.plotId !== modification.plotId)
+          domainError('build plot does not match started activity');
+      }
       next.modifications.push(parsedEvent.payload.modification);
-      if (
-        next.activities.some(
-          ({ id }) => id === parsedEvent.payload.modification.id,
-        )
-      ) {
+      if (buildActivity !== undefined) {
         closeActivity(next, parsedEvent.payload.modification.id);
       }
       break;
+    }
     case 'stall.opened': {
-      const existing = next.activities.find(
-        ({ id }) => id === parsedEvent.payload.stallId,
-      );
+      requireFreshActivityId(next, parsedEvent.payload.stallId);
       const activity: TownActivityInstance = {
         id: parsedEvent.payload.stallId,
         activityId: 'showcase-stall',
-        zoneId: parsedEvent.zoneId ?? existing?.zoneId ?? 'market',
+        zoneId: parsedEvent.zoneId ?? 'market',
         participantIds: [...parsedEvent.participantIds],
-        version: existing === undefined ? 1 : existing.version + 1,
+        version: 1,
         state: {
           status: 'open',
           showcaseItemIds: [...parsedEvent.payload.showcaseItemIds],
@@ -235,6 +288,7 @@ export function reduceTownEvent(
     case 'stall.visited': {
       requireResident(next, parsedEvent.payload.visitorResidentId);
       const activity = requireActivity(next, parsedEvent.payload.stallId);
+      assertActivityTransition(activity, parsedEvent, 'showcase-stall');
       activity.version += 1;
       activity.state = {
         ...jsonObject(activity.state),
@@ -242,9 +296,12 @@ export function reduceTownEvent(
       };
       break;
     }
-    case 'stall.closed':
+    case 'stall.closed': {
+      const activity = requireActivity(next, parsedEvent.payload.stallId);
+      assertActivityTransition(activity, parsedEvent, 'showcase-stall');
       closeActivity(next, parsedEvent.payload.stallId);
       break;
+    }
     case 'outing.started':
     case 'outing.returned': {
       const resident = requireResident(next, parsedEvent.payload.residentId);

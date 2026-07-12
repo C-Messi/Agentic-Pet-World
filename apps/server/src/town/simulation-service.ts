@@ -151,6 +151,34 @@ export class TownSimulationService {
     this.#publicShowcaseItemIds = options.publicShowcaseItemIds ?? (() => []);
   }
 
+  #destinationZone(projection: TownProjection, intent: TownIntent): TownZoneId {
+    switch (intent.type) {
+      case 'socialize':
+        return requireResident(projection, intent.actorId).zoneId;
+      case 'visit-zone':
+        return intent.zoneId;
+      case 'start-activity': {
+        const definition = this.#activities.find(
+          ({ id }) => id === intent.activityId,
+        );
+        return (
+          definition?.zoneId ??
+          reject(`activity unavailable: ${intent.activityId}`)
+        );
+      }
+      case 'build':
+        return 'build-plots';
+      case 'open-stall':
+        return 'market';
+      case 'return-home':
+        return 'gate';
+      default: {
+        const exhaustive: never = intent;
+        return exhaustive;
+      }
+    }
+  }
+
   candidates(
     projection: Readonly<TownProjection>,
     residentId: string,
@@ -218,7 +246,11 @@ export class TownSimulationService {
     if (actor.pet.source === 'player-pet' && actor.zoneId !== 'gate') {
       candidates.push({ type: 'return-home', actorId: actor.residentId });
     }
-    return candidates.map((intent) => TownIntentSchema.parse(intent));
+    return candidates
+      .filter((intent) =>
+        this.#zones.includes(this.#destinationZone(parsed, intent)),
+      )
+      .map((intent) => TownIntentSchema.parse(intent));
   }
 
   validateIntent(
@@ -276,6 +308,10 @@ export class TownSimulationService {
         const exhaustive: never = parsedIntent;
         return exhaustive;
       }
+    }
+    const destination = this.#destinationZone(parsedProjection, parsedIntent);
+    if (!this.#zones.includes(destination)) {
+      reject(`inaccessible destination zone: ${destination}`);
     }
     return TownIntentSchema.parse(parsedIntent);
   }

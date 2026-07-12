@@ -87,6 +87,26 @@ function event(
   });
 }
 
+function projectionWithActivity(
+  activity: TownProjection['activities'][number],
+): TownProjection {
+  const participantIds = new Set(activity.participantIds);
+  return TownProjectionSchema.parse({
+    ...projection(),
+    residents: projection().residents.map((resident) =>
+      participantIds.has(resident.residentId)
+        ? {
+            ...resident,
+            zoneId: activity.zoneId,
+            availability: 'busy',
+            activityInstanceId: activity.id,
+          }
+        : resident,
+    ),
+    activities: [activity],
+  });
+}
+
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') {
     Object.freeze(value);
@@ -164,6 +184,34 @@ describe('reduceTownEvent', () => {
     });
   });
 
+  it.each([
+    ['cross-kind', 'fortune-draw', ['player', 'huihui'], 'plaza'],
+    ['wrong participants', 'social-play', ['player'], 'plaza'],
+    ['wrong zone', 'social-play', ['player', 'huihui'], 'garden'],
+  ] as const)(
+    'rejects a %s played transition',
+    (_label, activityId, participants, zoneId) => {
+      const input = projectionWithActivity({
+        id: 'play-1',
+        activityId,
+        zoneId: 'plaza',
+        participantIds: ['player', 'huihui'],
+        version: 1,
+        state: {},
+      });
+      expect(() =>
+        reduceTownEvent(
+          input,
+          event(
+            'residents.played',
+            { activityInstanceId: 'play-1' },
+            { participants: [...participants], zoneId },
+          ),
+        ),
+      ).toThrow(/activity kind|participants|zone/i);
+    },
+  );
+
   it('starts, reveals, and interprets a fortune using explicit protocol state', () => {
     const started = reduceTownEvent(
       projection(),
@@ -220,6 +268,124 @@ describe('reduceTownEvent', () => {
     expect(interpreted.activities[0]?.version).toBe(3);
   });
 
+  it.each([
+    ['cross-kind', 'social-play', ['player', 'huihui'], 'fortune-pavilion'],
+    ['wrong participants', 'fortune-draw', ['player'], 'fortune-pavilion'],
+    ['wrong zone', 'fortune-draw', ['player', 'huihui'], 'garden'],
+  ] as const)(
+    'rejects a %s fortune transition',
+    (_label, activityId, participants, zoneId) => {
+      const input = projectionWithActivity({
+        id: 'fortune-1',
+        activityId,
+        zoneId: 'fortune-pavilion',
+        participantIds: ['player', 'huihui'],
+        version: 1,
+        state: { status: 'started' },
+      });
+      expect(() =>
+        reduceTownEvent(
+          input,
+          event(
+            'fortune.revealed',
+            { fortuneId: 'fortune-1', reading: 'No' },
+            { participants: [...participants], zoneId },
+          ),
+        ),
+      ).toThrow(/activity kind|participants|zone/i);
+    },
+  );
+
+  it('rejects duplicate fortune, build, and stall starts', () => {
+    const fortune = projectionWithActivity({
+      id: 'fortune-1',
+      activityId: 'fortune-draw',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['player'],
+      version: 1,
+      state: {},
+    });
+    expect(() =>
+      reduceTownEvent(
+        fortune,
+        event(
+          'fortune.started',
+          { fortuneId: 'fortune-1' },
+          { zoneId: 'fortune-pavilion' },
+        ),
+      ),
+    ).toThrow(/already exists/i);
+    const build = projectionWithActivity({
+      id: 'mod-1',
+      activityId: 'build:stone-path',
+      zoneId: 'build-plots',
+      participantIds: ['player'],
+      version: 1,
+      state: {
+        modificationId: 'mod-1',
+        recipeId: 'stone-path',
+        plotId: 'plot-1',
+      },
+    });
+    expect(() =>
+      reduceTownEvent(
+        build,
+        event(
+          'build.started',
+          { modificationId: 'mod-1', recipeId: 'stone-path', plotId: 'plot-1' },
+          { zoneId: 'build-plots' },
+        ),
+      ),
+    ).toThrow(/already exists/i);
+    const stall = projectionWithActivity({
+      id: 'stall-1',
+      activityId: 'showcase-stall',
+      zoneId: 'market',
+      participantIds: ['player'],
+      version: 1,
+      state: {},
+    });
+    expect(() =>
+      reduceTownEvent(
+        stall,
+        event(
+          'stall.opened',
+          { stallId: 'stall-1', showcaseItemIds: ['item-1'] },
+          { zoneId: 'market' },
+        ),
+      ),
+    ).toThrow(/already exists/i);
+  });
+
+  it('rejects a build start whose modification ID is already durable', () => {
+    const modification = {
+      id: 'mod-1',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 1, y: 1 }],
+      atlasFrame: 1,
+      collision: false,
+    };
+    const input = TownProjectionSchema.parse({
+      ...projection(),
+      modifications: [modification],
+    });
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event(
+          'build.started',
+          {
+            modificationId: 'mod-1',
+            recipeId: 'stone-path',
+            plotId: 'plot-1',
+          },
+          { zoneId: 'build-plots' },
+        ),
+      ),
+    ).toThrow(/modification already exists/i);
+  });
+
   it('tracks a build start and adds the exact completed modification once', () => {
     const started = reduceTownEvent(
       projection(),
@@ -253,20 +419,92 @@ describe('reduceTownEvent', () => {
     expect(completed.residents[0]).toMatchObject({ availability: 'available' });
   });
 
+  it('rejects build completion kind, recipe, plot, participant, and zone mismatches', () => {
+    const modification = {
+      id: 'mod-1',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 4, y: 5 }],
+      atlasFrame: 2,
+      collision: false,
+    };
+    const baseActivity = {
+      id: 'mod-1',
+      activityId: 'build:stone-path',
+      zoneId: 'build-plots' as const,
+      participantIds: ['player'],
+      version: 1,
+      state: {
+        status: 'started',
+        modificationId: 'mod-1',
+        recipeId: 'stone-path',
+        plotId: 'plot-1',
+      },
+    };
+    const cases = [
+      {
+        activity: { ...baseActivity, activityId: 'social-play' },
+        modification,
+        participants: ['player'],
+        zoneId: 'build-plots',
+      },
+      {
+        activity: baseActivity,
+        modification: { ...modification, recipeId: 'flower-patch' },
+        participants: ['player'],
+        zoneId: 'build-plots',
+      },
+      {
+        activity: baseActivity,
+        modification: { ...modification, plotId: 'plot-2' },
+        participants: ['player'],
+        zoneId: 'build-plots',
+      },
+      {
+        activity: baseActivity,
+        modification,
+        participants: ['huihui'],
+        zoneId: 'build-plots',
+      },
+      {
+        activity: baseActivity,
+        modification,
+        participants: ['player'],
+        zoneId: 'garden',
+      },
+    ];
+    for (const transition of cases) {
+      const input = projectionWithActivity(transition.activity);
+      expect(() =>
+        reduceTownEvent(
+          input,
+          event(
+            'build.completed',
+            { modification: transition.modification },
+            {
+              participants: transition.participants,
+              zoneId: transition.zoneId,
+            },
+          ),
+        ),
+      ).toThrow(/activity kind|recipe|plot|participants|zone/i);
+    }
+  });
+
   it('opens, visits, and closes a stall while maintaining activity membership', () => {
     const opened = reduceTownEvent(
       projection(),
       event(
         'stall.opened',
         { stallId: 'stall-1', showcaseItemIds: ['item-1'] },
-        { zoneId: 'market' },
+        { participants: ['player', 'huihui'], zoneId: 'market' },
       ),
     );
     expect(opened.activities[0]).toEqual({
       id: 'stall-1',
       activityId: 'showcase-stall',
       zoneId: 'market',
-      participantIds: ['player'],
+      participantIds: ['player', 'huihui'],
       version: 1,
       state: { status: 'open', showcaseItemIds: ['item-1'] },
     });
@@ -275,7 +513,7 @@ describe('reduceTownEvent', () => {
       ...event(
         'stall.visited',
         { stallId: 'stall-1', visitorResidentId: 'huihui' },
-        { participants: ['huihui'], zoneId: 'market' },
+        { participants: ['huihui', 'player'], zoneId: 'market' },
       ),
       baseVersion: 3,
       sequence: 6,
@@ -287,16 +525,48 @@ describe('reduceTownEvent', () => {
     });
     expect(
       visited.residents.find(({ residentId }) => residentId === 'huihui'),
-    ).toMatchObject({ availability: 'available' });
+    ).toMatchObject({ availability: 'busy', activityInstanceId: 'stall-1' });
 
     const closed = reduceTownEvent(visited, {
-      ...event('stall.closed', { stallId: 'stall-1' }, { zoneId: 'market' }),
+      ...event(
+        'stall.closed',
+        { stallId: 'stall-1' },
+        { participants: ['player', 'huihui'], zoneId: 'market' },
+      ),
       baseVersion: 4,
       sequence: 7,
     });
     expect(closed.activities).toEqual([]);
     expect(closed.residents[0]).toMatchObject({ availability: 'available' });
   });
+
+  it.each([
+    ['cross-kind', 'fortune-draw', ['player', 'huihui'], 'market'],
+    ['wrong participants', 'showcase-stall', ['huihui'], 'market'],
+    ['wrong zone', 'showcase-stall', ['player', 'huihui'], 'garden'],
+  ] as const)(
+    'rejects a %s stall visit',
+    (_label, activityId, participants, zoneId) => {
+      const input = projectionWithActivity({
+        id: 'stall-1',
+        activityId,
+        zoneId: 'market',
+        participantIds: ['player', 'huihui'],
+        version: 1,
+        state: { status: 'open' },
+      });
+      expect(() =>
+        reduceTownEvent(
+          input,
+          event(
+            'stall.visited',
+            { stallId: 'stall-1', visitorResidentId: 'huihui' },
+            { participants: [...participants], zoneId },
+          ),
+        ),
+      ).toThrow(/activity kind|participants|zone/i);
+    },
+  );
 
   it('starts and returns a player outing without touching other residents', () => {
     const started = reduceTownEvent(
