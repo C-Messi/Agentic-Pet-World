@@ -444,16 +444,16 @@ describe('public town responses', () => {
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, zoneId: 'plaza' }] })).toThrow();
   });
 
-  it('rejects completed modifications that conflict with the included projection', () => {
+  it('requires completed modifications to match the final projection canonically', () => {
     expect(
       TownAdvanceResponseSchema.parse({
-        projection: validProjection,
+        projection: { ...validProjection, modifications: [completedModification] },
         events: [buildCompletedEvent],
       }).events,
     ).toHaveLength(1);
     expect(() =>
       TownAdvanceResponseSchema.parse({
-        projection: { ...validProjection, modifications: [completedModification] },
+        projection: validProjection,
         events: [buildCompletedEvent],
       }),
     ).toThrow();
@@ -461,11 +461,70 @@ describe('public town responses', () => {
       TownAdvanceResponseSchema.parse({
         projection: {
           ...validProjection,
-          modifications: [{ ...completedModification, id: 'existing-modification' }],
+          modifications: [{ ...completedModification, atlasFrame: 13 }],
         },
         events: [buildCompletedEvent],
       }),
     ).toThrow();
+    expect(() =>
+      TownAdvanceResponseSchema.parse({
+        projection: {
+          ...validProjection,
+          modifications: [{
+            ...completedModification,
+            occupiedCells: [...completedModification.occupiedCells].reverse(),
+          }],
+        },
+        events: [buildCompletedEvent],
+      }),
+    ).toThrow();
+  });
+
+  it('reports duplicate completed IDs and cells at the second event payload', () => {
+    const duplicateIdEvent = {
+      ...buildCompletedEvent,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+    };
+    const duplicateIdResult = TownAdvanceResponseSchema.safeParse({
+      projection: {
+        ...validProjection,
+        version: 4,
+        lastEventSequence: 2,
+        modifications: [completedModification],
+      },
+      events: [buildCompletedEvent, duplicateIdEvent],
+    });
+    expect(duplicateIdResult.success).toBe(false);
+    if (duplicateIdResult.success) throw new Error('Expected duplicate modification ID');
+    expect(duplicateIdResult.error.issues.some(({ path }) =>
+      path.join('.') === 'events.1.payload.modification.id',
+    )).toBe(true);
+
+    const overlappingModification = {
+      ...completedModification,
+      id: 'mod-completed-2',
+      occupiedCells: [{ x: 3, y: 3 }, { x: 4, y: 3 }],
+    };
+    const overlappingEvent = {
+      ...duplicateIdEvent,
+      payload: { modification: overlappingModification },
+    };
+    const overlapResult = TownAdvanceResponseSchema.safeParse({
+      projection: {
+        ...validProjection,
+        version: 4,
+        lastEventSequence: 2,
+        modifications: [completedModification, overlappingModification],
+      },
+      events: [buildCompletedEvent, overlappingEvent],
+    });
+    expect(overlapResult.success).toBe(false);
+    if (overlapResult.success) throw new Error('Expected occupied-cell conflict');
+    expect(overlapResult.error.issues.some(({ path }) =>
+      path.join('.') === 'events.1.payload.modification.occupiedCells.0',
+    )).toBe(true);
   });
 
   it('rejects unsafe and oversized showcase items', () => {

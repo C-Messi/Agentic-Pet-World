@@ -443,10 +443,9 @@ function validateEvents(events: readonly z.infer<typeof TownEventSchema>[], cont
 function validateProjectionEventsResponse(value: { projection: z.infer<typeof TownProjectionSchema>; events: z.infer<typeof TownEventSchema>[] }, context: z.RefinementCtx) {
   const residents = new Set(value.projection.residents.map(({ residentId }) => residentId));
   const activities = new Map(value.projection.activities.map((activity) => [activity.id, activity]));
-  const modificationIds = new Set(value.projection.modifications.map(({ id }) => id));
-  const occupiedCells = new Set(value.projection.modifications.flatMap(({ plotId, occupiedCells: cells }) =>
-    cells.map(({ x, y }) => `${plotId}:${x}:${y}`),
-  ));
+  const finalModifications = new Map(value.projection.modifications.map((modification) => [modification.id, modification]));
+  const completedModificationIds = new Set<string>();
+  const completedOccupiedCells = new Set<string>();
   value.events.forEach((townEvent, index) => {
     if (townEvent.sessionId !== value.projection.sessionId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event session does not match projection', path: ['events', index, 'sessionId'] });
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
@@ -465,16 +464,35 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     }
     if (townEvent.type === 'build.completed') {
       const { modification } = townEvent.payload;
-      if (modificationIds.has(modification.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modification ID already exists', path: ['events', index, 'payload', 'modification', 'id'] });
-      modificationIds.add(modification.id);
+      const finalModification = finalModifications.get(modification.id);
+      if (!finalModification) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modification is missing from the final projection', path: ['events', index, 'payload', 'modification', 'id'] });
+      else if (!modificationsEqual(modification, finalModification)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modification does not match the final projection', path: ['events', index, 'payload', 'modification'] });
+      if (completedModificationIds.has(modification.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate completed modification ID', path: ['events', index, 'payload', 'modification', 'id'] });
+      completedModificationIds.add(modification.id);
       modification.occupiedCells.forEach(({ x, y }, cellIndex) => {
         const key = `${modification.plotId}:${x}:${y}`;
-        if (occupiedCells.has(key)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modification overlaps an occupied cell', path: ['events', index, 'payload', 'modification', 'occupiedCells', cellIndex] });
-        occupiedCells.add(key);
+        if (completedOccupiedCells.has(key)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modifications overlap an occupied cell', path: ['events', index, 'payload', 'modification', 'occupiedCells', cellIndex] });
       });
+      modification.occupiedCells.forEach(({ x, y }) => completedOccupiedCells.add(`${modification.plotId}:${x}:${y}`));
     }
   });
   validateEventTransitionChain(value, context);
+}
+
+function modificationsEqual(
+  left: z.infer<typeof TownWorldModificationSchema>,
+  right: z.infer<typeof TownWorldModificationSchema>,
+): boolean {
+  return left.id === right.id
+    && left.recipeId === right.recipeId
+    && left.plotId === right.plotId
+    && left.atlasFrame === right.atlasFrame
+    && left.collision === right.collision
+    && left.occupiedCells.length === right.occupiedCells.length
+    && left.occupiedCells.every((cell, index) => {
+      const other = right.occupiedCells[index];
+      return other !== undefined && cell.x === other.x && cell.y === other.y;
+    });
 }
 
 function validateEventTransitionChain(value: { projection: z.infer<typeof TownProjectionSchema>; events: z.infer<typeof TownEventSchema>[] }, context: z.RefinementCtx) {
