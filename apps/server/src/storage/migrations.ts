@@ -1,6 +1,7 @@
 import type { StorageDatabase } from './database.js';
 import { initialMigrationSql } from './migrations/001-initial.js';
 import { actionDeliveryIdentityMigrationSql } from './migrations/002-action-delivery-identity.js';
+import { petTownMigrationSql } from './migrations/003-pet-town.js';
 
 interface Migration {
   version: number;
@@ -18,6 +19,11 @@ const migrations: readonly Migration[] = [
     version: 2,
     name: 'action-delivery-identity',
     sql: actionDeliveryIdentityMigrationSql,
+  },
+  {
+    version: 3,
+    name: '003_pet_town',
+    sql: petTownMigrationSql,
   },
 ];
 

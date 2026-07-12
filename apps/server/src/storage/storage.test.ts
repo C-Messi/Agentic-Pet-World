@@ -73,17 +73,22 @@ describe('SQLite storage', () => {
         name: 'action-delivery-identity',
         sql: expect.stringContaining('ALTER TABLE action_runs RENAME'),
       }),
+      expect.objectContaining({
+        version: 3,
+        name: '003_pet_town',
+        sql: expect.stringContaining('CREATE TABLE town_residents'),
+      }),
     ]);
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
 
     database.close();
     database = openDatabase(databasePath);
 
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
   });
 
   it('upgrades a populated v1 action_runs table without losing data', () => {
@@ -214,7 +219,7 @@ describe('SQLite storage', () => {
       ).toEqual({ count: 2 });
       expect(
         legacyDatabase.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get(),
-      ).toEqual({ count: 2 });
+      ).toEqual({ count: 3 });
     } finally {
       legacyDatabase.close();
     }
