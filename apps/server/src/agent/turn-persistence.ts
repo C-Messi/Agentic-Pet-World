@@ -1,4 +1,9 @@
-import type { AgentDecision, MemoryRecord, MessageRecord } from '@cat-house/shared';
+import type {
+  AgentDecision,
+  AgentFallbackReason,
+  MemoryRecord,
+  MessageRecord,
+} from '@cat-house/shared';
 
 import type { StorageDatabase } from '../storage/database.js';
 import {
@@ -9,7 +14,6 @@ import {
 import type { EventRecord } from '../storage/types.js';
 import {
   AgentTurnEventPayloadSchema,
-  type AgentFallbackReason,
   type AgentTurnEventPayload,
   type TurnPersistence,
 } from './agent-service.js';

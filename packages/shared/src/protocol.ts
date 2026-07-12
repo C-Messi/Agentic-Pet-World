@@ -282,6 +282,7 @@ export const AgentFallbackReasonSchema = z.enum([
   'timeout',
   'unsafe_target',
 ]);
+export type AgentFallbackReason = z.infer<typeof AgentFallbackReasonSchema>;
 
 export const AgentTurnResponseSchema = z
   .object({

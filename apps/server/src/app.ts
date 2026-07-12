@@ -123,7 +123,7 @@ interface AbortEventSource {
   readonly aborted?: boolean;
   readonly closed?: boolean;
   readonly destroyed?: boolean;
-  readonly socket?: { readonly destroyed?: boolean };
+  readonly socket?: { readonly destroyed?: boolean } | null;
   readonly writableEnded?: boolean;
 }
 

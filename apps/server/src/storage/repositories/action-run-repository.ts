@@ -190,7 +190,7 @@ export class ActionRunRepository {
   }
 
   private parseRow(row: ActionRunRow): ActionRunRecord {
-    return ActionRunRecordSchema.parse({
+    const run = ActionRunRecordSchema.parse({
       id: row.id,
       sessionId: row.session_id,
       turnCorrelationId: row.turn_correlation_id,
@@ -208,5 +208,19 @@ export class ActionRunRepository {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });
+    return {
+      id: run.id,
+      sessionId: run.sessionId,
+      turnCorrelationId: run.turnCorrelationId,
+      action: run.action,
+      status: run.status,
+      ...(run.result === undefined ? {} : { result: run.result }),
+      ...(run.resultWorld === undefined ? {} : { resultWorld: run.resultWorld }),
+      ...(run.resultWorldHash === undefined
+        ? {}
+        : { resultWorldHash: run.resultWorldHash }),
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+    };
   }
 }

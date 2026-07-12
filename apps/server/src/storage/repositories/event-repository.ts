@@ -11,6 +11,15 @@ import {
 } from '../validation.js';
 
 const EventTypeSchema = z.string().trim().min(1).max(128);
+const EventEnvelopeSchema = z
+  .object({
+    id: IdentifierSchema,
+    sessionId: IdentifierSchema,
+    type: EventTypeSchema,
+    payload: z.unknown(),
+    createdAt: TimestampSchema,
+  })
+  .strict();
 
 interface EventRow {
   id: string;
@@ -21,36 +30,25 @@ interface EventRow {
 }
 
 export class EventRepository<TPayload> {
-  private readonly recordSchema: z.ZodType<EventRecord<TPayload>>;
-
   public constructor(
     private readonly database: StorageDatabase,
     private readonly payloadSchema: z.ZodType<TPayload>,
-  ) {
-    this.recordSchema = z
-      .object({
-        id: IdentifierSchema,
-        sessionId: IdentifierSchema,
-        type: EventTypeSchema,
-        payload: payloadSchema,
-        createdAt: TimestampSchema,
-      })
-      .strict();
-  }
+  ) {}
 
   public create(record: EventRecord<TPayload>): void {
-    const event = this.recordSchema.parse(record);
+    const envelope = EventEnvelopeSchema.parse(record);
+    const payload = this.payloadSchema.parse(envelope.payload);
     this.database
       .prepare(
         `INSERT INTO events (id, session_id, type, payload_json, created_at)
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
-        event.id,
-        event.sessionId,
-        event.type,
-        serializeJsonCompatible(event.payload, this.payloadSchema),
-        normalizeTimestamp(event.createdAt),
+        envelope.id,
+        envelope.sessionId,
+        envelope.type,
+        serializeJsonCompatible(payload, this.payloadSchema),
+        normalizeTimestamp(envelope.createdAt),
       );
   }
 
@@ -90,14 +88,21 @@ export class EventRepository<TPayload> {
   }
 
   private parseRows(rows: readonly EventRow[]): readonly EventRecord<TPayload>[] {
-    return rows.map((row) =>
-      this.recordSchema.parse({
+    return rows.map((row) => {
+      const envelope = EventEnvelopeSchema.parse({
         id: row.id,
         sessionId: row.session_id,
         type: row.type,
         payload: parseJsonCompatible(row.payload_json, this.payloadSchema),
         createdAt: row.created_at,
-      }),
-    );
+      });
+      return {
+        id: envelope.id,
+        sessionId: envelope.sessionId,
+        type: envelope.type,
+        payload: this.payloadSchema.parse(envelope.payload),
+        createdAt: envelope.createdAt,
+      };
+    });
   }
 }
