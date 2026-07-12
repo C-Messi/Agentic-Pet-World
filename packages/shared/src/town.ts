@@ -42,6 +42,9 @@ export const TownEventTypeSchema = z.enum([
 ]);
 export type TownEventType = z.infer<typeof TownEventTypeSchema>;
 
+export const TownFortuneRankSchema = z.enum(['great', 'good', 'neutral', 'caution']);
+export type TownFortuneRank = z.infer<typeof TownFortuneRankSchema>;
+
 const SocializeIntentSchema = z
   .object({ type: z.literal('socialize'), actorId: IdentifierSchema, targetResidentId: IdentifierSchema })
   .strict()
@@ -241,9 +244,31 @@ const EventBase = {
 const event = <T extends TownEventType, S extends z.ZodTypeAny>(type: T, payload: S) =>
   z.object({ ...EventBase, type: z.literal(type), payload }).strict();
 const ResidentIdPayload = z.object({ residentId: IdentifierSchema }).strict();
-const FortunePayload = z.object({ fortuneId: IdentifierSchema }).strict();
+const FortunePayload = z.object({ activityInstanceId: IdentifierSchema }).strict();
 const BuildPayload = z.object({ modificationId: IdentifierSchema, recipeId: IdentifierSchema, plotId: IdentifierSchema }).strict();
 const BuildCompletedPayload = z.object({ modification: TownWorldModificationSchema }).strict();
+const FortuneRevealedPayload = z
+  .object({
+    activityInstanceId: IdentifierSchema,
+    fortuneId: IdentifierSchema,
+    rank: TownFortuneRankSchema,
+  })
+  .strict()
+  .refine(({ activityInstanceId, fortuneId }) => activityInstanceId !== fortuneId, {
+    message: 'Fortune activity and result IDs must be distinct',
+    path: ['fortuneId'],
+  });
+const FortuneInterpretedPayload = z
+  .object({
+    activityInstanceId: IdentifierSchema,
+    fortuneId: IdentifierSchema,
+    interpretation: TextSchema,
+  })
+  .strict()
+  .refine(({ activityInstanceId, fortuneId }) => activityInstanceId !== fortuneId, {
+    message: 'Fortune activity and result IDs must be distinct',
+    path: ['fortuneId'],
+  });
 
 export const TownEventSchema = z.discriminatedUnion('type', [
   event('resident.moved', z.object({ residentId: IdentifierSchema, position: PositionSchema }).strict()),
@@ -251,8 +276,8 @@ export const TownEventSchema = z.discriminatedUnion('type', [
   event('residents.played', z.object({ activityInstanceId: IdentifierSchema }).strict()),
   event('activity.started', z.object({ activity: TownActivityInstanceSchema }).strict()),
   event('fortune.started', FortunePayload),
-  event('fortune.revealed', z.object({ fortuneId: IdentifierSchema, reading: TextSchema }).strict()),
-  event('fortune.interpreted', z.object({ fortuneId: IdentifierSchema, interpretation: TextSchema }).strict()),
+  event('fortune.revealed', FortuneRevealedPayload),
+  event('fortune.interpreted', FortuneInterpretedPayload),
   event('build.started', BuildPayload),
   event('build.completed', BuildCompletedPayload),
   event('stall.opened', z.object({ stallId: IdentifierSchema, showcaseItemIds: z.array(IdentifierSchema).min(1).max(3) }).strict()),
@@ -464,6 +489,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const previouslyReferencedActivityIds = new Set<string>();
   const closedActivityIds = new Map<string, number>();
   const unresolvedStallVisits = new Map<string, number[]>();
+  const selectedFortuneIds = new Map<string, string>();
   const activityLifecycles = new Map<string, {
     activity: z.infer<typeof TownActivityInstanceSchema>;
     eventIndex: number;
@@ -499,23 +525,34 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
       previouslyReferencedActivityIds.add(townEvent.payload.activityInstanceId);
     }
     if (townEvent.type === 'fortune.revealed' || townEvent.type === 'fortune.interpreted') {
-      const lifecycle = activityLifecycles.get(townEvent.payload.fortuneId);
-      if (closedActivityIds.has(townEvent.payload.fortuneId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'fortuneId'] });
-      if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'fortuneId'] });
-      const activity = lifecycle?.activity ?? activities.get(townEvent.payload.fortuneId);
-      if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'fortuneId'] });
+      const { activityInstanceId, fortuneId } = townEvent.payload;
+      const lifecycle = activityLifecycles.get(activityInstanceId);
+      if (closedActivityIds.has(activityInstanceId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
+      if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
+      const activity = lifecycle?.activity ?? activities.get(activityInstanceId);
+      if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
       else {
         validateExactActivityTransition(activity, townEvent, index, context);
+        const state = jsonObjectValue(activity.state);
+        const selectedFortuneId = selectedFortuneIds.get(activityInstanceId);
+        if (townEvent.type === 'fortune.revealed') {
+          if (selectedFortuneId !== undefined && selectedFortuneId !== fortuneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune selection cannot change', path: ['events', index, 'payload', 'fortuneId'] });
+          if (selectedFortuneId === undefined) selectedFortuneIds.set(activityInstanceId, fortuneId);
+          if (!lifecycle && (state.fortuneId !== fortuneId || state.rank !== townEvent.payload.rank)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Revealed fortune does not match final activity state', path: ['events', index, 'payload', 'fortuneId'] });
+        } else {
+          const knownFortuneId = selectedFortuneId ?? (!lifecycle && typeof state.fortuneId === 'string' ? state.fortuneId : undefined);
+          if (knownFortuneId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune must be revealed before interpretation', path: ['events', index, 'payload', 'fortuneId'] });
+          else if (knownFortuneId !== fortuneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Interpreted fortune must match the revealed fortune', path: ['events', index, 'payload', 'fortuneId'] });
+        }
         if (lifecycle) {
-          if (activity.activityId !== 'fortune-draw') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'fortuneId'] });
+          if (activity.activityId !== 'fortune-draw') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'activityInstanceId'] });
           activity.version += 1;
-          const state = jsonObjectValue(activity.state);
           activity.state = townEvent.type === 'fortune.revealed'
-            ? { ...state, status: 'revealed', reading: townEvent.payload.reading }
-            : { ...state, status: 'interpreted', interpretation: townEvent.payload.interpretation };
+            ? { ...state, status: 'revealed', fortuneId, rank: townEvent.payload.rank }
+            : { ...state, status: 'interpreted', fortuneId, interpretation: townEvent.payload.interpretation };
         }
       }
-      previouslyReferencedActivityIds.add(townEvent.payload.fortuneId);
+      previouslyReferencedActivityIds.add(activityInstanceId);
     }
     if (townEvent.type === 'stall.visited') {
       const lifecycle = activityLifecycles.get(townEvent.payload.stallId);
@@ -606,7 +643,7 @@ function activityStartedByEvent(
       return { ...townEvent.payload.activity, participantIds: [...townEvent.payload.activity.participantIds] };
     case 'fortune.started':
       return {
-        id: townEvent.payload.fortuneId,
+        id: townEvent.payload.activityInstanceId,
         activityId: 'fortune-draw',
         zoneId: townEvent.zoneId ?? 'fortune-pavilion',
         participantIds: [...townEvent.participantIds],
@@ -648,7 +685,7 @@ function activityStartIdPath(
     case 'activity.started':
       return ['payload', 'activity', 'id'];
     case 'fortune.started':
-      return ['payload', 'fortuneId'];
+      return ['payload', 'activityInstanceId'];
     case 'build.started':
       return ['payload', 'modificationId'];
     case 'stall.opened':

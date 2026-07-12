@@ -725,7 +725,7 @@ describe('public town responses', () => {
       type: 'fortune.started',
       zoneId: 'fortune-pavilion',
       participantIds: ['resident-1', 'resident-2'],
-      payload: { fortuneId: 'fortune-1' },
+      payload: { activityInstanceId: 'fortune-1' },
     };
     const fortuneRevealed = {
       ...event,
@@ -735,7 +735,11 @@ describe('public town responses', () => {
       type: 'fortune.revealed',
       zoneId: 'fortune-pavilion',
       participantIds: ['resident-1', 'resident-2'],
-      payload: { fortuneId: 'fortune-1', reading: 'Bright skies' },
+      payload: {
+        activityInstanceId: 'fortune-1',
+        fortuneId: 'fortune-record-1',
+        rank: 'great',
+      },
     };
     const fortuneInterpreted = {
       ...event,
@@ -745,7 +749,11 @@ describe('public town responses', () => {
       type: 'fortune.interpreted',
       zoneId: 'fortune-pavilion',
       participantIds: ['resident-1', 'resident-2'],
-      payload: { fortuneId: 'fortune-1', interpretation: 'Try something new' },
+      payload: {
+        activityInstanceId: 'fortune-1',
+        fortuneId: 'fortune-record-1',
+        interpretation: 'Try something new',
+      },
     };
     const fortuneActivity = {
       id: 'fortune-1',
@@ -755,7 +763,8 @@ describe('public town responses', () => {
       version: 3,
       state: {
         status: 'interpreted',
-        reading: 'Bright skies',
+        fortuneId: 'fortune-record-1',
+        rank: 'great',
         interpretation: 'Try something new',
       },
     } as const;
@@ -782,6 +791,60 @@ describe('public town responses', () => {
       },
       events,
     })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: finalProjection,
+      events: [
+        fortuneStarted,
+        fortuneRevealed,
+        {
+          ...fortuneInterpreted,
+          payload: { ...fortuneInterpreted.payload, fortuneId: 'fortune-record-2' },
+        },
+      ],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...finalProjection,
+        version: 4,
+        lastEventSequence: 2,
+        activities: [{
+          ...fortuneActivity,
+          version: 2,
+          state: {
+            status: 'interpreted',
+            fortuneId: 'fortune-record-1',
+            rank: 'great',
+            interpretation: 'Try something new',
+          },
+        }],
+      },
+      events: [
+        fortuneStarted,
+        { ...fortuneInterpreted, id: 'event-2', sequence: 2, baseVersion: 3 },
+      ],
+    })).toThrow();
+  });
+
+  it('keeps fortune activity and selected result IDs distinct in strict payloads', () => {
+    const revealed = {
+      ...event,
+      type: 'fortune.revealed',
+      zoneId: 'fortune-pavilion',
+      payload: {
+        activityInstanceId: 'fortune-activity-1',
+        fortuneId: 'fortune-record-1',
+        rank: 'good',
+      },
+    };
+
+    expect(TownEventSchema.parse(revealed).payload).toEqual(revealed.payload);
+    expect(() => TownEventSchema.parse({
+      ...revealed,
+      payload: { ...revealed.payload, fortuneId: 'fortune-activity-1' },
+    })).toThrow();
+    const missingSelectedId: Partial<typeof revealed.payload> = { ...revealed.payload };
+    delete missingSelectedId.fortuneId;
+    expect(() => TownEventSchema.parse({ ...revealed, payload: missingSelectedId })).toThrow();
   });
 
   it('tracks build start through completion and rejects stale final build activity', () => {
@@ -846,7 +909,7 @@ describe('public town responses', () => {
       type: 'fortune.started',
       zoneId: 'fortune-pavilion',
       participantIds: ['resident-1', 'resident-2'],
-      payload: { fortuneId: 'fortune-duplicate' },
+      payload: { activityInstanceId: 'fortune-duplicate' },
     };
     const activity = {
       id: 'fortune-duplicate',
@@ -894,9 +957,9 @@ describe('public town responses', () => {
           ...event,
           type: 'fortune.started',
           zoneId: 'fortune-pavilion',
-          payload: { fortuneId: 'fortune-path' },
+          payload: { activityInstanceId: 'fortune-path' },
         },
-        path: 'events.1.payload.fortuneId',
+        path: 'events.1.payload.activityInstanceId',
       },
       {
         event: {
