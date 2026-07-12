@@ -489,7 +489,10 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const previouslyReferencedActivityIds = new Set<string>();
   const closedActivityIds = new Map<string, number>();
   const unresolvedStallVisits = new Map<string, number[]>();
-  const selectedFortuneIds = new Map<string, string>();
+  const fortuneFacts = new Map<string, {
+    reveal?: { fortuneId: string; rank: TownFortuneRank };
+    interpretation?: string;
+  }>();
   const activityLifecycles = new Map<string, {
     activity: z.infer<typeof TownActivityInstanceSchema>;
     eventIndex: number;
@@ -534,16 +537,19 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
       else {
         validateExactActivityTransition(activity, townEvent, index, context);
         const state = jsonObjectValue(activity.state);
-        const selectedFortuneId = selectedFortuneIds.get(activityInstanceId);
+        const facts = fortuneFacts.get(activityInstanceId) ?? {};
         if (townEvent.type === 'fortune.revealed') {
-          if (selectedFortuneId !== undefined && selectedFortuneId !== fortuneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune selection cannot change', path: ['events', index, 'payload', 'fortuneId'] });
-          if (selectedFortuneId === undefined) selectedFortuneIds.set(activityInstanceId, fortuneId);
-          if (!lifecycle && (state.fortuneId !== fortuneId || state.rank !== townEvent.payload.rank)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Revealed fortune does not match final activity state', path: ['events', index, 'payload', 'fortuneId'] });
+          if (facts.reveal !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune may only be revealed once', path: ['events', index, 'payload', 'fortuneId'] });
+          if (facts.interpretation !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune reveal cannot follow interpretation', path: ['events', index, 'payload', 'fortuneId'] });
+          if (facts.reveal === undefined) facts.reveal = { fortuneId, rank: townEvent.payload.rank };
         } else {
-          const knownFortuneId = selectedFortuneId ?? (!lifecycle && typeof state.fortuneId === 'string' ? state.fortuneId : undefined);
+          const knownFortuneId = facts.reveal?.fortuneId ?? (!lifecycle && typeof state.fortuneId === 'string' ? state.fortuneId : undefined);
           if (knownFortuneId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune must be revealed before interpretation', path: ['events', index, 'payload', 'fortuneId'] });
           else if (knownFortuneId !== fortuneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Interpreted fortune must match the revealed fortune', path: ['events', index, 'payload', 'fortuneId'] });
+          if (facts.interpretation !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune may only be interpreted once', path: ['events', index, 'payload', 'interpretation'] });
+          if (facts.interpretation === undefined) facts.interpretation = townEvent.payload.interpretation;
         }
+        fortuneFacts.set(activityInstanceId, facts);
         if (lifecycle) {
           if (activity.activityId !== 'fortune-draw') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'activityInstanceId'] });
           activity.version += 1;
@@ -625,6 +631,31 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   });
   closedActivityIds.forEach((eventIndex, activityId) => {
     if (activities.has(activityId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Closed activity remains in the final projection', path: ['events', eventIndex, 'payload'] });
+  });
+  fortuneFacts.forEach((facts, activityInstanceId) => {
+    const activity = activities.get(activityInstanceId);
+    if (!activity) return;
+    const state = jsonObjectValue(activity.state);
+    const finalRank = TownFortuneRankSchema.safeParse(state.rank);
+    if (facts.interpretation !== undefined) {
+      const expectedFortuneId = facts.reveal?.fortuneId ?? state.fortuneId;
+      if (state.status !== 'interpreted'
+        || state.fortuneId !== expectedFortuneId
+        || state.interpretation !== facts.interpretation
+        || !finalRank.success
+        || (facts.reveal !== undefined && finalRank.data !== facts.reveal.rank)
+        || activity.version < 3) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Final fortune interpretation state does not match emitted facts', path: ['activities', activityInstanceId] });
+      }
+    } else if (facts.reveal !== undefined) {
+      if (state.status !== 'revealed'
+        || state.fortuneId !== facts.reveal.fortuneId
+        || !finalRank.success
+        || finalRank.data !== facts.reveal.rank
+        || activity.version < 2) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Final fortune reveal state does not match emitted facts', path: ['activities', activityInstanceId] });
+      }
+    }
   });
   activityLifecycles.forEach(({ activity, eventIndex, closed }) => {
     const finalActivity = activities.get(activity.id);

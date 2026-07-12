@@ -847,6 +847,201 @@ describe('public town responses', () => {
     expect(() => TownEventSchema.parse({ ...revealed, payload: missingSelectedId })).toThrow();
   });
 
+  it('allows each fortune lifecycle fact at most once and locks selected rank', () => {
+    const started = {
+      ...event,
+      type: 'fortune.started',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'fortune-facts-1' },
+    };
+    const revealed = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      type: 'fortune.revealed',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: {
+        activityInstanceId: 'fortune-facts-1',
+        fortuneId: 'fortune-record-1',
+        rank: 'great',
+      },
+    };
+    const interpreted = {
+      ...event,
+      id: 'event-3',
+      sequence: 3,
+      baseVersion: 4,
+      type: 'fortune.interpreted',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: {
+        activityInstanceId: 'fortune-facts-1',
+        fortuneId: 'fortune-record-1',
+        interpretation: 'Try something new',
+      },
+    };
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      zoneId: 'fortune-pavilion',
+      availability: 'busy',
+      activityInstanceId: 'fortune-facts-1',
+    }));
+    const repeatedReveal = {
+      ...revealed,
+      id: 'event-3',
+      sequence: 3,
+      baseVersion: 4,
+    };
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...validProjection,
+        version: 5,
+        lastEventSequence: 3,
+        residents: busyResidents,
+        activities: [{
+          id: 'fortune-facts-1',
+          activityId: 'fortune-draw',
+          zoneId: 'fortune-pavilion',
+          participantIds: ['resident-1', 'resident-2'],
+          version: 3,
+          state: { status: 'revealed', fortuneId: 'fortune-record-1', rank: 'great' },
+        }],
+      },
+      events: [started, revealed, repeatedReveal],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...validProjection,
+        version: 5,
+        lastEventSequence: 3,
+        residents: busyResidents,
+        activities: [{
+          id: 'fortune-facts-1',
+          activityId: 'fortune-draw',
+          zoneId: 'fortune-pavilion',
+          participantIds: ['resident-1', 'resident-2'],
+          version: 3,
+          state: { status: 'revealed', fortuneId: 'fortune-record-1', rank: 'caution' },
+        }],
+      },
+      events: [started, revealed, {
+        ...repeatedReveal,
+        payload: { ...repeatedReveal.payload, rank: 'caution' },
+      }],
+    })).toThrow();
+    const repeatedInterpretation = {
+      ...interpreted,
+      id: 'event-4',
+      sequence: 4,
+      baseVersion: 5,
+    };
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...validProjection,
+        version: 6,
+        lastEventSequence: 4,
+        residents: busyResidents,
+        activities: [{
+          id: 'fortune-facts-1',
+          activityId: 'fortune-draw',
+          zoneId: 'fortune-pavilion',
+          participantIds: ['resident-1', 'resident-2'],
+          version: 4,
+          state: {
+            status: 'interpreted',
+            fortuneId: 'fortune-record-1',
+            rank: 'great',
+            interpretation: 'Try something new',
+          },
+        }],
+      },
+      events: [started, revealed, interpreted, repeatedInterpretation],
+    })).toThrow();
+  });
+
+  it('validates preexisting fortune facts against final phase, version, and text', () => {
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      zoneId: 'fortune-pavilion',
+      availability: 'busy',
+      activityInstanceId: 'fortune-preexisting-1',
+    }));
+    const finalActivity = {
+      id: 'fortune-preexisting-1',
+      activityId: 'fortune-draw',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      version: 7,
+      state: {
+        status: 'interpreted',
+        fortuneId: 'fortune-record-1',
+        rank: 'good',
+        interpretation: 'Final interpretation',
+      },
+    } as const;
+    const interpreted = {
+      ...event,
+      type: 'fortune.interpreted',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: {
+        activityInstanceId: finalActivity.id,
+        fortuneId: 'fortune-record-1',
+        interpretation: 'Final interpretation',
+      },
+    };
+    const projection = {
+      ...validProjection,
+      residents: busyResidents,
+      activities: [finalActivity],
+    };
+
+    expect(TownAdvanceResponseSchema.parse({ projection, events: [interpreted] }).events).toHaveLength(1);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection,
+      events: [{
+        ...interpreted,
+        payload: { ...interpreted.payload, interpretation: 'Different interpretation' },
+      }],
+    })).toThrow();
+    const revealed = {
+      ...event,
+      type: 'fortune.revealed',
+      zoneId: 'fortune-pavilion',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: {
+        activityInstanceId: finalActivity.id,
+        fortuneId: 'fortune-record-1',
+        rank: 'good',
+      },
+    };
+    expect(TownAdvanceResponseSchema.parse({
+      projection: {
+        ...projection,
+        activities: [{
+          ...finalActivity,
+          version: 2,
+          state: { status: 'revealed', fortuneId: 'fortune-record-1', rank: 'good' },
+        }],
+      },
+      events: [revealed],
+    }).events).toHaveLength(1);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...projection,
+        activities: [{
+          ...finalActivity,
+          version: 1,
+          state: { status: 'started' },
+        }],
+      },
+      events: [revealed],
+    })).toThrow();
+  });
+
   it('tracks build start through completion and rejects stale final build activity', () => {
     const buildStarted = {
       ...event,
