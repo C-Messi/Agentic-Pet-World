@@ -536,6 +536,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
       if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
       else {
         validateExactActivityTransition(activity, townEvent, index, context);
+        if (activity.activityId !== 'fortune-draw') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune event requires a fortune-draw activity', path: ['events', index, 'payload', 'activityInstanceId'] });
         const state = jsonObjectValue(activity.state);
         const facts = fortuneFacts.get(activityInstanceId) ?? {};
         if (townEvent.type === 'fortune.revealed') {
@@ -551,7 +552,6 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         }
         fortuneFacts.set(activityInstanceId, facts);
         if (lifecycle) {
-          if (activity.activityId !== 'fortune-draw') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Fortune lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'activityInstanceId'] });
           activity.version += 1;
           activity.state = townEvent.type === 'fortune.revealed'
             ? { ...state, status: 'revealed', fortuneId, rank: townEvent.payload.rank }

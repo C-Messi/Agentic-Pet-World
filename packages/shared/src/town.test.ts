@@ -1001,6 +1001,13 @@ describe('public town responses', () => {
 
     expect(TownAdvanceResponseSchema.parse({ projection, events: [interpreted] }).events).toHaveLength(1);
     expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...projection,
+        activities: [{ ...finalActivity, activityId: 'social-play' }],
+      },
+      events: [interpreted],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
       projection,
       events: [{
         ...interpreted,
@@ -1029,6 +1036,18 @@ describe('public town responses', () => {
       },
       events: [revealed],
     }).events).toHaveLength(1);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...projection,
+        activities: [{
+          ...finalActivity,
+          activityId: 'showcase-stall',
+          version: 2,
+          state: { status: 'revealed', fortuneId: 'fortune-record-1', rank: 'good' },
+        }],
+      },
+      events: [revealed],
+    })).toThrow();
     expect(() => TownAdvanceResponseSchema.parse({
       projection: {
         ...projection,
