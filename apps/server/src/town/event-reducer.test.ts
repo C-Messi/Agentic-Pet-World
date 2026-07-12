@@ -502,6 +502,71 @@ describe('reduceTownEvent', () => {
     expect(completed.residents[0]).toMatchObject({ availability: 'available' });
   });
 
+  it('rejects build completion without its tracked build activity', () => {
+    const modification = {
+      id: 'mod-missing',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 4, y: 5 }],
+      atlasFrame: 2,
+      collision: false,
+    };
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event('build.completed', { modification }, { zoneId: 'build-plots' }),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'invalid-reference' }));
+  });
+
+  it.each(['activity.started', 'fortune.started', 'stall.opened'] as const)(
+    'rejects %s IDs that collide with durable modifications',
+    (type) => {
+      const modification = {
+        id: 'shared-id',
+        recipeId: 'stone-path',
+        plotId: 'plot-1',
+        occupiedCells: [{ x: 8, y: 8 }],
+        atlasFrame: 2,
+        collision: false,
+      };
+      const input = TownProjectionSchema.parse({
+        ...projection(),
+        modifications: [modification],
+      });
+      const generated =
+        type === 'activity.started'
+          ? event(
+              type,
+              {
+                activity: {
+                  id: 'shared-id',
+                  activityId: 'social-play',
+                  zoneId: 'arcade-house',
+                  participantIds: ['player'],
+                  version: 0,
+                  state: {},
+                },
+              },
+              { zoneId: 'arcade-house' },
+            )
+          : type === 'fortune.started'
+            ? event(
+                type,
+                { fortuneId: 'shared-id' },
+                { zoneId: 'fortune-pavilion' },
+              )
+            : event(
+                type,
+                { stallId: 'shared-id', showcaseItemIds: ['item-1'] },
+                { zoneId: 'market' },
+              );
+      expect(() => reduceTownEvent(input, generated)).toThrow(
+        expect.objectContaining({ code: 'conflict' }),
+      );
+    },
+  );
+
   it('rejects build completion kind, recipe, plot, participant, and zone mismatches', () => {
     const modification = {
       id: 'mod-1',
@@ -877,22 +942,40 @@ describe('reduceTownEvent', () => {
       atlasFrame: 1,
       collision: false,
     };
+    const tracked = (id: string) =>
+      projectionWithActivity({
+        id,
+        activityId: 'build:stone-path',
+        zoneId: 'build-plots',
+        participantIds: ['player'],
+        version: 1,
+        state: { modificationId: id, recipeId: 'stone-path', plotId: 'plot-1' },
+      });
     const input = TownProjectionSchema.parse({
-      ...projection(),
+      ...tracked('mod-1'),
       modifications: [existing],
     });
     expect(() =>
       reduceTownEvent(
         input,
-        event('build.completed', { modification: existing }),
+        event(
+          'build.completed',
+          { modification: existing },
+          { zoneId: 'build-plots' },
+        ),
       ),
     ).toThrow(/modification.*already exists/i);
     expect(() =>
       reduceTownEvent(
-        input,
-        event('build.completed', {
-          modification: { ...existing, id: 'mod-2' },
+        TownProjectionSchema.parse({
+          ...tracked('mod-2'),
+          modifications: [existing],
         }),
+        event(
+          'build.completed',
+          { modification: { ...existing, id: 'mod-2' } },
+          { zoneId: 'build-plots' },
+        ),
       ),
     ).toThrow(/occupied cell/i);
   });

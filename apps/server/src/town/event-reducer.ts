@@ -64,7 +64,10 @@ function requireFreshActivityId(
   projection: TownProjection,
   activityId: string,
 ): void {
-  if (projection.activities.some(({ id }) => id === activityId)) {
+  if (
+    projection.activities.some(({ id }) => id === activityId) ||
+    projection.modifications.some(({ id }) => id === activityId)
+  ) {
     domainError(`activity already exists: ${activityId}`);
   }
 }
@@ -299,7 +302,6 @@ export function reduceTownEvent(
       break;
     }
     case 'build.started': {
-      requireFreshActivityId(next, parsedEvent.payload.modificationId);
       if (
         next.modifications.some(
           ({ id }) => id === parsedEvent.payload.modificationId,
@@ -309,6 +311,7 @@ export function reduceTownEvent(
           `modification already exists: ${parsedEvent.payload.modificationId}`,
         );
       }
+      requireFreshActivityId(next, parsedEvent.payload.modificationId);
       const activity: TownActivityInstance = {
         id: parsedEvent.payload.modificationId,
         activityId: `build:${parsedEvent.payload.recipeId}`,
@@ -326,29 +329,26 @@ export function reduceTownEvent(
       break;
     }
     case 'build.completed': {
-      assertModificationCanBeAdded(next, parsedEvent);
-      const buildActivity = next.activities.find(
-        ({ id }) => id === parsedEvent.payload.modification.id,
+      const buildActivity = requireActivity(
+        next,
+        parsedEvent.payload.modification.id,
       );
-      if (buildActivity !== undefined) {
-        const { modification } = parsedEvent.payload;
-        assertActivityTransition(
-          buildActivity,
-          parsedEvent,
-          `build:${modification.recipeId}`,
-        );
-        const state = jsonObject(buildActivity.state);
-        if (state.modificationId !== modification.id)
-          domainError('build modification ID does not match started activity');
-        if (state.recipeId !== modification.recipeId)
-          domainError('build recipe does not match started activity');
-        if (state.plotId !== modification.plotId)
-          domainError('build plot does not match started activity');
-      }
+      assertModificationCanBeAdded(next, parsedEvent);
+      const { modification } = parsedEvent.payload;
+      assertActivityTransition(
+        buildActivity,
+        parsedEvent,
+        `build:${modification.recipeId}`,
+      );
+      const state = jsonObject(buildActivity.state);
+      if (state.modificationId !== modification.id)
+        domainError('build modification ID does not match started activity');
+      if (state.recipeId !== modification.recipeId)
+        domainError('build recipe does not match started activity');
+      if (state.plotId !== modification.plotId)
+        domainError('build plot does not match started activity');
       next.modifications.push(parsedEvent.payload.modification);
-      if (buildActivity !== undefined) {
-        closeActivity(next, parsedEvent.payload.modification.id);
-      }
+      closeActivity(next, parsedEvent.payload.modification.id);
       break;
     }
     case 'stall.opened': {

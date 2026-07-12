@@ -20,7 +20,11 @@ export interface TownSimulationPorts {
 }
 
 export type TownSimulationErrorCode =
-  'invalid-intent' | 'invalid-config' | 'id-exhaustion';
+  | 'invalid-intent'
+  | 'invalid-config'
+  | 'id-exhaustion'
+  | 'id-exhausted'
+  | 'invalid-generated-event';
 
 export class TownSimulationError extends Error {
   constructor(
@@ -309,9 +313,29 @@ export class TownSimulationService {
       options.buildPlots ?? [],
       32,
     );
-    this.#isBuildPlotAvailable =
+    const isBuildPlotAvailable =
       options.isBuildPlotAvailable ??
-      ((plotId) => this.#buildPlots.includes(plotId));
+      ((plotId: string) => this.#buildPlots.includes(plotId));
+    this.#isBuildPlotAvailable = (plotId, projection) => {
+      let result: unknown;
+      try {
+        result = isBuildPlotAvailable(plotId, projection);
+      } catch {
+        return reject('build plot callback failed', 'invalid-config', {
+          callback: 'isBuildPlotAvailable',
+        });
+      }
+      if (typeof result !== 'boolean') {
+        return reject(
+          'build plot callback must return a boolean',
+          'invalid-config',
+          {
+            callback: 'isBuildPlotAvailable',
+          },
+        );
+      }
+      return result;
+    };
     this.#publicShowcaseItemIds = options.publicShowcaseItemIds ?? (() => []);
     this.#contextForResident =
       options.contextForResident ??
@@ -607,6 +631,9 @@ export class TownSimulationService {
         if (
           parsedProjection.activities.some(
             ({ id }) => id === parsedIntent.stallId,
+          ) ||
+          parsedProjection.modifications.some(
+            ({ id }) => id === parsedIntent.stallId,
           )
         ) {
           reject(`activity already exists: ${parsedIntent.stallId}`);
@@ -646,24 +673,53 @@ export class TownSimulationService {
       parseIntent(intent),
     );
     const actor = requireResident(parsedProjection, parsedIntent.actorId);
+    const eventIds = new Set<string>();
+    const freshEventId = (): string => {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const candidate = this.#ports.nextId('town-event');
+        if (
+          IdentifierSchema.safeParse(candidate).success &&
+          !eventIds.has(candidate)
+        ) {
+          eventIds.add(candidate);
+          return candidate;
+        }
+      }
+      return reject('unable to allocate a fresh event ID', 'id-exhausted', {
+        attempts: 4,
+      });
+    };
     const create = (
       type: TownEvent['type'],
       payload: unknown,
       participantIds: string[],
       zoneId: TownZoneId,
       offset = 0,
-    ): TownEvent =>
-      TownEventSchema.parse({
-        id: this.#ports.nextId('town-event'),
-        sessionId: parsedProjection.sessionId,
-        sequence: parsedProjection.lastEventSequence + offset + 1,
-        baseVersion: parsedProjection.version + offset,
-        type,
-        zoneId,
-        participantIds,
-        timestamp: this.#ports.now(),
-        payload,
-      });
+    ): TownEvent => {
+      try {
+        return TownEventSchema.parse({
+          id: freshEventId(),
+          sessionId: parsedProjection.sessionId,
+          sequence: parsedProjection.lastEventSequence + offset + 1,
+          baseVersion: parsedProjection.version + offset,
+          type,
+          zoneId,
+          participantIds,
+          timestamp: this.#ports.now(),
+          payload,
+        });
+      } catch (error) {
+        if (error instanceof TownSimulationError) throw error;
+        return reject(
+          'generated event failed validation',
+          'invalid-generated-event',
+          {
+            type,
+            offset,
+          },
+        );
+      }
+    };
 
     switch (parsedIntent.type) {
       case 'socialize':

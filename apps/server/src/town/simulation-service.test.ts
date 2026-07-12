@@ -893,6 +893,34 @@ describe('TownSimulationService configuration boundaries', () => {
     expect(frozenChecks.every(Boolean)).toBe(true);
   });
 
+  it('wraps invalid build-plot callback output and exceptions as config errors', () => {
+    for (const isBuildPlotAvailable of [
+      (() => 'yes') as never,
+      (() => {
+        throw new Error('secret callback detail');
+      }) as never,
+    ]) {
+      const subject = new TownSimulationService(ports(), {
+        recipes: ['stone-path'],
+        buildPlots: ['plot-1'],
+        isBuildPlotAvailable,
+      });
+      try {
+        subject.validateIntent(projection(), {
+          type: 'build',
+          actorId: 'huihui',
+          recipeId: 'stone-path',
+          plotId: 'plot-1',
+        });
+        throw new Error('Expected callback rejection');
+      } catch (error) {
+        expect(error).toBeInstanceOf(TownSimulationError);
+        expect(error).toMatchObject({ code: 'invalid-config' });
+        expect(String(error)).not.toContain('secret callback detail');
+      }
+    }
+  });
+
   it('validates scoring context and passes it a frozen projection', () => {
     let frozen = false;
     const valid = new TownSimulationService(ports(), {
@@ -1142,12 +1170,13 @@ describe('TownSimulationService event creation', () => {
     ],
   ])('retries a colliding generated ID for %s', (_label, intent) => {
     let activityCalls = 0;
+    let eventCalls = 0;
     const collisionPorts: TownSimulationPorts = {
       random: () => 0,
       now: () => '2026-07-13T09:00:00.000Z',
       nextId: (prefix) =>
         prefix === 'town-event'
-          ? `event-${activityCalls}`
+          ? `event-${++eventCalls}`
           : ++activityCalls === 1
             ? 'activity-collision'
             : 'activity-fresh',
@@ -1207,6 +1236,103 @@ describe('TownSimulationService event creation', () => {
       expect(error).toBeInstanceOf(TownSimulationError);
       expect(error).toMatchObject({ code: 'id-exhaustion' });
     }
+  });
+
+  it('rejects a caller stall ID that collides with a durable modification', () => {
+    const modification = {
+      id: 'stall-1',
+      recipeId: 'stone-path',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 1, y: 1 }],
+      atlasFrame: 1,
+      collision: false,
+    };
+    const town = TownProjectionSchema.parse({
+      ...projection(),
+      modifications: [modification],
+    });
+    expect(() =>
+      service().createEvents(town, {
+        type: 'open-stall',
+        actorId: 'player',
+        stallId: 'stall-1',
+        showcaseItemIds: ['item-1'],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid-intent' }));
+  });
+
+  it('retries duplicate and invalid event IDs within a two-event chain', () => {
+    const eventIds = ['event-same', 'event-same', 'not valid', 'event-fresh'];
+    const subject = new TownSimulationService(
+      {
+        random: () => 0,
+        now: () => '2026-07-13T09:00:00.000Z',
+        nextId: (prefix) =>
+          prefix === 'activity'
+            ? 'activity-1'
+            : (eventIds.shift() ?? 'event-extra'),
+      },
+      {
+        activities: [
+          { id: 'social-play', zoneId: 'arcade-house', capacity: 2 },
+        ],
+      },
+    );
+    const events = subject.createEvents(projection(), {
+      type: 'start-activity',
+      actorId: 'huihui',
+      activityId: 'social-play',
+      invitedResidentIds: [],
+    });
+    expect(events.map(({ id }) => id)).toEqual(['event-same', 'event-fresh']);
+  });
+
+  it('returns typed errors for event ID exhaustion and invalid generated timestamps', () => {
+    const exhausted = new TownSimulationService(
+      {
+        random: () => 0,
+        now: () => '2026-07-13T09:00:00.000Z',
+        nextId: (prefix) =>
+          prefix === 'activity' ? 'activity-1' : 'event-same',
+      },
+      {
+        activities: [
+          { id: 'social-play', zoneId: 'arcade-house', capacity: 2 },
+        ],
+      },
+    );
+    expect(() =>
+      exhausted.createEvents(projection(), {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: [],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'id-exhausted' }));
+
+    let timestamps = 0;
+    const invalidTime = new TownSimulationService(
+      {
+        random: () => 0,
+        now: () =>
+          ++timestamps === 1 ? '2026-07-13T09:00:00.000Z' : 'not-a-time',
+        nextId: (prefix) =>
+          prefix === 'activity' ? 'activity-1' : `event-${timestamps + 1}`,
+      },
+      {
+        activities: [
+          { id: 'social-play', zoneId: 'arcade-house', capacity: 2 },
+        ],
+      },
+    );
+    expect(() =>
+      invalidTime.createEvents(projection(), {
+        type: 'start-activity',
+        actorId: 'huihui',
+        activityId: 'social-play',
+        invitedResidentIds: [],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid-generated-event' }));
   });
 
   it('retries an invalid injected activity ID before creating an event', () => {
