@@ -54,7 +54,6 @@ export class WorldScene extends Phaser.Scene {
   private bubble: Phaser.GameObjects.Container | undefined;
   private bubbleBackground: Phaser.GameObjects.Graphics | undefined;
   private bubbleText: Phaser.GameObjects.Text | undefined;
-  private bubbleMask: Phaser.Display.Masks.GeometryMask | undefined;
   private removeBubbleListener: (() => void) | undefined;
   private bubbleLayout: BubbleLayout | undefined;
   private bubbleOwnerId: string | undefined;
@@ -400,8 +399,6 @@ export class WorldScene extends Phaser.Scene {
     this.bubble = undefined;
     this.bubbleBackground = undefined;
     this.bubbleText = undefined;
-    this.bubbleMask?.destroy();
-    this.bubbleMask = undefined;
     this.bubbleLayout = undefined;
     this.bubbleOwnerId = undefined;
   }
@@ -416,8 +413,6 @@ export class WorldScene extends Phaser.Scene {
       wordWrap: { width: 196, useAdvancedWrap: false },
       align: 'center',
     }).setOrigin(0.5);
-    this.bubbleMask = this.bubbleBackground.createGeometryMask();
-    this.bubbleText.setMask(this.bubbleMask);
     this.bubble = this.add.container(0, 0, [this.bubbleBackground, this.bubbleText])
       .setDepth(20_000)
       .setVisible(false);
@@ -451,13 +446,17 @@ export class WorldScene extends Phaser.Scene {
     this.bubbleBackground.fillRoundedRect(-layout.width / 2, -layout.height - 14, layout.width, layout.height, 8);
     this.bubbleBackground.strokeRoundedRect(-layout.width / 2, -layout.height - 14, layout.width, layout.height, 8);
     this.bubbleBackground.fillTriangle(-12, -14, 12, -14, 0, 0);
-    this.bubbleText.setPosition(0, -14 - layout.height / 2).setText(layout.text);
+    this.bubbleText
+      .setFixedSize(Math.max(1, layout.width - 16), Math.max(1, layout.height - 12))
+      .setPosition(0, -14 - layout.height / 2)
+      .setText(layout.text);
     this.bubble.setVisible(true);
     this.positionBubble();
   };
 
   private readonly measureBubbleText = (text: string): RenderedTextMeasurement => {
     if (!this.bubbleText) return { width: 0, height: 0, lines: 0 };
+    this.bubbleText.setFixedSize(0, 0);
     const wrappedLines = text.split('\n').flatMap((line) => this.bubbleText?.getWrappedText(line) ?? []);
     this.bubbleText.setText(wrappedLines);
     return {

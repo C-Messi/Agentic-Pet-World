@@ -9,9 +9,11 @@ const inheritedEnv = Object.fromEntries(
   ),
 );
 const runDirectory = mkdtempSync(join(tmpdir(), 'agent-cat-house-e2e-'));
+const primaryDatabasePath = join(runDirectory, 'primary.sqlite');
 
 export default defineConfig({
   testDir: './tests/e2e',
+  metadata: { primaryDatabasePath },
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
@@ -24,7 +26,17 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: '**/mobile-touch.spec.ts',
       use: { ...devices['Desktop Chrome'], channel: 'chrome' },
+    },
+    {
+      name: 'mobile-touch',
+      testMatch: '**/mobile-touch.spec.ts',
+      use: {
+        ...devices['Pixel 5'],
+        channel: 'chrome',
+        viewport: { width: 390, height: 844 },
+      },
     },
   ],
   webServer: [
@@ -35,7 +47,7 @@ export default defineConfig({
       env: {
         ...inheritedEnv,
         PORT: '8787',
-        DATABASE_URL: join(runDirectory, 'primary.sqlite'),
+        DATABASE_URL: primaryDatabasePath,
         USE_FAKE_LLM: 'true',
         WEB_ORIGIN: 'http://127.0.0.1:5173',
       },
