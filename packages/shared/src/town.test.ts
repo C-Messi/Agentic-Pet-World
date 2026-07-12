@@ -55,6 +55,22 @@ const event = {
   payload: { residentId: 'resident-1', position: { x: 5, y: 8 } },
 } as const;
 
+const completedModification = {
+  id: 'mod-completed-1',
+  recipeId: 'garden-bench',
+  plotId: 'plot-1',
+  occupiedCells: [{ x: 2, y: 3 }, { x: 3, y: 3 }],
+  atlasFrame: 12,
+  collision: true,
+} as const;
+
+const buildCompletedEvent = {
+  ...event,
+  type: 'build.completed',
+  zoneId: 'build-plots',
+  payload: { modification: completedModification },
+} as const;
+
 const validProjection = {
   sessionId: 'session-1',
   version: 3,
@@ -238,6 +254,37 @@ describe('town events and intents', () => {
       }),
     ).toThrow();
   });
+
+  it('carries a complete durable modification in build completion events', () => {
+    const parsed = TownEventSchema.parse(buildCompletedEvent);
+
+    expect(parsed.payload).toEqual({ modification: completedModification });
+    if (parsed.type !== 'build.completed') throw new Error('Expected build completion event');
+    expect(parsed.payload.modification.occupiedCells).toHaveLength(2);
+    expect(parsed.payload.modification.atlasFrame).toBe(12);
+    expect(parsed.payload.modification.collision).toBe(true);
+  });
+
+  it('rejects incomplete or duplicated build completion payload data', () => {
+    for (const field of ['occupiedCells', 'atlasFrame', 'collision'] as const) {
+      const modification: Partial<typeof completedModification> = { ...completedModification };
+      delete modification[field];
+      expect(() =>
+        TownEventSchema.parse({ ...buildCompletedEvent, payload: { modification } }),
+      ).toThrow();
+    }
+    expect(() =>
+      TownEventSchema.parse({
+        ...buildCompletedEvent,
+        payload: {
+          modification: completedModification,
+          modificationId: 'conflicting-id',
+          recipeId: 'conflicting-recipe',
+          plotId: 'conflicting-plot',
+        },
+      }),
+    ).toThrow();
+  });
 });
 
 describe('activity state', () => {
@@ -395,6 +442,30 @@ describe('public town responses', () => {
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1', 'resident-3'] }] })).toThrow();
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1', 'resident-2', 'resident-3'] }] })).toThrow();
     expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, zoneId: 'plaza' }] })).toThrow();
+  });
+
+  it('rejects completed modifications that conflict with the included projection', () => {
+    expect(
+      TownAdvanceResponseSchema.parse({
+        projection: validProjection,
+        events: [buildCompletedEvent],
+      }).events,
+    ).toHaveLength(1);
+    expect(() =>
+      TownAdvanceResponseSchema.parse({
+        projection: { ...validProjection, modifications: [completedModification] },
+        events: [buildCompletedEvent],
+      }),
+    ).toThrow();
+    expect(() =>
+      TownAdvanceResponseSchema.parse({
+        projection: {
+          ...validProjection,
+          modifications: [{ ...completedModification, id: 'existing-modification' }],
+        },
+        events: [buildCompletedEvent],
+      }),
+    ).toThrow();
   });
 
   it('rejects unsafe and oversized showcase items', () => {

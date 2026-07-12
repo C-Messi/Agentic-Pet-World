@@ -242,6 +242,7 @@ const event = <T extends TownEventType, S extends z.ZodTypeAny>(type: T, payload
 const ResidentIdPayload = z.object({ residentId: IdentifierSchema }).strict();
 const FortunePayload = z.object({ fortuneId: IdentifierSchema }).strict();
 const BuildPayload = z.object({ modificationId: IdentifierSchema, recipeId: IdentifierSchema, plotId: IdentifierSchema }).strict();
+const BuildCompletedPayload = z.object({ modification: TownWorldModificationSchema }).strict();
 
 export const TownEventSchema = z.discriminatedUnion('type', [
   event('resident.moved', z.object({ residentId: IdentifierSchema, position: PositionSchema }).strict()),
@@ -251,7 +252,7 @@ export const TownEventSchema = z.discriminatedUnion('type', [
   event('fortune.revealed', z.object({ fortuneId: IdentifierSchema, reading: TextSchema }).strict()),
   event('fortune.interpreted', z.object({ fortuneId: IdentifierSchema, interpretation: TextSchema }).strict()),
   event('build.started', BuildPayload),
-  event('build.completed', BuildPayload),
+  event('build.completed', BuildCompletedPayload),
   event('stall.opened', z.object({ stallId: IdentifierSchema, showcaseItemIds: z.array(IdentifierSchema).min(1).max(3) }).strict()),
   event('stall.visited', z.object({ stallId: IdentifierSchema, visitorResidentId: IdentifierSchema }).strict()),
   event('stall.closed', z.object({ stallId: IdentifierSchema }).strict()),
@@ -442,6 +443,10 @@ function validateEvents(events: readonly z.infer<typeof TownEventSchema>[], cont
 function validateProjectionEventsResponse(value: { projection: z.infer<typeof TownProjectionSchema>; events: z.infer<typeof TownEventSchema>[] }, context: z.RefinementCtx) {
   const residents = new Set(value.projection.residents.map(({ residentId }) => residentId));
   const activities = new Map(value.projection.activities.map((activity) => [activity.id, activity]));
+  const modificationIds = new Set(value.projection.modifications.map(({ id }) => id));
+  const occupiedCells = new Set(value.projection.modifications.flatMap(({ plotId, occupiedCells: cells }) =>
+    cells.map(({ x, y }) => `${plotId}:${x}:${y}`),
+  ));
   value.events.forEach((townEvent, index) => {
     if (townEvent.sessionId !== value.projection.sessionId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event session does not match projection', path: ['events', index, 'sessionId'] });
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
@@ -457,6 +462,16 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         if (!participantsMatch) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event participants must exactly match the activity', path: ['events', index, 'participantIds'] });
         if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event zone must match the activity', path: ['events', index, 'zoneId'] });
       }
+    }
+    if (townEvent.type === 'build.completed') {
+      const { modification } = townEvent.payload;
+      if (modificationIds.has(modification.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modification ID already exists', path: ['events', index, 'payload', 'modification', 'id'] });
+      modificationIds.add(modification.id);
+      modification.occupiedCells.forEach(({ x, y }, cellIndex) => {
+        const key = `${modification.plotId}:${x}:${y}`;
+        if (occupiedCells.has(key)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Completed modification overlaps an occupied cell', path: ['events', index, 'payload', 'modification', 'occupiedCells', cellIndex] });
+        occupiedCells.add(key);
+      });
     }
   });
   validateEventTransitionChain(value, context);
