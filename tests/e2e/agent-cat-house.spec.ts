@@ -254,6 +254,7 @@ for (const viewport of [
     await page.goto('http://127.0.0.1:5174');
     await expect(page.getByRole('status')).toContainText('Ready', { timeout: 15_000 });
     await submitAndWaitForTurn(page, 'go to the window', 503);
+    await expect(page.getByRole('status')).toContainText('Provider error');
     const statusFits = await page.getByRole('status').evaluate((element) => ({
       width: element.getBoundingClientRect().width,
       viewportWidth: innerWidth,
