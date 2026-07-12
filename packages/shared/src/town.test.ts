@@ -577,6 +577,44 @@ describe('public town responses', () => {
     })).toThrow();
   });
 
+  it('validates the evolved activity after a start then play chain', () => {
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      zoneId: 'garden',
+      availability: 'busy',
+      activityInstanceId: startedActivity.id,
+    }));
+    const playedEvent = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      type: 'residents.played',
+      zoneId: 'garden',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: startedActivity.id },
+    };
+    const projection = {
+      ...validProjection,
+      version: 4,
+      lastEventSequence: 2,
+      residents: busyResidents,
+      activities: [{ ...startedActivity, version: 1 }],
+    };
+
+    expect(TownAdvanceResponseSchema.parse({
+      projection,
+      events: [activityStartedEvent, playedEvent],
+    }).events).toHaveLength(2);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...projection,
+        activities: [{ ...startedActivity, version: 2 }],
+      },
+      events: [activityStartedEvent, playedEvent],
+    })).toThrow();
+  });
+
   it('requires completed modifications to match the final projection canonically', () => {
     expect(
       TownAdvanceResponseSchema.parse({

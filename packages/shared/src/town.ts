@@ -461,13 +461,18 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const completedOccupiedCells = new Set<string>();
   const startedActivityIds = new Set<string>();
   const previouslyReferencedActivityIds = new Set<string>();
+  const startedActivityChains = new Map<string, {
+    activity: z.infer<typeof TownActivityInstanceSchema>;
+    eventIndex: number;
+  }>();
   value.events.forEach((townEvent, index) => {
     if (townEvent.sessionId !== value.projection.sessionId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event session does not match projection', path: ['events', index, 'sessionId'] });
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
     if (townEvent.sequence > value.projection.lastEventSequence) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event sequence is ahead of the projection', path: ['events', index, 'sequence'] });
     townEvent.participantIds.forEach((id) => { if (!residents.has(id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown resident', path: ['events', index, 'participantIds'] }); });
     if (townEvent.type === 'residents.played') {
-      const activity = activities.get(townEvent.payload.activityInstanceId);
+      const startedChain = startedActivityChains.get(townEvent.payload.activityInstanceId);
+      const activity = startedChain?.activity ?? activities.get(townEvent.payload.activityInstanceId);
       if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
       else {
         const activityParticipants = new Set(activity.participantIds);
@@ -475,16 +480,20 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
           && townEvent.participantIds.every((id) => activityParticipants.has(id));
         if (!participantsMatch) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event participants must exactly match the activity', path: ['events', index, 'participantIds'] });
         if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event zone must match the activity', path: ['events', index, 'zoneId'] });
+        if (startedChain) activity.version += 1;
       }
       previouslyReferencedActivityIds.add(townEvent.payload.activityInstanceId);
     }
     if (townEvent.type === 'activity.started') {
       const { activity } = townEvent.payload;
-      const finalActivity = activities.get(activity.id);
-      if (!finalActivity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity is missing from the final projection', path: ['events', index, 'payload', 'activity', 'id'] });
-      else if (!activitiesEqual(activity, finalActivity)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity does not match the final projection', path: ['events', index, 'payload', 'activity'] });
       if (startedActivityIds.has(activity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: ['events', index, 'payload', 'activity', 'id'] });
       if (previouslyReferencedActivityIds.has(activity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity was referenced before its start event', path: ['events', index, 'payload', 'activity', 'id'] });
+      if (!startedActivityIds.has(activity.id)) {
+        startedActivityChains.set(activity.id, {
+          activity: { ...activity, participantIds: [...activity.participantIds] },
+          eventIndex: index,
+        });
+      }
       startedActivityIds.add(activity.id);
     }
     if (townEvent.type === 'build.completed') {
@@ -500,6 +509,11 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
       });
       modification.occupiedCells.forEach(({ x, y }) => completedOccupiedCells.add(`${modification.plotId}:${x}:${y}`));
     }
+  });
+  startedActivityChains.forEach(({ activity, eventIndex }) => {
+    const finalActivity = activities.get(activity.id);
+    if (!finalActivity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Started activity is missing from the final projection', path: ['events', eventIndex, 'payload', 'activity', 'id'] });
+    else if (!activitiesEqual(activity, finalActivity)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Evolved started activity does not match the final projection', path: ['events', eventIndex, 'payload', 'activity'] });
   });
   validateEventTransitionChain(value, context);
 }
