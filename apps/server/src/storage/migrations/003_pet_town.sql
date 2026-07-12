@@ -69,6 +69,7 @@ CREATE TABLE town_recovery_windows (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   recovery_window_id TEXT NOT NULL,
   outing_json TEXT NOT NULL CHECK (json_valid(outing_json)),
+  resident_definition_json TEXT NOT NULL CHECK (json_valid(resident_definition_json)),
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, recovery_window_id)

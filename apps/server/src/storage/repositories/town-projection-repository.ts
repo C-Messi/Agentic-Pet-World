@@ -40,6 +40,7 @@ interface RecoveryWindowRow {
   session_id: string;
   recovery_window_id: string;
   outing_json: string;
+  resident_definition_json: string;
   result_json: string | null;
 }
 
@@ -246,14 +247,24 @@ export class TownProjectionRepository {
     const windowId = IdentifierSchema.parse(recoveryWindowId);
     const outingJson = serializeJsonCompatible(parsed, TownOutingSchema);
     return this.database.transaction(() => {
+      const residentDefinitionJson = this.loadResidentDefinitionJson(
+        parsed.sessionId,
+        parsed.residentId,
+      );
       const claim = this.database
         .prepare(
           `INSERT INTO town_recovery_windows
-             (session_id, recovery_window_id, outing_json, result_json, created_at)
-           VALUES (?, ?, ?, NULL, ?)
+             (session_id, recovery_window_id, outing_json, resident_definition_json, result_json, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?)
            ON CONFLICT(session_id, recovery_window_id) DO NOTHING`,
         )
-        .run(parsed.sessionId, windowId, outingJson, new Date().toISOString());
+        .run(
+          parsed.sessionId,
+          windowId,
+          outingJson,
+          residentDefinitionJson,
+          new Date().toISOString(),
+        );
       const storedClaim = this.getRecoveryWindow(parsed.sessionId, windowId);
       if (storedClaim === undefined) {
         throw new Error(`Stored recovery claim disappeared: ${parsed.sessionId}/${windowId}`);
@@ -262,6 +273,13 @@ export class TownProjectionRepository {
       const storedOutingJson = serializeJsonCompatible(storedOuting, TownOutingSchema);
       if (storedOutingJson !== outingJson) {
         throw new Error(`Town outing recovery conflict: ${parsed.sessionId}/${windowId}`);
+      }
+      const storedResidentDefinitionJson = serializeJsonCompatible(
+        parseJsonCompatible(storedClaim.resident_definition_json, PetDefinitionSchema),
+        PetDefinitionSchema,
+      );
+      if (storedResidentDefinitionJson !== residentDefinitionJson) {
+        throw new Error(`Town recovery claim pet conflict: ${parsed.sessionId}/${windowId}`);
       }
       return { claimed: claim.changes === 1 };
     }).immediate();
@@ -275,9 +293,9 @@ export class TownProjectionRepository {
     const windowId = IdentifierSchema.parse(recoveryWindowId);
     const row = this.getRecoveryWindow(id, windowId);
     if (row === undefined) return undefined;
-    this.parseRecoveryOuting(row);
+    const claimOuting = this.parseRecoveryOuting(row);
     if (row.result_json === null) return undefined;
-    return this.parseRecoveryResult(row);
+    return this.parseRecoveryResult(row, claimOuting);
   }
 
   public saveRecoveryResult(
@@ -304,8 +322,8 @@ export class TownProjectionRepository {
       if (stored === undefined) {
         throw new Error(`Recovery window not found: ${id}/${windowId}`);
       }
-      this.parseRecoveryOuting(stored);
-      const storedResult = this.parseRecoveryResult(stored);
+      const claimOuting = this.parseRecoveryOuting(stored);
+      const storedResult = this.parseRecoveryResult(stored, claimOuting);
       const storedResultJson = serializeJsonCompatible(
         storedResult,
         OfflineRecoveryResponseSchema,
@@ -458,7 +476,8 @@ export class TownProjectionRepository {
   ): RecoveryWindowRow | undefined {
     return this.database
       .prepare(
-        `SELECT session_id, recovery_window_id, outing_json, result_json
+        `SELECT session_id, recovery_window_id, outing_json,
+                resident_definition_json, result_json
          FROM town_recovery_windows
          WHERE session_id = ? AND recovery_window_id = ?`,
       )
@@ -475,7 +494,10 @@ export class TownProjectionRepository {
     return outing;
   }
 
-  private parseRecoveryResult(row: RecoveryWindowRow): OfflineRecoveryResponse {
+  private parseRecoveryResult(
+    row: RecoveryWindowRow,
+    claimOuting: TownOuting,
+  ): OfflineRecoveryResponse {
     if (row.result_json === null) {
       throw new Error(`Recovery result not found: ${row.session_id}/${row.recovery_window_id}`);
     }
@@ -485,12 +507,65 @@ export class TownProjectionRepository {
         `Stored recovery result columns do not match payload: ${row.session_id}/${row.recovery_window_id}`,
       );
     }
+    if (result.outing.residentId !== claimOuting.residentId) {
+      throw new Error(
+        `Stored recovery result resident does not match claim: ${row.session_id}/${row.recovery_window_id}`,
+      );
+    }
+    if (
+      !timestampsEqual(result.outing.startedAt, claimOuting.startedAt)
+      || !timestampsEqual(result.outing.lastConfirmedAt, claimOuting.lastConfirmedAt)
+    ) {
+      throw new Error(
+        `Stored recovery result basis does not match claim: ${row.session_id}/${row.recovery_window_id}`,
+      );
+    }
+    const resultResident = result.projection.residents.find(
+      ({ residentId }) => residentId === claimOuting.residentId,
+    );
+    if (resultResident === undefined) {
+      throw new Error(
+        `Stored recovery result resident is missing: ${row.session_id}/${row.recovery_window_id}`,
+      );
+    }
+    const claimedPetJson = serializeJsonCompatible(
+      parseJsonCompatible(row.resident_definition_json, PetDefinitionSchema),
+      PetDefinitionSchema,
+    );
+    const resultPetJson = serializeJsonCompatible(resultResident.pet, PetDefinitionSchema);
+    if (resultPetJson !== claimedPetJson) {
+      throw new Error(
+        `Stored recovery result pet does not match claim: ${row.session_id}/${row.recovery_window_id}`,
+      );
+    }
     return result;
+  }
+
+  private loadResidentDefinitionJson(sessionId: string, residentId: string): string {
+    const row = this.database
+      .prepare(
+        `SELECT definition_json
+         FROM town_residents
+         WHERE session_id = ? AND resident_id = ?`,
+      )
+      .get(sessionId, residentId) as { definition_json: string } | undefined;
+    if (row === undefined) {
+      throw new Error(`Town resident not found: ${sessionId}/${residentId}`);
+    }
+    return serializeJsonCompatible(
+      parseJsonCompatible(row.definition_json, PetDefinitionSchema),
+      PetDefinitionSchema,
+    );
   }
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function timestampsEqual(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return normalizeTimestamp(left) === normalizeTimestamp(right);
 }
 
 function normalizeOuting(outing: TownOuting): TownOuting {

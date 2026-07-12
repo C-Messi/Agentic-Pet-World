@@ -155,7 +155,7 @@ function showcaseItem(
 
 function recoveryResult(): OfflineRecoveryResponse {
   return {
-    outing: outing(),
+    outing: { ...outing(), status: 'home', returnedAt: laterTimestamp },
     projection: projection(),
     events: [],
     experienceCards: [],
@@ -236,7 +236,7 @@ describe('pet town storage', () => {
     expect(repository.append(original)).toEqual({ inserted: false, sequence: 1 });
   });
 
-  it('serializes event retries and conflicts across database connections', () => {
+  it('preserves event idempotency and conflicts across database connections', () => {
     const otherDatabase = openDatabase(databasePath);
     try {
       const first = new TownEventRepository(database);
@@ -266,20 +266,28 @@ describe('pet town storage', () => {
   });
 
   it('allows only one projection writer to advance a stored version', () => {
-    const first = new TownProjectionRepository(database);
-    const second = new TownProjectionRepository(database);
-    expect(first.save('session-1', -1, projection())).toBe(true);
-    expect(first.load('session-1')).toEqual(second.load('session-1'));
-    const firstUpdate = projection('session-1', 1);
-    const secondUpdate = {
-      ...projection('session-1', 1),
-      residents: projection('session-1', 1).residents.map((resident, index) =>
-        index === 0 ? { ...resident, position: { x: 9, y: 7 } } : resident),
-    };
+    database.close();
+    const firstDatabase = openDatabase(databasePath);
+    const secondDatabase = openDatabase(databasePath);
+    try {
+      const first = new TownProjectionRepository(firstDatabase);
+      const second = new TownProjectionRepository(secondDatabase);
+      expect(first.save('session-1', -1, projection())).toBe(true);
+      expect(first.load('session-1')).toEqual(second.load('session-1'));
+      const firstUpdate = projection('session-1', 1);
+      const secondUpdate = {
+        ...projection('session-1', 1),
+        residents: projection('session-1', 1).residents.map((resident, index) =>
+          index === 0 ? { ...resident, position: { x: 9, y: 7 } } : resident),
+      };
 
-    expect(first.save('session-1', 0, firstUpdate)).toBe(true);
-    expect(second.save('session-1', 0, secondUpdate)).toBe(false);
-    expect(first.load('session-1')).toEqual(firstUpdate);
+      expect(first.save('session-1', 0, firstUpdate)).toBe(true);
+      expect(second.save('session-1', 0, secondUpdate)).toBe(false);
+      expect(first.load('session-1')).toEqual(firstUpdate);
+    } finally {
+      firstDatabase.close();
+      secondDatabase.close();
+    }
   });
 
   it('accepts repeated recovery windows and rejects conflicting content', () => {
@@ -320,7 +328,7 @@ describe('pet town storage', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM town_recovery_windows').get()).toEqual({ count: 2 });
   });
 
-  it('serializes recovery claims across database connections', () => {
+  it('shares recovery claim idempotency across database connections', () => {
     const repository = new TownProjectionRepository(database);
     expect(repository.save('session-1', -1, projection())).toBe(true);
     const otherDatabase = openDatabase(databasePath);
@@ -377,6 +385,7 @@ describe('pet town storage', () => {
     const repository = new TownProjectionRepository(database);
     const storedOuting = outing();
     const result = recoveryResult();
+    expect(repository.save('session-1', -1, projection())).toBe(true);
     expect(repository.claimRecoveryWindow(storedOuting, 'recovery-window-1')).toEqual({ claimed: true });
     repository.saveRecoveryResult('session-1', 'recovery-window-1', result);
 
@@ -387,8 +396,75 @@ describe('pet town storage', () => {
     reopened.saveRecoveryResult('session-1', 'recovery-window-1', result);
     expect(() => reopened.saveRecoveryResult('session-1', 'recovery-window-1', {
       ...result,
-      outing: { ...result.outing, lastConfirmedAt: laterTimestamp },
+      outing: { ...result.outing, returnedAt: '2026-07-12T08:32:00.000Z' },
     })).toThrow(/result conflict/i);
+  });
+
+  it('rejects a recovery result for a different claimed resident', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    repository.claimRecoveryWindow(outing(), 'recovery-window-1');
+    const result = recoveryResult();
+
+    expect(() => repository.saveRecoveryResult('session-1', 'recovery-window-1', {
+      ...result,
+      outing: { ...result.outing, residentId: 'resident-2' },
+    })).toThrow(/resident/i);
+  });
+
+  it('rejects a recovery result with a different immutable recovery basis', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    repository.claimRecoveryWindow(outing(), 'recovery-window-1');
+    const result = recoveryResult();
+
+    expect(() => repository.saveRecoveryResult('session-1', 'recovery-window-1', {
+      ...result,
+      outing: { ...result.outing, lastConfirmedAt: laterTimestamp },
+    })).toThrow(/basis/i);
+  });
+
+  it('rejects a recovery result whose claimed pet identity changed', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    repository.claimRecoveryWindow(outing(), 'recovery-window-1');
+    const result = recoveryResult();
+
+    expect(() => repository.saveRecoveryResult('session-1', 'recovery-window-1', {
+      ...result,
+      projection: {
+        ...result.projection,
+        residents: result.projection.residents.map((resident) =>
+          resident.residentId === 'resident-1'
+            ? { ...resident, pet: { ...resident.pet, id: 'changed-pet' } }
+            : resident),
+      },
+    })).toThrow(/pet/i);
+  });
+
+  it('rejects a corrupted recovery result on load', () => {
+    const repository = new TownProjectionRepository(database);
+    expect(repository.save('session-1', -1, projection())).toBe(true);
+    repository.claimRecoveryWindow(outing(), 'recovery-window-1');
+    const result = recoveryResult();
+    repository.saveRecoveryResult('session-1', 'recovery-window-1', result);
+    database.prepare(
+      `UPDATE town_recovery_windows
+       SET result_json = ?
+       WHERE session_id = ? AND recovery_window_id = ?`,
+    ).run(
+      JSON.stringify({
+        ...result,
+        outing: { ...result.outing, lastConfirmedAt: laterTimestamp },
+      }),
+      'session-1',
+      'recovery-window-1',
+    );
+
+    expect(() => repository.loadRecoveryResult(
+      'session-1',
+      'recovery-window-1',
+    )).toThrow(/basis/i);
   });
 
   it('rejects cross-session card event references', () => {
