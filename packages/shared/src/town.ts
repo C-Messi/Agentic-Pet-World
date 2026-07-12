@@ -352,7 +352,7 @@ export type TownEventResultsRequest = z.infer<typeof TownEventResultsRequestSche
 export const TownEventResultsResponseSchema = z.object({ projection: TownProjectionSchema, acceptedEventIds: z.array(IdentifierSchema).max(24) }).strict().superRefine(({ acceptedEventIds }, context) => addDuplicateIssues(acceptedEventIds, context, ['acceptedEventIds']));
 export type TownEventResultsResponse = z.infer<typeof TownEventResultsResponseSchema>;
 
-export const OfflineRecoveryRequestSchema = z.object({ sessionId: IdentifierSchema, residentId: IdentifierSchema, lastConfirmedAt: TimestampSchema }).strict();
+export const OfflineRecoveryRequestSchema = z.object({ sessionId: IdentifierSchema, residentId: IdentifierSchema, lastConfirmedAt: TimestampSchema, recoveryWindowId: IdentifierSchema }).strict();
 export type OfflineRecoveryRequest = z.infer<typeof OfflineRecoveryRequestSchema>;
 export const OfflineRecoveryResponseSchema = z.object({ outing: TownOutingSchema, projection: TownProjectionSchema, events: eventsSchema(5), experienceCards: cardsSchema(5) }).strict().superRefine((value, context) => { validateOutingProjection(value, context); validateProjectionEventsResponse(value, context); validateProjectionCards(value, context); validateCardEventReferences(value, context); });
 export type OfflineRecoveryResponse = z.infer<typeof OfflineRecoveryResponseSchema>;
@@ -401,7 +401,14 @@ function validateProjection(projection: TownProjectionData, context: z.Refinemen
     if (relationship.sourceVersion > projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Relationship source version is ahead of the projection', path: ['relationships', index, 'sourceVersion'] });
   });
   addDuplicateIssues(projection.modifications.map(({ id }) => id), context, ['modifications']);
-  addDuplicateIssues(projection.modifications.flatMap(({ plotId, occupiedCells }) => occupiedCells.map(({ x, y }) => `${plotId}:${x}:${y}`)), context, ['modifications']);
+  const occupiedCells = new Set<string>();
+  projection.modifications.forEach(({ plotId, occupiedCells: cells }, modificationIndex) => {
+    cells.forEach(({ x, y }, cellIndex) => {
+      const key = `${plotId}:${x}:${y}`;
+      if (occupiedCells.has(key)) context.addIssue({ code: z.ZodIssueCode.custom, message: `Duplicate occupied cell: ${x}:${y}`, path: ['modifications', modificationIndex, 'occupiedCells', cellIndex] });
+      occupiedCells.add(key);
+    });
+  });
   addDuplicateIssues(projection.activities.map(({ id }) => id), context, ['activities']);
   const activityIds = new Set(projection.activities.map(({ id }) => id));
   projection.activities.forEach((activity, index) => activity.participantIds.forEach((id) => {
@@ -440,7 +447,17 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     if (townEvent.baseVersion > value.projection.version) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event base version is ahead of the projection', path: ['events', index, 'baseVersion'] });
     if (townEvent.sequence > value.projection.lastEventSequence) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event sequence is ahead of the projection', path: ['events', index, 'sequence'] });
     townEvent.participantIds.forEach((id) => { if (!residents.has(id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown resident', path: ['events', index, 'participantIds'] }); });
-    if (townEvent.type === 'residents.played' && !activities.has(townEvent.payload.activityInstanceId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
+    if (townEvent.type === 'residents.played') {
+      const activity = activities.get(townEvent.payload.activityInstanceId);
+      if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
+      else {
+        const activityParticipants = new Set(activity.participantIds);
+        const participantsMatch = townEvent.participantIds.length === activityParticipants.size
+          && townEvent.participantIds.every((id) => activityParticipants.has(id));
+        if (!participantsMatch) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event participants must exactly match the activity', path: ['events', index, 'participantIds'] });
+        if (townEvent.zoneId !== activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event zone must match the activity', path: ['events', index, 'zoneId'] });
+      }
+    }
   });
   validateEventTransitionChain(value, context);
 }

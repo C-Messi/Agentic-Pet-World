@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ExperienceCardSchema,
+  OfflineRecoveryRequestSchema,
   OfflineRecoveryResponseSchema,
   PublicShowcaseItemSchema,
   TownActivityInstanceSchema,
@@ -147,6 +148,27 @@ describe('town projection', () => {
         ],
       }).modifications,
     ).toHaveLength(2);
+  });
+
+  it('reports overlapping occupied cells at the exact modification and cell', () => {
+    const modification = {
+      id: 'mod-1',
+      recipeId: 'bench',
+      plotId: 'plot-1',
+      occupiedCells: [{ x: 1, y: 1 }],
+      atlasFrame: 2,
+      collision: true,
+    };
+    const result = TownProjectionSchema.safeParse({
+      ...validProjection,
+      modifications: [modification, { ...modification, id: 'mod-2' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Expected overlapping cells to fail');
+    expect(result.error.issues.some(({ path }) =>
+      path.join('.') === 'modifications.1.occupiedCells.0',
+    )).toBe(true);
   });
 
   it('requires reciprocal activity membership, state, and zone references', () => {
@@ -334,6 +356,47 @@ describe('public town responses', () => {
     ).toThrow();
   });
 
+  it('requires played event participants and zone to exactly match the activity', () => {
+    const activity = {
+      id: 'activity-1',
+      activityId: 'chess',
+      zoneId: 'arcade-house',
+      participantIds: ['resident-1', 'resident-2'],
+      version: 1,
+      state: {},
+    };
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      position: { x: 1, y: 1 },
+      zoneId: 'arcade-house',
+      availability: 'busy',
+      activityInstanceId: 'activity-1',
+    }));
+    const thirdResident = {
+      ...npcResident,
+      residentId: 'resident-3',
+      pet: { ...npcResident.pet, id: 'resident-pet-3' },
+    };
+    const projection = {
+      ...validProjection,
+      residents: [...busyResidents, thirdResident],
+      activities: [activity],
+    };
+    const playedEvent = {
+      ...event,
+      type: 'residents.played',
+      zoneId: 'arcade-house',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'activity-1' },
+    };
+
+    expect(TownAdvanceResponseSchema.parse({ projection, events: [playedEvent] }).events).toHaveLength(1);
+    expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1'] }] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1', 'resident-3'] }] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, participantIds: ['resident-1', 'resident-2', 'resident-3'] }] })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({ projection, events: [{ ...playedEvent, zoneId: 'plaza' }] })).toThrow();
+  });
+
   it('rejects unsafe and oversized showcase items', () => {
     expect(() =>
       PublicShowcaseItemSchema.parse({ kind: 'link', content: 'https://example.com' }),
@@ -404,5 +467,23 @@ describe('public town responses', () => {
         experienceCards: [card],
       }),
     ).toThrow();
+  });
+});
+
+describe('offline recovery requests', () => {
+  const request = {
+    sessionId: 'session-1',
+    residentId: 'resident-1',
+    lastConfirmedAt: '2026-07-12T08:30:00.000Z',
+    recoveryWindowId: 'recovery-window-1',
+  };
+
+  it('requires a valid recovery window ID and remains strict', () => {
+    expect(OfflineRecoveryRequestSchema.parse(request)).toEqual(request);
+    const missing: Partial<typeof request> = { ...request };
+    delete missing.recoveryWindowId;
+    expect(() => OfflineRecoveryRequestSchema.parse(missing)).toThrow();
+    expect(() => OfflineRecoveryRequestSchema.parse({ ...request, recoveryWindowId: 'bad id' })).toThrow();
+    expect(() => OfflineRecoveryRequestSchema.parse({ ...request, retryUrl: 'https://example.com' })).toThrow();
   });
 });
