@@ -1,0 +1,173 @@
+{
+  "schemaVersion": "fortune-pool.v1",
+  "fortunes": [
+    {
+      "id": "morning-window",
+      "rank": "great",
+      "verse": "Morning light finds the window you remembered to open.",
+      "baseInterpretation": "Make room for a fresh idea and share its first small step with someone you trust.",
+      "themes": ["creativity", "cooperation"]
+    },
+    {
+      "id": "shared-lantern",
+      "rank": "great",
+      "verse": "Two lanterns make the garden path easier to see.",
+      "baseInterpretation": "A shared effort can make the next step clearer and more enjoyable.",
+      "themes": ["friendship", "cooperation"]
+    },
+    {
+      "id": "bright-kite",
+      "rank": "great",
+      "verse": "A bright kite rises when the hands below work together.",
+      "baseInterpretation": "Let curiosity lead, while staying connected to the people helping you explore.",
+      "themes": ["exploration", "cooperation"]
+    },
+    {
+      "id": "new-ink",
+      "rank": "great",
+      "verse": "Fresh ink waits beside a page with plenty of room.",
+      "baseInterpretation": "Begin the creative idea that keeps returning to your attention.",
+      "themes": ["creativity"]
+    },
+    {
+      "id": "open-gate",
+      "rank": "great",
+      "verse": "The open gate reveals a path lined with friendly signs.",
+      "baseInterpretation": "Explore an inviting direction and notice who might enjoy joining you.",
+      "themes": ["exploration", "friendship"]
+    },
+    {
+      "id": "warm-table",
+      "rank": "great",
+      "verse": "A warm table has space for one more story.",
+      "baseInterpretation": "Connection grows when everyone has room to speak and listen.",
+      "themes": ["friendship", "cooperation"]
+    },
+    {
+      "id": "paper-boat",
+      "rank": "good",
+      "verse": "A paper boat follows the stream around a gentle bend.",
+      "baseInterpretation": "Stay curious about a small change of direction without rushing its outcome.",
+      "themes": ["exploration", "patience"]
+    },
+    {
+      "id": "quiet-bell",
+      "rank": "good",
+      "verse": "A quiet bell is heard after the busy square settles.",
+      "baseInterpretation": "A brief pause can help the most useful thought become easier to notice.",
+      "themes": ["rest", "patience"]
+    },
+    {
+      "id": "colored-thread",
+      "rank": "good",
+      "verse": "Different threads meet in one cheerful pattern.",
+      "baseInterpretation": "Combine distinct ideas and let collaboration add texture to the result.",
+      "themes": ["creativity", "cooperation"]
+    },
+    {
+      "id": "garden-bench",
+      "rank": "good",
+      "verse": "The garden bench keeps a place for an unhurried conversation.",
+      "baseInterpretation": "Give a friendship time and attention without forcing the conversation.",
+      "themes": ["friendship", "patience"]
+    },
+    {
+      "id": "small-compass",
+      "rank": "good",
+      "verse": "A small compass points beyond the familiar bridge.",
+      "baseInterpretation": "Choose one manageable way to explore beyond your usual routine.",
+      "themes": ["exploration"]
+    },
+    {
+      "id": "soft-pillow",
+      "rank": "good",
+      "verse": "A soft pillow waits where the afternoon turns quiet.",
+      "baseInterpretation": "Rest can restore the attention needed for what matters next.",
+      "themes": ["rest"]
+    },
+    {
+      "id": "stacked-stones",
+      "rank": "neutral",
+      "verse": "Three stones balance because each one found its place.",
+      "baseInterpretation": "Work steadily and adjust one piece at a time when balance feels uncertain.",
+      "themes": ["patience", "cooperation"]
+    },
+    {
+      "id": "blank-map",
+      "rank": "neutral",
+      "verse": "A blank corner of the map waits for careful footsteps.",
+      "baseInterpretation": "Not knowing everything yet can be an invitation to observe and explore.",
+      "themes": ["exploration", "patience"]
+    },
+    {
+      "id": "half-song",
+      "rank": "neutral",
+      "verse": "Half a song returns when a friend hums the next line.",
+      "baseInterpretation": "An unfinished idea may benefit from another person's perspective.",
+      "themes": ["creativity", "friendship"]
+    },
+    {
+      "id": "still-pond",
+      "rank": "neutral",
+      "verse": "The still pond reflects details missed by hurried eyes.",
+      "baseInterpretation": "Slow down long enough to notice what your first glance passed over.",
+      "themes": ["rest", "patience"]
+    },
+    {
+      "id": "spare-chair",
+      "rank": "neutral",
+      "verse": "A spare chair turns waiting into welcome.",
+      "baseInterpretation": "Leave room for another voice before settling on the next step.",
+      "themes": ["friendship", "cooperation"]
+    },
+    {
+      "id": "folded-note",
+      "rank": "neutral",
+      "verse": "A folded note keeps one clear thought safe until morning.",
+      "baseInterpretation": "Capture the idea now, then return to it after a restorative pause.",
+      "themes": ["creativity", "rest"]
+    },
+    {
+      "id": "slow-cloud",
+      "rank": "caution",
+      "verse": "A slow cloud asks the traveler to check the path again.",
+      "baseInterpretation": "Pause, review what you know, and continue when the direction feels clear.",
+      "themes": ["patience", "rest"]
+    },
+    {
+      "id": "tangled-ribbon",
+      "rank": "caution",
+      "verse": "A tangled ribbon loosens when no one pulls too hard.",
+      "baseInterpretation": "Ease the pressure and work together on one knot at a time.",
+      "themes": ["patience", "cooperation"]
+    },
+    {
+      "id": "closed-sketchbook",
+      "rank": "caution",
+      "verse": "A closed sketchbook waits without asking to be filled at once.",
+      "baseInterpretation": "Let creative energy return at its own pace instead of forcing it.",
+      "themes": ["creativity", "rest"]
+    },
+    {
+      "id": "misty-bridge",
+      "rank": "caution",
+      "verse": "Mist on the bridge makes nearby footsteps more important.",
+      "baseInterpretation": "Explore carefully and stay in conversation with companions along the way.",
+      "themes": ["exploration", "cooperation"]
+    },
+    {
+      "id": "quiet-door",
+      "rank": "caution",
+      "verse": "A quiet door opens more easily after a patient knock.",
+      "baseInterpretation": "Give a connection time and approach it with gentle, honest attention.",
+      "themes": ["friendship", "patience"]
+    },
+    {
+      "id": "resting-oar",
+      "rank": "caution",
+      "verse": "A resting oar lets the boat drift long enough to choose a shore.",
+      "baseInterpretation": "Take a short pause before choosing which interesting direction to follow.",
+      "themes": ["rest", "exploration"]
+    }
+  ]
+}
