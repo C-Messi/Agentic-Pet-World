@@ -700,6 +700,23 @@ describe('public town responses', () => {
       projection: { ...validProjection, version: 4, lastEventSequence: 2 },
       events: [visited, closed],
     }).events).toHaveLength(2);
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: validProjection,
+      events: [visited],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...validProjection, version: 4, lastEventSequence: 2 },
+      events: [{ ...closed, id: 'event-1', sequence: 1, baseVersion: 2 }, {
+        ...visited,
+        id: 'event-2',
+        sequence: 2,
+        baseVersion: 3,
+      }],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...validProjection, version: 4, lastEventSequence: 2 },
+      events: [{ ...closed, id: 'event-1', sequence: 1, baseVersion: 2 }, closed],
+    })).toThrow();
   });
 
   it('evolves fortune start, reveal, and interpretation to the final projection', () => {
@@ -864,6 +881,53 @@ describe('public town responses', () => {
       },
       events: [fortuneStarted, genericStarted],
     })).toThrow();
+  });
+
+  it('reports duplicate start IDs at each variant payload path', () => {
+    const starts = [
+      {
+        event: activityStartedEvent,
+        path: 'events.1.payload.activity.id',
+      },
+      {
+        event: {
+          ...event,
+          type: 'fortune.started',
+          zoneId: 'fortune-pavilion',
+          payload: { fortuneId: 'fortune-path' },
+        },
+        path: 'events.1.payload.fortuneId',
+      },
+      {
+        event: {
+          ...event,
+          type: 'build.started',
+          zoneId: 'build-plots',
+          payload: { modificationId: 'build-path', recipeId: 'bench', plotId: 'plot-1' },
+        },
+        path: 'events.1.payload.modificationId',
+      },
+      {
+        event: {
+          ...event,
+          type: 'stall.opened',
+          zoneId: 'market',
+          payload: { stallId: 'stall-path', showcaseItemIds: ['item-1'] },
+        },
+        path: 'events.1.payload.stallId',
+      },
+    ] as const;
+
+    for (const { event: started, path } of starts) {
+      const result = TownHistoryResponseSchema.safeParse({
+        sessionId: 'session-1',
+        events: [started, { ...started, id: 'event-2', sequence: 2 }],
+        experienceCards: [],
+      });
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected duplicate activity start');
+      expect(result.error.issues.some((issue) => issue.path.join('.') === path)).toBe(true);
+    }
   });
 
   it('requires completed modifications to match the final projection canonically', () => {

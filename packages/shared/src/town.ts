@@ -449,7 +449,7 @@ function validateEvents(events: readonly z.infer<typeof TownEventSchema>[], cont
     const startedActivity = activityStartedByEvent(townEvent);
     if (!startedActivity) return;
     const activityId = startedActivity.id;
-    if (startedActivityIds.has(activityId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: [index, 'payload', 'activity', 'id'] });
+    if (startedActivityIds.has(activityId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: [index, ...activityStartIdPath(townEvent)] });
     startedActivityIds.add(activityId);
   });
 }
@@ -462,6 +462,8 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const completedOccupiedCells = new Set<string>();
   const startedActivityIds = new Set<string>();
   const previouslyReferencedActivityIds = new Set<string>();
+  const closedActivityIds = new Map<string, number>();
+  const unresolvedStallVisits = new Map<string, number[]>();
   const activityLifecycles = new Map<string, {
     activity: z.infer<typeof TownActivityInstanceSchema>;
     eventIndex: number;
@@ -474,8 +476,10 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     townEvent.participantIds.forEach((id) => { if (!residents.has(id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown resident', path: ['events', index, 'participantIds'] }); });
     const startedActivity = activityStartedByEvent(townEvent);
     if (startedActivity) {
-      if (startedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: ['events', index, 'payload'] });
-      if (previouslyReferencedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity was referenced before its start event', path: ['events', index, 'payload'] });
+      const startPath = ['events', index, ...activityStartIdPath(townEvent)];
+      if (startedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate activity start', path: startPath });
+      if (previouslyReferencedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity was referenced before its start event', path: startPath });
+      if (closedActivityIds.has(startedActivity.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity start occurs after closure', path: startPath });
       if (!startedActivityIds.has(startedActivity.id)) {
         activityLifecycles.set(startedActivity.id, { activity: startedActivity, eventIndex: index, closed: false });
       }
@@ -483,6 +487,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     }
     if (townEvent.type === 'residents.played') {
       const lifecycle = activityLifecycles.get(townEvent.payload.activityInstanceId);
+      if (closedActivityIds.has(townEvent.payload.activityInstanceId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
       if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
       const activity = lifecycle?.activity ?? activities.get(townEvent.payload.activityInstanceId);
       if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
@@ -495,6 +500,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     }
     if (townEvent.type === 'fortune.revealed' || townEvent.type === 'fortune.interpreted') {
       const lifecycle = activityLifecycles.get(townEvent.payload.fortuneId);
+      if (closedActivityIds.has(townEvent.payload.fortuneId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'fortuneId'] });
       if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'fortuneId'] });
       const activity = lifecycle?.activity ?? activities.get(townEvent.payload.fortuneId);
       if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'fortuneId'] });
@@ -513,6 +519,8 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     }
     if (townEvent.type === 'stall.visited') {
       const lifecycle = activityLifecycles.get(townEvent.payload.stallId);
+      const wasClosed = closedActivityIds.has(townEvent.payload.stallId);
+      if (wasClosed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'stallId'] });
       if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'stallId'] });
       const activity = lifecycle?.activity ?? activities.get(townEvent.payload.stallId);
       if (activity) {
@@ -524,10 +532,16 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
           activity.state = { ...jsonObjectValue(activity.state), lastVisitorResidentId: townEvent.payload.visitorResidentId };
         }
       }
+      if (!activity && !wasClosed) {
+        const visits = unresolvedStallVisits.get(townEvent.payload.stallId) ?? [];
+        visits.push(index);
+        unresolvedStallVisits.set(townEvent.payload.stallId, visits);
+      }
       previouslyReferencedActivityIds.add(townEvent.payload.stallId);
     }
     if (townEvent.type === 'stall.closed') {
       const lifecycle = activityLifecycles.get(townEvent.payload.stallId);
+      if (closedActivityIds.has(townEvent.payload.stallId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity is already closed', path: ['events', index, 'payload', 'stallId'] });
       if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity is already closed', path: ['events', index, 'payload', 'stallId'] });
       const activity = lifecycle?.activity ?? activities.get(townEvent.payload.stallId);
       if (activity) validateExactActivityTransition(activity, townEvent, index, context);
@@ -535,6 +549,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         if (lifecycle.activity.activityId !== 'showcase-stall') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stall lifecycle has the wrong activity kind', path: ['events', index, 'payload', 'stallId'] });
         lifecycle.closed = true;
       }
+      if (!closedActivityIds.has(townEvent.payload.stallId)) closedActivityIds.set(townEvent.payload.stallId, index);
       previouslyReferencedActivityIds.add(townEvent.payload.stallId);
     }
     if (townEvent.type === 'build.completed') {
@@ -550,6 +565,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
       });
       modification.occupiedCells.forEach(({ x, y }) => completedOccupiedCells.add(`${modification.plotId}:${x}:${y}`));
       const lifecycle = activityLifecycles.get(modification.id);
+      if (closedActivityIds.has(modification.id)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity is already closed', path: ['events', index, 'payload', 'modification', 'id'] });
       if (lifecycle) {
         if (lifecycle.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity is already closed', path: ['events', index, 'payload', 'modification', 'id'] });
         validateExactActivityTransition(lifecycle.activity, townEvent, index, context);
@@ -562,8 +578,16 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         }
         lifecycle.closed = true;
       }
+      if (!closedActivityIds.has(modification.id)) closedActivityIds.set(modification.id, index);
       previouslyReferencedActivityIds.add(modification.id);
     }
+  });
+  unresolvedStallVisits.forEach((eventIndexes, activityId) => {
+    if (closedActivityIds.has(activityId) || activities.has(activityId)) return;
+    eventIndexes.forEach((eventIndex) => context.addIssue({ code: z.ZodIssueCode.custom, message: 'Stall visit references an unresolved activity', path: ['events', eventIndex, 'payload', 'stallId'] }));
+  });
+  closedActivityIds.forEach((eventIndex, activityId) => {
+    if (activities.has(activityId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Closed activity remains in the final projection', path: ['events', eventIndex, 'payload'] });
   });
   activityLifecycles.forEach(({ activity, eventIndex, closed }) => {
     const finalActivity = activities.get(activity.id);
@@ -614,6 +638,23 @@ function activityStartedByEvent(
       };
     default:
       return undefined;
+  }
+}
+
+function activityStartIdPath(
+  townEvent: z.infer<typeof TownEventSchema>,
+): string[] {
+  switch (townEvent.type) {
+    case 'activity.started':
+      return ['payload', 'activity', 'id'];
+    case 'fortune.started':
+      return ['payload', 'fortuneId'];
+    case 'build.started':
+      return ['payload', 'modificationId'];
+    case 'stall.opened':
+      return ['payload', 'stallId'];
+    default:
+      return ['payload'];
   }
 }
 
