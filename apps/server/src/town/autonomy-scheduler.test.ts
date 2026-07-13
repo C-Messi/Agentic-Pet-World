@@ -248,6 +248,56 @@ describe('selectAutonomousResidents', () => {
     ).toEqual(['player-cat']);
   });
 
+  it('puts every participant of a resident decision event on cooldown', () => {
+    const sharedDecision = event(
+      'resident.spoke',
+      ['resident-mikan', 'resident-huihui'],
+      '2026-07-13T09:00:55.000Z',
+    );
+
+    expect(
+      selectAutonomousResidents({
+        projection: projection(),
+        recentEvents: [sharedDecision],
+        nowMs: NOW,
+        limit: 2,
+      }),
+    ).toEqual(['player-cat', 'resident-lanlan']);
+  });
+
+  it('uses the maximum timestamp for participants when events are unordered', () => {
+    const fullState = projection();
+    const state = TownProjectionSchema.parse({
+      ...fullState,
+      residents: fullState.residents.filter(({ residentId }) =>
+        ['player-cat', 'resident-mikan', 'resident-huihui'].includes(
+          residentId,
+        ),
+      ),
+    });
+    const recentEvents = [
+      event(
+        'resident.spoke',
+        ['resident-mikan', 'resident-huihui'],
+        '2026-07-13T09:00:59.000Z',
+      ),
+      event(
+        'resident.moved',
+        ['resident-mikan', 'resident-huihui'],
+        '2026-07-13T08:00:00.000Z',
+      ),
+    ];
+
+    expect(
+      selectAutonomousResidents({
+        projection: state,
+        recentEvents,
+        nowMs: NOW,
+        limit: 2,
+      }),
+    ).toEqual(['player-cat']);
+  });
+
   it('excludes busy residents and residents still on cooldown', () => {
     expect(
       selectAutonomousResidents({

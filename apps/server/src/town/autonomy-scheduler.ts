@@ -64,8 +64,6 @@ export function selectAutonomousResidents(
     switch (townEvent.type) {
       case 'resident.moved':
       case 'resident.spoke':
-        updateLatestDecision(townEvent.payload.residentId, townEvent.timestamp);
-        break;
       case 'residents.played':
         for (const residentId of townEvent.participantIds) {
           updateLatestDecision(residentId, townEvent.timestamp);
