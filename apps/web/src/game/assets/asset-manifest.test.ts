@@ -129,6 +129,28 @@ function pngFramePixels(
   return frame;
 }
 
+function expectFrameRegionTransparent(
+  png: ReturnType<typeof pngInfo>,
+  frameIndex: number,
+  frameWidth: number,
+  frameHeight: number,
+  columns: number,
+  region: { x: number; y: number; width: number; height: number },
+) {
+  const pixels = pngFramePixels(
+    png,
+    frameIndex,
+    frameWidth,
+    frameHeight,
+    columns,
+  );
+  for (let y = region.y; y < region.y + region.height; y += 1) {
+    for (let x = region.x; x < region.x + region.width; x += 1) {
+      expect(pixels[(y * frameWidth + x) * 4 + 3]).toBe(0);
+    }
+  }
+}
+
 describe('generated pixel asset manifests', () => {
   it('keeps canonical cat states in stable equal-sized atlas cells', () => {
     expect(catManifest.image).toBe('cat-atlas.png');
@@ -245,6 +267,35 @@ describe('generated pixel asset manifests', () => {
       return createHash('sha256').update(pixels).digest('hex');
     });
     expect(new Set(hashes).size).toBe(36);
+  });
+
+  it.each([
+    {
+      name: 'fence-horizontal into fence-vertical',
+      frameIndex: 54,
+      region: { x: 0, y: 20, width: 7, height: 36 },
+    },
+    {
+      name: 'fence-vertical into plaza-banner',
+      frameIndex: 62,
+      region: { x: 16, y: 0, width: 34, height: 7 },
+    },
+    {
+      name: 'dock into plaza-fountain-detailed',
+      frameIndex: 61,
+      region: { x: 0, y: 27, width: 2, height: 24 },
+    },
+  ])('does not spill $name', ({ frameIndex, region }) => {
+    const { frame, columns } = townManifest.atlas;
+    const png = pngInfo(`public/assets/town/${townManifest.atlas.image}`);
+    expectFrameRegionTransparent(
+      png,
+      frameIndex,
+      frame.width,
+      frame.height,
+      columns,
+      region,
+    );
   });
 
   it('uses local manifest image names only', () => {

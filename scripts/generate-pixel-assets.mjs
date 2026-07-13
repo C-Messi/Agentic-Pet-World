@@ -107,6 +107,25 @@ function tree(image, x, y, canopy, canopyLight, trunk, outline, blossoms) {
   });
 }
 
+function assertFrameOwnership(image, before, x, y, width, height, name) {
+  for (let py = 0; py < image.height; py += 1) {
+    for (let px = 0; px < image.width; px += 1) {
+      if (px >= x && px < x + width && py >= y && py < y + height) continue;
+      const offset = (py * image.width + px) * 4;
+      if (
+        image.pixels[offset] !== before[offset] ||
+        image.pixels[offset + 1] !== before[offset + 1] ||
+        image.pixels[offset + 2] !== before[offset + 2] ||
+        image.pixels[offset + 3] !== before[offset + 3]
+      ) {
+        throw new Error(
+          `Town frame "${name}" drew outside its cell at ${px},${py}`,
+        );
+      }
+    }
+  }
+}
+
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -628,6 +647,7 @@ function drawTownAtlas() {
   ];
   names.forEach((name, index) => {
     const { x, y } = tile(index);
+    const before = index >= 28 ? image.pixels.slice() : undefined;
     if (name === 'water') image.rect(x, y, 64, 64, colors.sky);
     else if (name === 'path') image.rect(x, y, 64, 64, colors.cream);
     else if (name.startsWith('sign-')) {
@@ -947,7 +967,7 @@ function drawTownAtlas() {
       image.rect(x, y + 30, 64, 3, colors.cream);
       image.rect(x, y + 43, 64, 7, colors.ink);
       image.rect(x, y + 45, 64, 3, colors.cream);
-      for (let post = 3; post < 64; post += 20) {
+      for (let post = 3; post + 8 <= 64; post += 20) {
         image.rect(x + post, y + 20, 8, 36, colors.ink);
         image.rect(x + post + 2, y + 23, 4, 30, colors.woodLight);
       }
@@ -956,7 +976,7 @@ function drawTownAtlas() {
       image.rect(x + 22, y, 3, 64, colors.cream);
       image.rect(x + 38, y, 7, 64, colors.ink);
       image.rect(x + 40, y, 3, 64, colors.cream);
-      for (let post = 3; post < 64; post += 20) {
+      for (let post = 3; post + 8 <= 64; post += 20) {
         image.rect(x + 16, y + post, 34, 8, colors.ink);
         image.rect(x + 19, y + post + 2, 28, 4, colors.woodLight);
       }
@@ -1011,7 +1031,7 @@ function drawTownAtlas() {
     } else if (name === 'dock') {
       image.rect(x, y + 23, 64, 32, colors.ink);
       image.rect(x, y + 27, 64, 24, colors.wood);
-      for (let plank = 2; plank < 64; plank += 12)
+      for (let plank = 2; plank + 3 <= 64; plank += 12)
         image.rect(x + plank, y + 27, 3, 24, colors.woodLight);
       image.rect(x, y + 37, 64, 3, colors.shadow);
       image.rect(x + 7, y + 17, 8, 39, colors.ink);
@@ -1059,6 +1079,7 @@ function drawTownAtlas() {
       );
       image.rect(x + 20, y + 7, 24, 14, colors.sunflower);
     }
+    if (before) assertFrameOwnership(image, before, x, y, 64, 64, name);
   });
   return { image, names };
 }
