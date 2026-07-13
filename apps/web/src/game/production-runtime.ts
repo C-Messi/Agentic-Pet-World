@@ -26,6 +26,7 @@ import { TownScene } from './scenes/town-scene';
 import { TownApiClient } from './town/town-api-client';
 import { TownEventPlayer } from './town/town-event-player';
 import { TownPlaybackCoordinator } from './town/town-playback-coordinator';
+import { TownPulseLoop } from './town/town-pulse-loop';
 
 export function createProductionRuntime(parent: HTMLElement): GameUiRuntime {
   return new ProductionGameRuntime(parent, import.meta.env.VITE_API_URL ?? '');
@@ -37,9 +38,11 @@ class ProductionGameRuntime implements GameUiRuntime {
   private readonly api: AgentApiClient;
   private readonly bridge: AgentBridge;
   private readonly townApi: TownApiClient;
+  private readonly townPulseLoop: TownPulseLoop;
   private readonly worldReady: Promise<void>;
   private removeWorldReadyListener: (() => void) | undefined;
   private removeWorldSnapshotListener: (() => void) | undefined;
+  private removeVisibilityListener: (() => void) | undefined;
   private sessionId: string | undefined;
   private latestSnapshot: WorldSnapshot | undefined;
   private townSnapshot: TownSnapshotResponse | undefined;
@@ -80,6 +83,21 @@ class ProductionGameRuntime implements GameUiRuntime {
       () => this.requireLatestSnapshot(),
       { bubbles: gameBubbles },
     );
+    this.townPulseLoop = new TownPulseLoop(
+      this.townApi,
+      {
+        playAndConfirm: (_sessionId, events, projection, signal) =>
+          this.playTownEvents(events, projection, signal),
+      },
+      (projection) => this.publishTownProjection(projection),
+    );
+    const onVisibilityChange = () => {
+      if (document.hidden) this.townPulseLoop.stop();
+      else this.startTownPulseLoop();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    this.removeVisibilityListener = () =>
+      document.removeEventListener('visibilitychange', onVisibilityChange);
   }
 
   async initialize(storedSessionId?: string): Promise<RuntimeSnapshot> {
@@ -109,6 +127,7 @@ class ProductionGameRuntime implements GameUiRuntime {
           this.townSnapshot.projection,
         );
         this.pendingRecoveryEvents = [];
+        this.startTownPulseLoop();
       }
       return {
         sessionId: session.session.id,
@@ -159,10 +178,12 @@ class ProductionGameRuntime implements GameUiRuntime {
     this.game.scene.start(TownScene.key, { snapshot: response.projection });
     await ready;
     await this.playEventsSince(previousSequence, response.projection);
+    this.startTownPulseLoop();
     return this.townSnapshot;
   }
 
   async recallPet(): Promise<TownSnapshotResponse> {
+    this.townPulseLoop.stop();
     const sessionId = this.requireSessionId();
     const previousCardIds = new Set(
       this.townSnapshot?.experienceCards.map(({ id }) => id) ?? [],
@@ -174,6 +195,7 @@ class ProductionGameRuntime implements GameUiRuntime {
       this.playerResidentId(),
     );
     await this.playEventsSince(previousSequence, response.projection);
+    this.townPulseLoop.stop();
     this.game.scene.stop(TownScene.key);
     this.game.scene.start(WorldScene.key);
     this.townSnapshot = await this.townApi.snapshot(sessionId);
@@ -244,6 +266,9 @@ class ProductionGameRuntime implements GameUiRuntime {
   }
 
   destroy(): void {
+    this.townPulseLoop.stop();
+    this.removeVisibilityListener?.();
+    this.removeVisibilityListener = undefined;
     this.removeWorldReadyListener?.();
     this.removeWorldReadyListener = undefined;
     this.removeWorldSnapshotListener?.();
@@ -340,6 +365,7 @@ class ProductionGameRuntime implements GameUiRuntime {
   private async playTownEvents(
     events: readonly TownEvent[],
     projection: TownProjection,
+    signal?: AbortSignal,
   ): Promise<void> {
     if (events.length === 0) return;
     const scene = this.game.scene.getScene(TownScene.key) as TownScene;
@@ -351,7 +377,34 @@ class ProductionGameRuntime implements GameUiRuntime {
       this.requireSessionId(),
       events,
       projection,
+      signal,
     );
+  }
+
+  private startTownPulseLoop(): void {
+    if (document.hidden || !this.game.scene.isActive(TownScene.key)) return;
+    const snapshot = this.townSnapshot;
+    const player = snapshot?.projection.residents.find(
+      ({ pet }) => pet.source === 'player-pet',
+    );
+    const outing = snapshot?.outings.find(
+      (item) => item.residentId === player?.residentId,
+    );
+    if (outing?.status !== 'town') return;
+    this.townPulseLoop.start(() => {
+      const projection = this.townSnapshot?.projection;
+      if (!projection) throw new Error('Town projection is unavailable');
+      return projection;
+    });
+  }
+
+  private publishTownProjection(projection: TownProjection): void {
+    if (this.townSnapshot)
+      this.townSnapshot = { ...this.townSnapshot, projection };
+    if (this.game.scene.isActive(TownScene.key))
+      (this.game.scene.getScene(TownScene.key) as TownScene).applySnapshot(
+        projection,
+      );
   }
 
   private waitForTownReady(): Promise<void> {
