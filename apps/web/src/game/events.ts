@@ -1,4 +1,4 @@
-import type { AgentAction, ActionResult, WorldSnapshot } from '@cat-house/shared';
+import type { AgentAction, ActionResult, TownProjection, WorldSnapshot } from '@cat-house/shared';
 
 export type ConnectionStatus =
   | 'connecting'
@@ -23,6 +23,9 @@ export interface GameEventMap {
   'action-completed': CorrelatedResultPayload;
   'action-failed': CorrelatedResultPayload;
   'connection-status': { status: ConnectionStatus; message?: string };
+  'town-ready': TownProjection;
+  'town-follow-changed': { residentId: string };
+  'town-subtitle': { eventId: string; text: string };
 }
 
 type EventListener<T> = (payload: T) => void;
