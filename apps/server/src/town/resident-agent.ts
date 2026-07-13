@@ -410,12 +410,11 @@ function requireEncounterCounterpart(
   if (counterpartId === context.residentId) {
     throw new TypeError('Encounter residents must be distinct');
   }
-  if (
-    !context.projection.residents.some(
-      ({ residentId }) => residentId === counterpartId,
-    )
-  ) {
-    throw new TypeError(`Encounter counterpart is missing: ${counterpartId}`);
+  const counterpart = context.projection.residents.find(
+    ({ residentId }) => residentId === counterpartId,
+  );
+  if (counterpart === undefined || counterpart.availability !== 'available') {
+    throw new TypeError('Encounter counterpart is missing or unavailable');
   }
 }
 

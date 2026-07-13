@@ -812,7 +812,7 @@ describe('ResidentAgent encounter dialogue', () => {
     expect(EncounterReplySchema.parse(result.reply)).toEqual(result.reply);
   });
 
-  it('rejects missing or self encounter counterparts before provider use', async () => {
+  it('rejects missing, self, or busy encounter counterparts before provider use', async () => {
     const complete = vi.fn<ProviderAdapter['complete']>();
     const agent = new ResidentAgent({ complete });
 
@@ -827,6 +827,18 @@ describe('ResidentAgent encounter dialogue', () => {
     ).rejects.toThrow();
     await expect(
       agent.followUp(followUpContext({ responderId: 'resident-missing' })),
+    ).rejects.toThrow();
+    await expect(
+      agent.respond(
+        responseContext({ projection: projectionWithBusyResident(mikan.id) }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      agent.followUp(
+        followUpContext({
+          projection: projectionWithBusyResident(huihui.id),
+        }),
+      ),
     ).rejects.toThrow();
     expect(complete).not.toHaveBeenCalled();
   });
