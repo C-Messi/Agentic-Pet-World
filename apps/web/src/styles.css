@@ -466,7 +466,7 @@ button {
     justify-self: end;
   }
 
-  .town-tool-strip { inset-block-start: 112px; }
+  .town-tool-strip { inset-block-start: 162px; }
 
   .command-dock {
     inline-size: calc(100vw - 16px);

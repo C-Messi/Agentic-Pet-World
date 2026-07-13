@@ -30,5 +30,8 @@ describe('responsive interface styles', () => {
     expect(css).toMatch(
       /@media\s*\(max-width:\s*600px\)[\s\S]*\.town-controls\s*\{[^}]*grid-column:\s*1\s*\/\s*-1[^}]*justify-self:\s*end/s,
     );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*600px\)[\s\S]*\.town-tool-strip\s*\{[^}]*inset-block-start:\s*162px/s,
+    );
   });
 });
