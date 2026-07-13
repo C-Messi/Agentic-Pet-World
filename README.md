@@ -90,6 +90,8 @@ With `.env.example` values, the web app is at `http://localhost:5173`, the API i
 
 The current vertical slice completes the full fortune (`started -> revealed -> interpreted`), build (`started -> completed`), and showcase (`opened -> visited -> closed`) lifecycles. Residents are deterministic local fixtures presented as town residents; the UI does not label them as mocks or claim that real users are online.
 
+Autonomous residents use the same server-side Provider configuration as the room agent; no additional environment variables are required. Each decision prompt is distinguished by that resident's public pet definition, and decisions run only while the Town observer view is visible. Ordinary rendered movement is local and does not call the LLM. An encounter normally uses two Provider calls (one decision and one reply), with at most a third follow-up call. If any Provider call fails, the server substitutes a deterministic degraded decision while preserving the same validated event and persistence path.
+
 ## Persistence And Knowledge
 
 `DATABASE_URL` defaults to `./data/cat-house.sqlite`. When started through the root scripts, that resolves to `apps/server/data/cat-house.sqlite`. The server creates the directory, enables foreign keys and WAL mode, and applies the ordered migrations in `apps/server/src/storage/migrations/` automatically at startup. Set `DATABASE_URL=:memory:` only for disposable runs.
@@ -119,6 +121,7 @@ All routes are scoped below `/api/sessions/:id/town` and require an existing ses
 | `POST /release`            | Release the player pet into town; idempotent while already out         |
 | `POST /recall`             | Recall an interruptible player pet                                     |
 | `POST /advance`            | Validate one to sixteen town intents and append deterministic events   |
+| `POST /pulse`              | Run one idempotent, bounded autonomous resident decision pulse         |
 | `POST /event-results`      | Idempotently acknowledge client playback results                       |
 | `POST /recover`            | Execute or replay one bounded offline recovery window                  |
 | `GET /history`             | Recent source events and linked experience cards                       |

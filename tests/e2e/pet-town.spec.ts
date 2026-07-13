@@ -8,6 +8,44 @@ import {
 import { inspectCanvas, inspectTownCanvas } from './canvas-inspection';
 
 const MAX_TOWN_SPRITE_FRAME_DIFF = 1_500;
+const AUTONOMOUS_TOWN_TIMEOUT_MS = 35_000;
+
+interface TownPosition {
+  x: number;
+  y: number;
+}
+
+interface TownResident {
+  residentId: string;
+  position: TownPosition;
+}
+
+interface TownProjection {
+  version: number;
+  lastEventSequence: number;
+  residents: TownResident[];
+}
+
+interface TownSnapshot {
+  projection: TownProjection;
+  outings: Array<{ lastConfirmedAt: string }>;
+}
+
+interface TownEvent {
+  id: string;
+  sequence: number;
+  type: string;
+  participantIds: string[];
+  payload: {
+    residentId?: string;
+    position?: TownPosition;
+    standalone?: boolean;
+  };
+}
+
+interface TownHistory {
+  events: TownEvent[];
+}
 
 interface Metadata {
   primaryApiUrl: string;
@@ -43,7 +81,119 @@ async function town(request: APIRequestContext, id: string) {
     `${metadata().primaryApiUrl}/api/sessions/${id}/town`,
   );
   expect(response.ok()).toBe(true);
-  return response.json();
+  return (await response.json()) as TownSnapshot;
+}
+
+async function townHistory(request: APIRequestContext, id: string) {
+  const response = await request.get(
+    `${metadata().primaryApiUrl}/api/sessions/${id}/town/history`,
+  );
+  expect(response.ok()).toBe(true);
+  return (await response.json()) as TownHistory;
+}
+
+async function inspectTownBubbleCenter(page: Page) {
+  return page
+    .locator('.game-surface canvas')
+    .evaluate(async (canvas: HTMLCanvasElement) => {
+      const image = new Image();
+      image.src = canvas.toDataURL('image/png');
+      await image.decode();
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const context = copy.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('Town bubble inspection is unavailable');
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, copy.width, copy.height).data;
+      const mask = new Uint8Array(copy.width * copy.height);
+      for (let index = 0, offset = 0; index < mask.length; index += 1) {
+        const red = pixels[offset] ?? 0;
+        const green = pixels[offset + 1] ?? 0;
+        const blue = pixels[offset + 2] ?? 0;
+        offset += 4;
+        if (red >= 248 && green >= 240 && blue >= 210 && blue <= 230) {
+          mask[index] = 1;
+        }
+      }
+
+      const visited = new Uint8Array(mask.length);
+      const centers: Array<{ center: number; pixels: number }> = [];
+      for (let start = 0; start < mask.length; start += 1) {
+        if (mask[start] !== 1 || visited[start] === 1) continue;
+        const queue = [start];
+        visited[start] = 1;
+        let cursor = 0;
+        let count = 0;
+        let minX = copy.width;
+        let minY = copy.height;
+        let maxX = -1;
+        let maxY = -1;
+        while (cursor < queue.length) {
+          const index = queue[cursor++]!;
+          const x = index % copy.width;
+          const y = Math.floor(index / copy.width);
+          count += 1;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+          for (const next of [
+            index - 1,
+            index + 1,
+            index - copy.width,
+            index + copy.width,
+          ]) {
+            if (
+              next < 0 ||
+              next >= mask.length ||
+              visited[next] === 1 ||
+              mask[next] !== 1
+            ) {
+              continue;
+            }
+            if (Math.abs((next % copy.width) - x) > 1) continue;
+            visited[next] = 1;
+            queue.push(next);
+          }
+        }
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
+        if (
+          count >= 150 &&
+          width >= 24 &&
+          width <= 220 &&
+          height >= 10 &&
+          height <= 40 &&
+          count / (width * height) >= 0.45
+        ) {
+          centers.push({ center: (minX + maxX) / 2, pixels: count });
+        }
+      }
+      centers.sort((left, right) => right.pixels - left.pixels);
+      return centers[0]?.center ?? null;
+    });
+}
+
+async function observeTownBubbleSequence(page: Page) {
+  const bubbleCenters: number[] = [];
+  await expect
+    .poll(
+      async () => {
+        const center = await inspectTownBubbleCenter(page);
+        if (center === null) return bubbleCenters;
+        if (
+          bubbleCenters.every(
+            (previousCenter) => Math.abs(center - previousCenter) > 8,
+          )
+        ) {
+          bubbleCenters.push(center);
+        }
+        return bubbleCenters;
+      },
+      { timeout: AUTONOMOUS_TOWN_TIMEOUT_MS },
+    )
+    .toHaveLength(2);
 }
 
 async function advance(request: APIRequestContext, id: string, body: object) {
@@ -63,6 +213,7 @@ test('pet town vertical slice persists activities, recovery, and a sourced first
   page,
   request,
 }, testInfo) => {
+  test.setTimeout(180_000);
   testInfo.snapshotSuffix = '';
   const pageErrors: string[] = [];
   page.on('pageerror', (error) =>
@@ -78,6 +229,15 @@ test('pet town vertical slice persists activities, recovery, and a sourced first
   );
   await page.getByRole('button', { name: '放桌宠去小镇' }).click();
   expect((await releaseResponse).status()).toBe(200);
+  const beforeAutonomy = await town(request, id);
+  const initialPositions = new Map(
+    beforeAutonomy.projection.residents.map(({ residentId, position }) => [
+      residentId,
+      position,
+    ]),
+  );
+  const bubbleSequence = observeTownBubbleSequence(page);
+  void bubbleSequence.catch(() => undefined);
   await page.waitForTimeout(500);
   expect(pageErrors).toEqual([]);
   await expect(page.getByRole('button', { name: '让桌宠回家' })).toBeVisible();
@@ -100,6 +260,115 @@ test('pet town vertical slice persists activities, recovery, and a sourced first
     path: testInfo.outputPath('town.png'),
     fullPage: true,
   });
+
+  const movedResidentIds = new Set<string>();
+  const autonomousState = async () => {
+    const [current, history] = await Promise.all([
+      town(request, id),
+      townHistory(request, id),
+    ]);
+    const autonomousEvents = history.events.filter(
+      ({ sequence }) => sequence > beforeAutonomy.projection.lastEventSequence,
+    );
+    for (const event of autonomousEvents) {
+      if (event.type === 'resident.moved' && event.payload.residentId) {
+        movedResidentIds.add(event.payload.residentId);
+      }
+    }
+    for (const resident of current.projection.residents) {
+      const initial = initialPositions.get(resident.residentId);
+      if (
+        initial !== undefined &&
+        (resident.position.x !== initial.x || resident.position.y !== initial.y)
+      ) {
+        movedResidentIds.add(resident.residentId);
+      }
+    }
+    return { autonomousEvents, current };
+  };
+  await expect
+    .poll(
+      async () => {
+        const { autonomousEvents, current } = await autonomousState();
+        return {
+          projectionAdvanced:
+            current.projection.version > beforeAutonomy.projection.version,
+          hasConversation:
+            autonomousEvents.filter(({ type }) => type === 'resident.spoke')
+              .length >= 2,
+          hasStandalonePlay: autonomousEvents.some(
+            ({ participantIds, payload, type }) =>
+              type === 'residents.played' &&
+              participantIds.length === 2 &&
+              payload.standalone === true,
+          ),
+        };
+      },
+      { timeout: AUTONOMOUS_TOWN_TIMEOUT_MS },
+    )
+    .toEqual({
+      projectionAdvanced: true,
+      hasConversation: true,
+      hasStandalonePlay: true,
+    });
+  await expect
+    .poll(
+      async () => {
+        await autonomousState();
+        return beforeAutonomy.projection.residents
+          .map(({ residentId }) => residentId)
+          .filter((residentId) => !movedResidentIds.has(residentId));
+      },
+      { timeout: 75_000 },
+    )
+    .toEqual([]);
+
+  const autonomousHistory = await townHistory(request, id);
+  const autonomousEvents = autonomousHistory.events.filter(
+    ({ sequence }) => sequence > beforeAutonomy.projection.lastEventSequence,
+  );
+  const standalonePlay = autonomousEvents.find(
+    ({ participantIds, payload, type }) =>
+      type === 'residents.played' &&
+      participantIds.length === 2 &&
+      payload.standalone === true,
+  );
+  expect(standalonePlay).toBeDefined();
+  const encounterSpeech = autonomousEvents.filter(
+    ({ participantIds, type }) =>
+      type === 'resident.spoke' &&
+      participantIds.length === 2 &&
+      participantIds.every((residentId) =>
+        standalonePlay!.participantIds.includes(residentId),
+      ),
+  );
+  expect(encounterSpeech.length).toBeGreaterThanOrEqual(2);
+  expect(
+    encounterSpeech.slice(0, 2).map(({ payload }) => payload.residentId),
+  ).toEqual(standalonePlay!.participantIds);
+  await bubbleSequence;
+
+  const beforeReloadHistory = await townHistory(request, id);
+  await page.reload();
+  await expect(page.getByRole('status')).toContainText('Ready', {
+    timeout: 15_000,
+  });
+  await expect(page.getByRole('button', { name: '让桌宠回家' })).toBeVisible();
+  const afterReloadHistory = await townHistory(request, id);
+  expect(
+    new Set(afterReloadHistory.events.map(({ id: eventId }) => eventId)).size,
+  ).toBe(afterReloadHistory.events.length);
+  expect(
+    new Set(afterReloadHistory.events.map(({ sequence }) => sequence)).size,
+  ).toBe(afterReloadHistory.events.length);
+  for (const event of beforeReloadHistory.events) {
+    expect(
+      afterReloadHistory.events.filter(
+        ({ id: eventId, sequence }) =>
+          eventId === event.id && sequence === event.sequence,
+      ),
+    ).toHaveLength(1);
+  }
 
   const item = {
     id: 'public-music',
