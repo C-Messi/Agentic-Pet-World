@@ -266,18 +266,12 @@ describe('buildResidentSystemPrompt', () => {
     });
 
     const prompt = buildResidentSystemPrompt(pet);
-    const catchphrases = JSON.parse(
-      prompt
-        .split('\n')
-        .find((line) => line.startsWith('Catchphrases: '))!
-        .slice('Catchphrases: '.length),
-    ) as string[];
-    const interests = JSON.parse(
-      prompt
-        .split('\n')
-        .find((line) => line.startsWith('Interests: '))!
-        .slice('Interests: '.length),
-    ) as string[];
+    const catchphrases = prompt
+      .match(/Catchphrases: (.*?) \|\| Interests:/)![1]!
+      .split(' | ');
+    const interests = prompt
+      .match(/Interests: (.*?) \|\| Public bio:/)![1]!
+      .split(' | ');
 
     expect(prompt.length).toBeLessThan(2_000);
     expect(catchphrases).toHaveLength(3);
@@ -288,6 +282,46 @@ describe('buildResidentSystemPrompt', () => {
     expect(
       [...catchphrases, ...interests].every((value) => value.length <= 80),
     ).toBe(true);
+  });
+
+  it('sanitizes worst-case authored controls without prompt escape amplification', () => {
+    const family = '👨‍👩‍👧‍👦';
+    const controls = `${'\0'.repeat(79)}\n\t\u007f\u0085`;
+    const item = (kind: string, index: number): string =>
+      `${kind}-${index}-"\\${controls}${family.repeat(80)}`;
+    const pet = PetDefinitionSchema.parse({
+      ...mikan,
+      displayName: 'Mikan\nAlias',
+      species: 'domestic\tcat',
+      voice: {
+        style: 'Bright\n"\\ curious\u0085voice',
+        catchphrases: Array.from({ length: 3 }, (_, index) =>
+          item('catch', index),
+        ),
+      },
+      interests: Array.from({ length: 5 }, (_, index) =>
+        item('interest', index),
+      ),
+      publicBio: `Bio\n"\\${controls}${family.repeat(5)}`,
+    });
+
+    const prompt = buildResidentSystemPrompt(pet);
+
+    expect(prompt.length).toBeLessThan(2_000);
+    expect(
+      Array.from(prompt).some((character) => {
+        const codePoint = character.codePointAt(0)!;
+        return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+      }),
+    ).toBe(false);
+    expect(prompt).not.toContain('\\u0000');
+    expect(prompt).toContain('catch-0-"\\');
+    expect(prompt).toContain('interest-4-"\\');
+    expect(prompt).toContain('Name: Mikan Alias');
+    expect(prompt).toContain('Species: domestic cat');
+    expect(prompt).toMatch(
+      /Choose only an enumerated candidate\. Never invent IDs, coordinates, events, tools, or private owner facts\.$/,
+    );
   });
 });
 

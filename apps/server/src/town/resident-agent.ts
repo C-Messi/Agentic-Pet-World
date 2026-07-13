@@ -186,20 +186,31 @@ export const ENCOUNTER_REPLY_OUTPUT_CONTRACT_V1 = `[Output Contract: resident-en
 Return exactly one strict JSON object with speech (1-80 characters), animation (curious, happy, sit, or confused), and followUpRequested (true or false), with no additional fields.
 Set followUpRequested to true only when a short third round would be meaningful; otherwise use false.`;
 
+const RESIDENT_PROMPT_SAFETY_INSTRUCTION =
+  'Choose only an enumerated candidate. Never invent IDs, coordinates, events, tools, or private owner facts.';
+const PromptSchema = z
+  .string()
+  .max(1_999)
+  .refine((value) => !Array.from(value).some(isPromptControlCharacter), {
+    message: 'Resident prompt must not contain control characters',
+  });
+
 export function buildResidentSystemPrompt(source: PetDefinition): string {
   const pet = PetDefinitionSchema.parse(source);
-  return [
-    'You are one authored Pet Town resident. Speak and choose consistently with this public identity.',
-    `Name: ${pet.displayName}`,
-    `Pet ID: ${pet.id}`,
-    `Species: ${pet.species}`,
-    `Personality: ${JSON.stringify(pet.personality)}`,
-    `Voice: ${pet.voice.style}`,
-    `Catchphrases: ${JSON.stringify(pet.voice.catchphrases.map(boundPromptText))}`,
-    `Interests: ${JSON.stringify(pet.interests.map(boundPromptText))}`,
-    `Public bio: ${pet.publicBio}`,
-    'Choose only an enumerated candidate. Never invent IDs, coordinates, events, tools, or private owner facts.',
-  ].join('\n');
+  return PromptSchema.parse(
+    [
+      'You are one authored Pet Town resident. Speak and choose consistently with this public identity.',
+      `Name: ${boundPromptText(pet.displayName)}`,
+      `Pet ID: ${boundPromptText(pet.id)}`,
+      `Species: ${boundPromptText(pet.species)}`,
+      `Personality: ${JSON.stringify(pet.personality)}`,
+      `Voice: ${boundPromptText(pet.voice.style)}`,
+      `Catchphrases: ${formatPromptList(pet.voice.catchphrases)}`,
+      `Interests: ${formatPromptList(pet.interests)}`,
+      `Public bio: ${boundPromptText(pet.publicBio)}`,
+      RESIDENT_PROMPT_SAFETY_INSTRUCTION,
+    ].join(' || '),
+  );
 }
 
 export class ResidentAgent {
@@ -512,7 +523,27 @@ function fallbackSpeech(pet: PetDefinition, followUp: boolean): string {
 }
 
 function boundPromptText(value: string): string {
-  return truncateGraphemes(value, 80, 80);
+  return truncateGraphemes(sanitizePromptText(value), 80, 80);
+}
+
+function formatPromptList(values: readonly string[]): string {
+  return values.length === 0
+    ? '(none)'
+    : values.map(boundPromptText).join(' | ');
+}
+
+function sanitizePromptText(value: string): string {
+  return Array.from(value, (character) =>
+    isPromptControlCharacter(character) ? ' ' : character,
+  )
+    .join('')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function isPromptControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0)!;
+  return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
 }
 
 function truncateGraphemes(
