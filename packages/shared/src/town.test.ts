@@ -611,7 +611,71 @@ describe('public town responses', () => {
     expect(TownPulseResponseSchema.parse({ status: 'advanced', ...response, degraded: false, degradedResidentIds: [] }).events).toHaveLength(3);
   });
 
-  it('validates standalone participants before a later activity changes their final state', () => {
+  it('validates standalone zone from prior moves before a later activity changes final state', () => {
+    const movedResident = {
+      ...event,
+      zoneId: 'plaza',
+      payload: { residentId: 'resident-1', position: { x: 8, y: 8 } },
+    };
+    const movedNpc = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      zoneId: 'plaza',
+      participantIds: ['resident-2'],
+      payload: { residentId: 'resident-2', position: { x: 9, y: 8 } },
+    };
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      sequence: 3,
+      baseVersion: 4,
+      type: 'residents.played',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { standalone: true, interactionId: 'standalone-play-1' },
+    };
+    const laterActivity = {
+      id: 'later-activity',
+      activityId: 'social-play',
+      zoneId: 'garden',
+      participantIds: ['resident-1', 'resident-2'],
+      version: 0,
+      state: { round: 0 },
+    } as const;
+    const started = {
+      ...activityStartedEvent,
+      id: 'event-4',
+      sequence: 4,
+      baseVersion: 5,
+      payload: { activity: laterActivity },
+    };
+    const busyResidents = [
+      { ...resident, position: { x: 8, y: 8 } },
+      { ...npcResident, position: { x: 9, y: 8 } },
+    ].map((value) => ({ ...value, zoneId: 'garden', availability: 'busy', activityInstanceId: laterActivity.id }));
+    const response = {
+      status: 'advanced',
+      projection: {
+        ...validProjection,
+        version: 6,
+        lastEventSequence: 4,
+        residents: busyResidents,
+        activities: [laterActivity],
+      },
+      events: [movedResident, movedNpc, played, started],
+      degraded: false,
+      degradedResidentIds: [],
+    } as const;
+
+    expect(TownPulseResponseSchema.parse(response).events).toHaveLength(4);
+    expect(() => TownPulseResponseSchema.parse({
+      ...response,
+      events: [movedResident, movedNpc, { ...played, zoneId: 'market' }, started],
+    })).toThrow(/zone/i);
+  });
+
+  it('fails closed when later transitions obscure standalone zone without prior evidence', () => {
     const played = {
       ...event,
       id: 'standalone-play-1',
@@ -641,7 +705,7 @@ describe('public town responses', () => {
       activityInstanceId: laterActivity.id,
     }));
 
-    expect(TownPulseResponseSchema.parse({
+    expect(() => TownPulseResponseSchema.parse({
       status: 'advanced',
       projection: {
         ...validProjection,
@@ -653,7 +717,7 @@ describe('public town responses', () => {
       events: [played, started],
       degraded: false,
       degradedResidentIds: [],
-    }).events).toHaveLength(2);
+    })).toThrow(/zone/i);
   });
 
   it('rejects standalone participants before their preexisting activity closes', () => {

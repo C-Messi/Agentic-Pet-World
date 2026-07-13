@@ -566,7 +566,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
           const resident = residentStateAtEvent(residents, value.events, index, residentId);
           if (resident === undefined) return;
           if (resident.availability !== 'available') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must be available', path: ['events', index, 'participantIds', participantIndex] });
-          if (resident.zoneId !== undefined && resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
+          if (resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
         });
       } else {
         const { activityInstanceId } = townEvent.payload;
