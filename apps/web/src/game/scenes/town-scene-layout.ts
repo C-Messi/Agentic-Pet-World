@@ -5,19 +5,19 @@ import {
 } from '@cat-house/shared';
 
 export type TownRenderPart = {
-  frame: number;
-  anchor: Position;
-  offset: Position;
-  depthOffset: number;
-  collisionCells: readonly Position[];
-  foreground: boolean;
+  readonly frame: number;
+  readonly anchor: Readonly<Position>;
+  readonly offset: Readonly<Position>;
+  readonly depthOffset: number;
+  readonly collisionCells: readonly Readonly<Position>[];
+  readonly foreground: boolean;
 };
 
 export type TownZonePresentation = {
-  zoneId: TownZoneId;
-  entrance: Position;
-  signFrame: number;
-  parts: readonly TownRenderPart[];
+  readonly zoneId: TownZoneId;
+  readonly entrance: Readonly<Position>;
+  readonly signFrame: number;
+  readonly parts: readonly TownRenderPart[];
 };
 
 export const TOWN_CAMERA_LAYOUT = {
@@ -35,7 +35,9 @@ export const DEFAULT_TOWN_SPAWNS: Readonly<Record<string, Position>> = {
   'resident-doubao': TOWN_ZONE_LAYOUT['build-plots'].entrance,
 };
 
-export const TOWN_ZONE_PRESENTATIONS = deepFreeze({
+export const TOWN_ZONE_PRESENTATIONS: Readonly<
+  Record<TownZoneId, TownZonePresentation>
+> = deepFreeze({
   gate: {
     zoneId: 'gate',
     entrance: TOWN_ZONE_LAYOUT.gate.entrance,

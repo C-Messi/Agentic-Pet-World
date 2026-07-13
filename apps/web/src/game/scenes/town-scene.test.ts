@@ -28,6 +28,16 @@ const EXPECTED_SIGN_FRAMES = {
   'arcade-house': 22,
 } as const;
 
+function assertTownPresentationIsReadonly(): void {
+  // @ts-expect-error Town presentation part collections are immutable metadata.
+  TOWN_ZONE_PRESENTATIONS.gate.parts = [];
+  // @ts-expect-error Town presentation part collections expose no mutators.
+  TOWN_ZONE_PRESENTATIONS.gate.parts.push(
+    TOWN_ZONE_PRESENTATIONS.gate.parts[0]!,
+  );
+}
+void assertTownPresentationIsReadonly;
+
 describe('TownScene state', () => {
   it('provides five stable resident spawn positions', () => {
     expect(DEFAULT_TOWN_SPAWNS).toEqual({
@@ -53,6 +63,7 @@ describe('TownScene state', () => {
 
   it('provides ordered layered parts for every shared town zone', () => {
     const byId = new Map(TOWN_ZONES.map((zone) => [zone.id, zone]));
+    const navigation = new TownNavigation();
     const presentations = Object.values(TOWN_ZONE_PRESENTATIONS);
 
     expect(Object.keys(TOWN_ZONE_PRESENTATIONS).sort()).toEqual(
@@ -76,12 +87,17 @@ describe('TownScene state', () => {
         expect(Number.isInteger(part.frame)).toBe(true);
         expect(part.frame).toBeGreaterThanOrEqual(0);
         expect(isInsideZone(part.anchor, zone.bounds)).toBe(true);
+        expect(Number.isInteger(part.anchor.x)).toBe(true);
+        expect(Number.isInteger(part.anchor.y)).toBe(true);
         expect(Number.isInteger(part.offset.x)).toBe(true);
         expect(Number.isInteger(part.offset.y)).toBe(true);
         expect(Number.isInteger(part.depthOffset)).toBe(true);
         expect(typeof part.foreground).toBe('boolean');
         for (const cell of part.collisionCells) {
           expect(isInsideZone(cell, zone.bounds)).toBe(true);
+          expect(Number.isInteger(cell.x)).toBe(true);
+          expect(Number.isInteger(cell.y)).toBe(true);
+          expect(navigation.isBlocked(cell)).toBe(true);
         }
       }
     }
