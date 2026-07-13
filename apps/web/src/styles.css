@@ -466,7 +466,10 @@ button {
     justify-self: end;
   }
 
-  .town-tool-strip { inset-block-start: 162px; }
+  .town-tool-strip {
+    inset-block-start: 162px;
+    grid-template-columns: repeat(4, 44px);
+  }
 
   .command-dock {
     inline-size: calc(100vw - 16px);
