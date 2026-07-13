@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "pet-sprite.v1",
+  "pixelArt": true,
+  "image": "pet-atlas.png",
+  "frame": {
+    "width": 32,
+    "height": 32
+  },
+  "columns": 4,
+  "rows": 7,
+  "anchor": {
+    "x": 0.5,
+    "y": 0.78
+  },
+  "body": {
+    "width": 24,
+    "height": 24,
+    "offsetX": 4,
+    "offsetY": 6
+  },
+  "animations": {
+    "idle": {
+      "frames": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "frameRate": 5
+    },
+    "walk": {
+      "frames": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "frameRate": 9
+    },
+    "sit": {
+      "frames": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "frameRate": 5
+    },
+    "sleep": {
+      "frames": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "frameRate": 5
+    },
+    "happy": {
+      "frames": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "frameRate": 5
+    },
+    "curious": {
+      "frames": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "frameRate": 5
+    },
+    "confused": {
+      "frames": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "frameRate": 5
+    }
+  }
+}

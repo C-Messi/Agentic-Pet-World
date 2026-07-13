@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const roomDirectory = join(root, 'apps/web/public/assets/room');
 const catDirectory = join(root, 'apps/web/public/assets/cat');
+const townDirectory = join(root, 'apps/web/public/assets/town');
+const petsDirectory = join(root, 'apps/web/public/assets/pets');
 
 const palette = {
   ink: '#3a3029',
@@ -43,7 +45,8 @@ function canvas(width, height) {
     },
     rect(x, y, rectangleWidth, rectangleHeight, color) {
       for (let py = y; py < y + rectangleHeight; py += 1) {
-        for (let px = x; px < x + rectangleWidth; px += 1) this.pixel(px, py, color);
+        for (let px = x; px < x + rectangleWidth; px += 1)
+          this.pixel(px, py, color);
       }
     },
     outline(x, y, rectangleWidth, rectangleHeight, color) {
@@ -65,7 +68,8 @@ const crcTable = Array.from({ length: 256 }, (_, index) => {
 
 function crc32(buffer) {
   let value = 0xffffffff;
-  for (const byte of buffer) value = crcTable[(value ^ byte) & 255] ^ (value >>> 8);
+  for (const byte of buffer)
+    value = crcTable[(value ^ byte) & 255] ^ (value >>> 8);
   return (value ^ 0xffffffff) >>> 0;
 }
 
@@ -121,7 +125,8 @@ function drawRoomBackground() {
   for (let y = 52; y < 248; y += 16) {
     image.rect(8, y, 368, 1, rgba(palette.shadow));
     const offset = (y / 16) % 2 === 0 ? 0 : 24;
-    for (let x = 8 + offset; x < 376; x += 48) image.rect(x, y, 1, 16, rgba(palette.shadow));
+    for (let x = 8 + offset; x < 376; x += 48)
+      image.rect(x, y, 1, 16, rgba(palette.shadow));
     image.rect(9, y + 2, 366, 1, rgba(palette.woodLight));
   }
 
@@ -140,8 +145,13 @@ function drawRoomBackground() {
 
 function drawFurniture() {
   const image = canvas(256, 128);
-  const colors = Object.fromEntries(Object.entries(palette).map(([key, value]) => [key, rgba(value)]));
-  const origin = (index) => ({ x: (index % 4) * 64, y: Math.floor(index / 4) * 64 });
+  const colors = Object.fromEntries(
+    Object.entries(palette).map(([key, value]) => [key, rgba(value)]),
+  );
+  const origin = (index) => ({
+    x: (index % 4) * 64,
+    y: Math.floor(index / 4) * 64,
+  });
 
   {
     const { x, y } = origin(0);
@@ -186,8 +196,20 @@ function drawFurniture() {
       const shelfY = y + 11 + shelf * 15;
       image.rect(x + 12, shelfY + 10, 40, 3, colors.woodLight);
       for (let book = 0; book < 5; book += 1) {
-        const bookColors = [colors.coral, colors.sky, colors.sunflower, colors.moss, colors.cream];
-        image.rect(x + 13 + book * 7, shelfY, 5, 10, bookColors[(book + shelf) % 5]);
+        const bookColors = [
+          colors.coral,
+          colors.sky,
+          colors.sunflower,
+          colors.moss,
+          colors.cream,
+        ];
+        image.rect(
+          x + 13 + book * 7,
+          shelfY,
+          5,
+          10,
+          bookColors[(book + shelf) % 5],
+        );
       }
     }
   }
@@ -198,7 +220,8 @@ function drawFurniture() {
     image.rect(x + 18, y + 20, 8, 13, colors.coral);
     image.rect(x + 28, y + 17, 7, 16, colors.sky);
     image.rect(x + 38, y + 22, 8, 11, colors.moss);
-    for (let xOffset = 18; xOffset < 48; xOffset += 8) image.rect(x + xOffset, y + 35, 3, 14, colors.cream);
+    for (let xOffset = 18; xOffset < 48; xOffset += 8)
+      image.rect(x + xOffset, y + 35, 3, 14, colors.cream);
   }
   {
     const { x, y } = origin(6);
@@ -228,7 +251,9 @@ function drawFurniture() {
 function drawCatFrame(image, frameIndex, state, phase) {
   const originX = (frameIndex % 4) * 32;
   const originY = Math.floor(frameIndex / 4) * 32;
-  const color = Object.fromEntries(Object.entries(palette).map(([key, value]) => [key, rgba(value)]));
+  const color = Object.fromEntries(
+    Object.entries(palette).map(([key, value]) => [key, rgba(value)]),
+  );
   const bob = state === 'walk' || state === 'happy' ? phase % 2 : 0;
   const x = originX;
   const y = originY + bob;
@@ -288,16 +313,213 @@ function drawCatFrame(image, frameIndex, state, phase) {
 }
 
 function drawCatAtlas() {
-  const states = ['idle', 'walk', 'sit', 'sleep', 'happy', 'curious', 'confused'];
+  const states = [
+    'idle',
+    'walk',
+    'sit',
+    'sleep',
+    'happy',
+    'curious',
+    'confused',
+  ];
   const image = canvas(128, 224);
   states.forEach((state, row) => {
-    for (let phase = 0; phase < 4; phase += 1) drawCatFrame(image, row * 4 + phase, state, phase);
+    for (let phase = 0; phase < 4; phase += 1)
+      drawCatFrame(image, row * 4 + phase, state, phase);
   });
   return image;
 }
 
+function drawPetFrame(image, frameIndex, state, phase, pet) {
+  const originX = (frameIndex % 4) * 32;
+  const originY = Math.floor(frameIndex / 4) * 32;
+  const ink = rgba(palette.ink);
+  const primary = rgba(pet.primary);
+  const secondary = rgba(pet.secondary);
+  const accent = rgba(pet.accent);
+  const bob = state === 'walk' || state === 'happy' ? phase % 2 : 0;
+  const x = originX;
+  const y = originY + bob;
+
+  if (state === 'sleep') {
+    image.rect(x + 6, y + 18, 21, 8, ink);
+    image.rect(x + 8, y + 16, 17, 9, primary);
+    image.rect(x + 20, y + 14, 7, 8, primary);
+    image.rect(x + 22, y + 18, 4, 1, ink);
+    image.rect(x + 8, y + 23, 8, 2, secondary);
+    return;
+  }
+
+  image.rect(
+    x + 8,
+    y + (state === 'sit' ? 17 : 18),
+    18,
+    state === 'sit' ? 10 : 8,
+    ink,
+  );
+  image.rect(
+    x + 10,
+    y + (state === 'sit' ? 16 : 17),
+    14,
+    state === 'sit' ? 11 : 8,
+    primary,
+  );
+  image.rect(x + 11, y + 8, 13, 11, ink);
+  const earHeight = pet.ears === 'tall' ? 6 : 4;
+  image.rect(x + 12, y + 8 - earHeight + 2, 4, earHeight, primary);
+  image.rect(x + 20, y + 8 - earHeight + 2, 4, earHeight, primary);
+  image.rect(x + 12, y + 10, 11, 8, primary);
+  image.rect(x + 14, y + 13, 7, 5, secondary);
+  image.rect(x + 14, y + 11, 2, 2, ink);
+  image.rect(x + 20, y + 11, 2, 2, ink);
+  image.pixel(x + 18, y + 14, accent);
+
+  const tailY = y + 18 + (phase % 2) * (pet.tail === 'bushy' ? 1 : 2);
+  image.rect(
+    x + (pet.tail === 'short' ? 6 : 4),
+    tailY,
+    pet.tail === 'short' ? 5 : 7,
+    3,
+    ink,
+  );
+  image.rect(
+    x + (pet.tail === 'short' ? 7 : 5),
+    tailY,
+    pet.tail === 'short' ? 4 : 6,
+    2,
+    accent,
+  );
+  if (pet.marking === 'stripe') {
+    image.rect(x + 16, y + 8, 2, 4, accent);
+    image.rect(x + 11, y + 19, 4, 2, accent);
+  } else if (pet.marking === 'mask') {
+    image.rect(x + 13, y + 10, 4, 4, accent);
+    image.rect(x + 19, y + 10, 4, 4, accent);
+  } else if (pet.marking === 'spot') {
+    image.rect(x + 18, y + 19, 4, 3, accent);
+  }
+
+  image.rect(x + 11, y + 24, 4, 4, secondary);
+  image.rect(x + 20, y + 24, 4, 4, secondary);
+  if (state === 'happy') image.rect(x + 16, y + 16, 4, 1, accent);
+  if (state === 'curious')
+    image.pixel(x + 26, y + 6 - (phase % 2), rgba(palette.sunflower));
+  if (state === 'confused') {
+    image.rect(x + 26, y + 4, 2, 2, accent);
+    image.pixel(x + 27, y + 2, accent);
+  }
+}
+
+function drawPetAtlas(pet) {
+  const image = canvas(128, 224);
+  const states = [
+    'idle',
+    'walk',
+    'sit',
+    'sleep',
+    'happy',
+    'curious',
+    'confused',
+  ];
+  states.forEach((state, row) => {
+    for (let phase = 0; phase < 4; phase += 1) {
+      drawPetFrame(image, row * 4 + phase, state, phase, pet);
+    }
+  });
+  return image;
+}
+
+function drawTownBackground() {
+  const image = canvas(640, 360);
+  const ink = rgba(palette.ink);
+  image.rect(0, 0, 640, 360, rgba('#92AD70'));
+  image.rect(0, 278, 640, 82, rgba('#6F9EAD'));
+  image.rect(0, 294, 640, 4, rgba('#B9D8D8'));
+  image.rect(286, 0, 68, 320, rgba('#D7C58F'));
+  image.rect(0, 154, 640, 58, rgba('#D7C58F'));
+  image.rect(292, 0, 4, 320, rgba('#EBDCA8'));
+  image.rect(0, 160, 640, 4, rgba('#EBDCA8'));
+  image.rect(235, 108, 170, 142, rgba('#C8B77F'));
+  image.outline(235, 108, 170, 142, ink);
+  for (let x = 24; x < 620; x += 48) {
+    image.rect(x, 30 + ((x / 48) % 2) * 18, 6, 6, rgba(palette.sunflower));
+    image.rect(x + 14, 62, 5, 5, rgba(palette.coral));
+  }
+  image.rect(278, 278, 84, 82, rgba(palette.wood));
+  for (let y = 282; y < 360; y += 12)
+    image.rect(278, y, 84, 2, rgba(palette.woodLight));
+  return image;
+}
+
+function drawTownAtlas() {
+  const image = canvas(512, 256);
+  const colors = Object.fromEntries(
+    Object.entries(palette).map(([key, value]) => [key, rgba(value)]),
+  );
+  const tile = (index) => ({
+    x: (index % 8) * 64,
+    y: Math.floor(index / 8) * 64,
+  });
+  const names = [
+    'gate',
+    'plaza',
+    'fortune-pavilion',
+    'market-stall-1',
+    'market-stall-2',
+    'market-stall-3',
+    'market-stall-4',
+    'garden',
+    'arcade-house',
+    'bench',
+    'flower-arch',
+    'notice-board',
+    'lantern-row',
+    'tiny-stage',
+    'water',
+    'bridge',
+    'path',
+    'sign-gate',
+    'sign-fortune',
+    'sign-market',
+    'sign-garden',
+    'sign-build',
+    'sign-arcade',
+  ];
+  names.forEach((name, index) => {
+    const { x, y } = tile(index);
+    if (name === 'water') image.rect(x, y, 64, 64, colors.sky);
+    else if (name === 'path') image.rect(x, y, 64, 64, colors.cream);
+    else if (name.startsWith('sign-')) {
+      image.rect(x + 28, y + 20, 7, 38, colors.ink);
+      image.rect(x + 10, y + 8, 44, 30, colors.ink);
+      image.rect(x + 13, y + 11, 38, 24, colors.sunflower);
+    } else if (name.includes('stall')) {
+      image.rect(x + 7, y + 22, 50, 35, colors.ink);
+      image.rect(x + 10, y + 25, 44, 29, index % 2 ? colors.coral : colors.sky);
+      image.rect(x + 5, y + 13, 54, 12, colors.cream);
+    } else {
+      image.rect(x + 7, y + 16, 50, 42, colors.ink);
+      image.rect(
+        x + 10,
+        y + 19,
+        44,
+        36,
+        index % 3 === 0
+          ? colors.moss
+          : index % 3 === 1
+            ? colors.wood
+            : colors.coral,
+      );
+      image.rect(x + 20, y + 7, 24, 14, colors.sunflower);
+    }
+  });
+  return { image, names };
+}
+
 mkdirSync(roomDirectory, { recursive: true });
 mkdirSync(catDirectory, { recursive: true });
+mkdirSync(townDirectory, { recursive: true });
+mkdirSync(petsDirectory, { recursive: true });
 writePng(join(roomDirectory, 'room-background.png'), drawRoomBackground());
 writePng(join(roomDirectory, 'furniture-atlas.png'), drawFurniture());
 writePng(join(catDirectory, 'cat-atlas.png'), drawCatAtlas());
@@ -330,10 +552,107 @@ writeFileSync(
 );
 
 const animations = Object.fromEntries(
-  ['idle', 'walk', 'sit', 'sleep', 'happy', 'curious', 'confused'].map((state, row) => [
-    state,
-    { frames: [0, 1, 2, 3].map((column) => row * 4 + column), frameRate: state === 'walk' ? 9 : 5 },
-  ]),
+  ['idle', 'walk', 'sit', 'sleep', 'happy', 'curious', 'confused'].map(
+    (state, row) => [
+      state,
+      {
+        frames: [0, 1, 2, 3].map((column) => row * 4 + column),
+        frameRate: state === 'walk' ? 9 : 5,
+      },
+    ],
+  ),
+);
+const petManifest = {
+  schemaVersion: 'pet-sprite.v1',
+  pixelArt: true,
+  image: 'pet-atlas.png',
+  frame: { width: 32, height: 32 },
+  columns: 4,
+  rows: 7,
+  anchor: { x: 0.5, y: 0.78 },
+  body: { width: 24, height: 24, offsetX: 4, offsetY: 6 },
+  animations,
+};
+const pets = [
+  {
+    spriteId: 'player-cat',
+    primary: '#E9953D',
+    secondary: '#FFF0C9',
+    accent: '#5A4636',
+    ears: 'round',
+    tail: 'long',
+    marking: 'stripe',
+  },
+  {
+    spriteId: 'orange-cat',
+    primary: '#F29A38',
+    secondary: '#FFF3D6',
+    accent: '#327A78',
+    ears: 'tall',
+    tail: 'long',
+    marking: 'stripe',
+  },
+  {
+    spriteId: 'gray-cat',
+    primary: '#89939E',
+    secondary: '#E8ECEF',
+    accent: '#58705A',
+    ears: 'round',
+    tail: 'bushy',
+    marking: 'mask',
+  },
+  {
+    spriteId: 'blue-cat',
+    primary: '#5E91C9',
+    secondary: '#DCEBFA',
+    accent: '#F0B84C',
+    ears: 'tall',
+    tail: 'short',
+    marking: 'spot',
+  },
+  {
+    spriteId: 'cream-cat',
+    primary: '#E8C98F',
+    secondary: '#FFF7E8',
+    accent: '#4E7187',
+    ears: 'round',
+    tail: 'bushy',
+    marking: 'spot',
+  },
+];
+pets.forEach((pet) => {
+  const directory = join(petsDirectory, pet.spriteId);
+  mkdirSync(directory, { recursive: true });
+  writePng(join(directory, 'pet-atlas.png'), drawPetAtlas(pet));
+  writeFileSync(
+    join(directory, 'manifest.json'),
+    `${JSON.stringify(petManifest, null, 2)}\n`,
+  );
+});
+
+const townAtlas = drawTownAtlas();
+writePng(join(townDirectory, 'town-background.png'), drawTownBackground());
+writePng(join(townDirectory, 'town-atlas.png'), townAtlas.image);
+writeFileSync(
+  join(townDirectory, 'manifest.json'),
+  `${JSON.stringify(
+    {
+      schemaVersion: 'town-assets.v1',
+      pixelArt: true,
+      background: { image: 'town-background.png', width: 640, height: 360 },
+      atlas: {
+        image: 'town-atlas.png',
+        frame: { width: 64, height: 64 },
+        columns: 8,
+        rows: 4,
+        frames: Object.fromEntries(
+          townAtlas.names.map((name, index) => [name, index]),
+        ),
+      },
+    },
+    null,
+    2,
+  )}\n`,
 );
 writeFileSync(
   join(catDirectory, 'manifest.json'),
@@ -350,4 +669,6 @@ writeFileSync(
   )}\n`,
 );
 
-console.log('Generated original pixel assets: room 384x256, furniture 256x128, cat 128x224.');
+console.log(
+  'Generated room assets, town 640x360 + atlas, and five 128x224 pet atlases.',
+);

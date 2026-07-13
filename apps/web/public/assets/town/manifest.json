@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "town-assets.v1",
+  "pixelArt": true,
+  "background": {
+    "image": "town-background.png",
+    "width": 640,
+    "height": 360
+  },
+  "atlas": {
+    "image": "town-atlas.png",
+    "frame": {
+      "width": 64,
+      "height": 64
+    },
+    "columns": 8,
+    "rows": 4,
+    "frames": {
+      "gate": 0,
+      "plaza": 1,
+      "fortune-pavilion": 2,
+      "market-stall-1": 3,
+      "market-stall-2": 4,
+      "market-stall-3": 5,
+      "market-stall-4": 6,
+      "garden": 7,
+      "arcade-house": 8,
+      "bench": 9,
+      "flower-arch": 10,
+      "notice-board": 11,
+      "lantern-row": 12,
+      "tiny-stage": 13,
+      "water": 14,
+      "bridge": 15,
+      "path": 16,
+      "sign-gate": 17,
+      "sign-fortune": 18,
+      "sign-market": 19,
+      "sign-garden": 20,
+      "sign-build": 21,
+      "sign-arcade": 22
+    }
+  }
+}
