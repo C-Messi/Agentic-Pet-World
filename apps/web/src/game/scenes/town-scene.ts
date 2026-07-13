@@ -73,7 +73,7 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
       .image(TOWN_BACKGROUND.x, TOWN_BACKGROUND.y, 'town-background')
       .setOrigin(0)
       .setDepth(0);
-    this.#createZoneMarkers();
+    this.#createZoneEnvironment();
     this.#createAnimations();
     if (this.#projection) this.applySnapshot(this.#projection);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.#reset());
@@ -208,30 +208,25 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
     }
   }
 
-  #createZoneMarkers(): void {
-    Object.values(TOWN_ZONE_PRESENTATIONS).forEach((zone) => {
-      const landmark = tileCenter(zone.landmarkTile);
-      this.add
-        .image(landmark.x, landmark.y, 'town-atlas', zone.landmarkFrame)
-        .setDepth(landmark.y + 8);
+  #createZoneEnvironment(): void {
+    for (const zone of Object.values(TOWN_ZONE_PRESENTATIONS)) {
+      for (const part of zone.parts) {
+        const anchor = tileCenter(part.anchor);
+        this.add
+          .image(
+            anchor.x + part.offset.x,
+            anchor.y + part.offset.y,
+            'town-atlas',
+            part.frame,
+          )
+          .setDepth(part.foreground ? 9_000 : anchor.y + part.depthOffset);
+      }
 
       const point = tileCenter(zone.entrance);
       this.add
         .image(point.x, point.y - 22, 'town-atlas', zone.signFrame)
         .setDepth(point.y - 1);
-
-      const label = tileCenter(zone.labelTile);
-      this.add
-        .text(label.x, label.y - 24, zone.label, {
-          fontFamily: 'monospace',
-          fontSize: '10px',
-          color: '#352820',
-          backgroundColor: '#fff1bd',
-          padding: { x: 4, y: 2 },
-        })
-        .setOrigin(0.5, 1)
-        .setDepth(8_000);
-    });
+    }
   }
 
   #renderModification(id: string, frame: number, cell: Position): void {
