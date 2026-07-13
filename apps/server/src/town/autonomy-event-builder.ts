@@ -1,0 +1,351 @@
+import {
+  IdentifierSchema,
+  PET_ANIMATION_NAMES,
+  TOWN_ENCOUNTER_PAIRS,
+  TOWN_GRID,
+  TOWN_STATIC_BLOCKED_CELLS,
+  TOWN_ZONE_LAYOUT,
+  TownEventSchema,
+  TownProjectionSchema,
+  TownZoneIdSchema,
+  type TownEvent,
+  type TownProjection,
+  type TownResidentState,
+  type TownZoneId,
+} from '@cat-house/shared';
+import { z } from 'zod';
+
+const MAX_ID_ATTEMPTS = 8;
+const TimestampSchema = z.string().datetime({ offset: true });
+const AgentSpeechSchema = z.string().trim().min(1).max(80);
+const OptionalAgentSpeechSchema = z.string().trim().max(80).optional();
+const AnimationSchema = z.enum(PET_ANIMATION_NAMES);
+
+const VisitInputSchema = z
+  .object({ residentId: IdentifierSchema, zoneId: TownZoneIdSchema })
+  .strict();
+const EncounterInputSchema = z
+  .object({
+    initiatorId: IdentifierSchema,
+    responderId: IdentifierSchema,
+    zoneId: TownZoneIdSchema.optional(),
+    opening: AgentSpeechSchema,
+    reply: AgentSpeechSchema,
+    followUp: OptionalAgentSpeechSchema,
+    animation: AnimationSchema,
+  })
+  .strict();
+
+export type AutonomyAnimation = z.infer<typeof AnimationSchema>;
+export type AutonomyVisitInput = z.input<typeof VisitInputSchema>;
+export type AutonomyEncounterInput = z.input<typeof EncounterInputSchema>;
+
+export interface AutonomyEventBuilderPorts {
+  now(): string;
+  nextId(prefix: 'town-event' | 'activity'): string;
+}
+
+export class AutonomyEventBuilderError extends Error {
+  constructor(
+    message: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'AutonomyEventBuilderError';
+  }
+}
+
+export function autonomyRelationshipDelta(
+  currentAffinity: number,
+  animation: AutonomyAnimation,
+): number {
+  const affinity = z.number().finite().min(-1).max(1).parse(currentAffinity);
+  const parsedAnimation = AnimationSchema.parse(animation);
+  if (!['happy', 'curious', 'sit'].includes(parsedAnimation)) return 0;
+  return roundAffinity(Math.min(1, roundAffinity(affinity + 0.05)) - affinity);
+}
+
+export class AutonomyEventBuilder {
+  constructor(private readonly ports: AutonomyEventBuilderPorts) {}
+
+  visit(
+    source: Readonly<TownProjection>,
+    rawInput: AutonomyVisitInput,
+  ): readonly TownEvent[] {
+    const projection = parseProjection(source);
+    const input = parseInput('visit', VisitInputSchema, rawInput);
+    const resident = requireResident(projection, input.residentId);
+    requireAvailable(resident);
+    const timestamp = this.timestamp();
+    const usedIds = new Set<string>();
+
+    return [
+      this.event(
+        projection,
+        0,
+        input.zoneId,
+        [input.residentId],
+        'resident.moved',
+        () => ({
+          residentId: input.residentId,
+          position: TOWN_ZONE_LAYOUT[input.zoneId].entrance,
+        }),
+        timestamp,
+        usedIds,
+      ),
+    ];
+  }
+
+  encounter(
+    source: Readonly<TownProjection>,
+    rawInput: AutonomyEncounterInput,
+  ): readonly TownEvent[] {
+    const projection = parseProjection(source);
+    const input = parseInput('encounter', EncounterInputSchema, rawInput);
+    if (input.initiatorId === input.responderId) {
+      throw new AutonomyEventBuilderError(
+        'Encounter residents must be distinct',
+      );
+    }
+    const initiator = requireResident(projection, input.initiatorId);
+    const responder = requireResident(projection, input.responderId);
+    requireAvailable(initiator);
+    requireAvailable(responder);
+
+    const zoneId = input.zoneId ?? initiator.zoneId;
+    const pair = requireEncounterPair(zoneId);
+    const participantIds = [input.initiatorId, input.responderId];
+    const timestamp = this.timestamp();
+    const usedIds = new Set<string>();
+    const events: TownEvent[] = [];
+    const append = (
+      type: TownEvent['type'],
+      payload: (eventId: string) => unknown,
+    ) => {
+      events.push(
+        this.event(
+          projection,
+          events.length,
+          zoneId,
+          participantIds,
+          type,
+          payload,
+          timestamp,
+          usedIds,
+        ),
+      );
+    };
+
+    append('resident.moved', () => ({
+      residentId: input.initiatorId,
+      position: pair[0],
+    }));
+    append('resident.moved', () => ({
+      residentId: input.responderId,
+      position: pair[1],
+    }));
+    append('resident.spoke', () => ({
+      residentId: input.initiatorId,
+      text: input.opening,
+    }));
+    append('resident.spoke', () => ({
+      residentId: input.responderId,
+      text: input.reply,
+    }));
+    if (input.followUp) {
+      append('resident.spoke', () => ({
+        residentId: input.initiatorId,
+        text: input.followUp,
+      }));
+    }
+    append('residents.played', (eventId) => ({
+      standalone: true,
+      interactionId: eventId,
+    }));
+
+    const affinity = relationshipAffinity(
+      projection,
+      input.initiatorId,
+      input.responderId,
+    );
+    const delta = autonomyRelationshipDelta(affinity, input.animation);
+    if (delta !== 0) {
+      append('relationship.changed', () => ({
+        residentIdA: input.initiatorId,
+        residentIdB: input.responderId,
+        affinity: roundAffinity(affinity + delta),
+      }));
+    }
+
+    return events;
+  }
+
+  private timestamp(): string {
+    let raw: string;
+    try {
+      raw = this.ports.now();
+    } catch (error) {
+      throw new AutonomyEventBuilderError(
+        `Could not obtain event timestamp: ${errorMessage(error)}`,
+        error,
+      );
+    }
+    const parsed = TimestampSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new AutonomyEventBuilderError('Event timestamp is invalid');
+    }
+    return parsed.data;
+  }
+
+  private event(
+    projection: TownProjection,
+    offset: number,
+    zoneId: TownZoneId,
+    participantIds: readonly string[],
+    type: TownEvent['type'],
+    payload: (eventId: string) => unknown,
+    timestamp: string,
+    usedIds: Set<string>,
+  ): TownEvent {
+    const id = this.uniqueEventId(usedIds);
+    return TownEventSchema.parse({
+      id,
+      sessionId: projection.sessionId,
+      sequence: projection.lastEventSequence + offset + 1,
+      baseVersion: projection.version + offset,
+      type,
+      zoneId,
+      participantIds,
+      timestamp,
+      payload: payload(id),
+    });
+  }
+
+  private uniqueEventId(usedIds: Set<string>): string {
+    for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt += 1) {
+      let candidate: string;
+      try {
+        candidate = this.ports.nextId('town-event');
+      } catch (error) {
+        throw new AutonomyEventBuilderError(
+          `Could not obtain event ID: ${errorMessage(error)}`,
+          error,
+        );
+      }
+      const parsed = IdentifierSchema.safeParse(candidate);
+      if (!parsed.success) {
+        throw new AutonomyEventBuilderError('Event ID is invalid');
+      }
+      if (usedIds.has(parsed.data)) continue;
+      usedIds.add(parsed.data);
+      return parsed.data;
+    }
+    throw new AutonomyEventBuilderError(
+      `Could not obtain a unique event ID after ${MAX_ID_ATTEMPTS} attempts`,
+    );
+  }
+}
+
+function parseProjection(source: Readonly<TownProjection>): TownProjection {
+  try {
+    return TownProjectionSchema.parse(structuredClone(source));
+  } catch (error) {
+    throw new AutonomyEventBuilderError(
+      `Town projection validation failed: ${errorMessage(error)}`,
+      error,
+    );
+  }
+}
+
+function parseInput<S extends z.ZodTypeAny>(
+  label: string,
+  schema: S,
+  raw: unknown,
+): z.output<S> {
+  const parsed = schema.safeParse(structuredClone(raw));
+  if (!parsed.success) {
+    throw new AutonomyEventBuilderError(
+      `Invalid ${label} input: ${parsed.error.message}`,
+      parsed.error,
+    );
+  }
+  return parsed.data as z.output<S>;
+}
+
+function requireResident(
+  projection: TownProjection,
+  residentId: string,
+): TownResidentState {
+  const resident = projection.residents.find(
+    (candidate) => candidate.residentId === residentId,
+  );
+  if (resident === undefined) {
+    throw new AutonomyEventBuilderError(`Unknown town resident: ${residentId}`);
+  }
+  return resident;
+}
+
+function requireAvailable(resident: TownResidentState): void {
+  if (resident.availability !== 'available') {
+    throw new AutonomyEventBuilderError(
+      `Town resident is unavailable or busy: ${resident.residentId}`,
+    );
+  }
+}
+
+function requireEncounterPair(zoneId: TownZoneId) {
+  const pair = TOWN_ENCOUNTER_PAIRS[zoneId][0];
+  if (pair === undefined) {
+    throw new AutonomyEventBuilderError(
+      `Town zone has no encounter pair: ${zoneId}`,
+    );
+  }
+  if (pair[0].x === pair[1].x && pair[0].y === pair[1].y) {
+    throw new AutonomyEventBuilderError(
+      `Town zone encounter pair must be distinct: ${zoneId}`,
+    );
+  }
+  const blocked = new Set(
+    TOWN_STATIC_BLOCKED_CELLS.map(({ x, y }) => `${x}:${y}`),
+  );
+  const valid = pair.every(
+    ({ x, y }) =>
+      Number.isInteger(x) &&
+      Number.isInteger(y) &&
+      x >= 0 &&
+      x < TOWN_GRID.width &&
+      y >= 0 &&
+      y < TOWN_GRID.height &&
+      !blocked.has(`${x}:${y}`),
+  );
+  if (!valid) {
+    throw new AutonomyEventBuilderError(
+      `Town zone encounter pair is not walkable: ${zoneId}`,
+    );
+  }
+  return pair;
+}
+
+function relationshipAffinity(
+  projection: TownProjection,
+  residentIdA: string,
+  residentIdB: string,
+): number {
+  return (
+    projection.relationships.find(
+      (relationship) =>
+        (relationship.residentIdA === residentIdA &&
+          relationship.residentIdB === residentIdB) ||
+        (relationship.residentIdA === residentIdB &&
+          relationship.residentIdB === residentIdA),
+    )?.affinity ?? 0
+  );
+}
+
+function roundAffinity(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
