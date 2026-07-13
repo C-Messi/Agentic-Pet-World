@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ActionResult, WorldSnapshot } from '@cat-house/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentService } from './agent/agent-service.js';
 import { ContextService } from './agent/context-service.js';
@@ -44,6 +44,7 @@ describe('Fastify BFF production integration', () => {
   let database: StorageDatabase | undefined;
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (database?.open === true) {
       database.close();
     }
@@ -111,6 +112,53 @@ describe('Fastify BFF production integration', () => {
       fortune.json().events.map(({ type }: { type: string }) => type),
     ).toEqual(['fortune.started', 'fortune.revealed', 'fortune.interpreted']);
     expect(invalid.statusCode).toBe(422);
+  });
+
+  it('runs fake production town pulses with resident dialogue and no network', async () => {
+    directory = mkdtempSync(join(tmpdir(), 'cat-house-town-pulse-'));
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const production = createProductionApp({
+      USE_FAKE_LLM: 'true',
+      DATABASE_URL: join(directory, 'town-pulse.sqlite'),
+      WEB_ORIGIN: 'http://127.0.0.1:5173',
+    });
+    const created = await production.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {},
+    });
+    const sessionId = created.json().session.id as string;
+
+    const pulse = await production.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/town/pulse`,
+      payload: { baseVersion: 0, pulseId: 'pulse-fake-production' },
+    });
+    await production.app.close();
+
+    expect(pulse.statusCode).toBe(200);
+    expect(pulse.json()).toMatchObject({
+      status: 'advanced',
+      degraded: false,
+      degradedResidentIds: [],
+    });
+    expect(
+      pulse
+        .json()
+        .events.filter(
+          ({ type }: { type: string }) => type === 'resident.spoke',
+        )
+        .map(
+          ({ payload }: { payload: { residentId: string; text: string } }) =>
+            payload,
+        ),
+    ).toEqual(
+      expect.arrayContaining([
+        { residentId: 'player-cat', text: 'Let us take a look.' },
+        { residentId: 'resident-mikan', text: 'What could this become?' },
+      ]),
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('persists a complete session, turn, memory, action result, and world flow', async () => {

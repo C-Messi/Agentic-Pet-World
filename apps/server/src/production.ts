@@ -63,11 +63,20 @@ export function createProductionApp(
       webOrigin: runtimeConfig.webOrigin,
       store: new StorageApiStore(database),
       agentService,
-      townService: new TownService(database, {
-        now: () => new Date().toISOString(),
-        random: Math.random,
-        nextId: (prefix) => `${prefix}-${randomUUID()}`,
-      }),
+      townService: new TownService(
+        database,
+        {
+          now: () => new Date().toISOString(),
+          random: Math.random,
+          nextId: (prefix) => `${prefix}-${randomUUID()}`,
+        },
+        {
+          ...(provider === undefined ? {} : { provider }),
+          ...(providerConfig.llm.kind === 'openai-compatible'
+            ? { llmTimeoutMs: providerConfig.llm.timeoutMs }
+            : {}),
+        },
+      ),
       readiness: () => ({
         config: providerConfig.llm.kind !== 'unavailable',
         storage: databaseIsReady(database),

@@ -8,7 +8,8 @@ import type {
   MessageRecord,
   WorldSnapshot,
 } from '@cat-house/shared';
-import { describe, expect, it } from 'vitest';
+import { TownPulseResponseSchema } from '@cat-house/shared';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   ActionResultDomainError,
@@ -18,6 +19,8 @@ import {
   type ApiStore,
   type BuildAppDependencies,
 } from './app.js';
+import { createAuthoredPetDefinitions } from './town/residents.js';
+import type { TownServicePort } from './town/town-service.js';
 
 const now = '2026-07-12T08:30:00.000Z';
 const world: WorldSnapshot = {
@@ -45,8 +48,14 @@ const decision = {
 };
 
 class MemoryApiStore implements ApiStore {
-  public readonly sessions = new Map<string, { id: string; createdAt: string; updatedAt: string }>();
-  public readonly worlds = new Map<string, { snapshot: WorldSnapshot; updatedAt: string }>();
+  public readonly sessions = new Map<
+    string,
+    { id: string; createdAt: string; updatedAt: string }
+  >();
+  public readonly worlds = new Map<
+    string,
+    { snapshot: WorldSnapshot; updatedAt: string }
+  >();
   public readonly messages: MessageRecord[] = [];
   public readonly memories: MemoryRecord[] = [];
   public readonly actionRuns: Array<{
@@ -64,7 +73,11 @@ class MemoryApiStore implements ApiStore {
     return operation();
   }
 
-  public createSession(record: { id: string; createdAt: string; updatedAt: string }): void {
+  public createSession(record: {
+    id: string;
+    createdAt: string;
+    updatedAt: string;
+  }): void {
     this.sessions.set(record.id, record);
   }
 
@@ -86,7 +99,11 @@ class MemoryApiStore implements ApiStore {
     return state === undefined ? undefined : { sessionId, ...state };
   }
 
-  public upsertWorld(sessionId: string, snapshot: WorldSnapshot, updatedAt: string): void {
+  public upsertWorld(
+    sessionId: string,
+    snapshot: WorldSnapshot,
+    updatedAt: string,
+  ): void {
     this.worlds.set(sessionId, { snapshot, updatedAt });
     this.worldUpdates += 1;
   }
@@ -118,17 +135,21 @@ class MemoryApiStore implements ApiStore {
   ): boolean {
     void updatedAt;
     const run = this.actionRuns.find(
-      (candidate) => candidate.sessionId === sessionId
-        && candidate.turnCorrelationId === turnCorrelationId
-        && candidate.action.id === result.actionId,
+      (candidate) =>
+        candidate.sessionId === sessionId &&
+        candidate.turnCorrelationId === turnCorrelationId &&
+        candidate.action.id === result.actionId,
     );
     if (run === undefined || run.action.type !== result.type) {
-      throw new ActionResultDomainError('not_found', `Action run not found: ${result.actionId}`);
+      throw new ActionResultDomainError(
+        'not_found',
+        `Action run not found: ${result.actionId}`,
+      );
     }
     if (run.result !== undefined) {
       if (
-        JSON.stringify(run.result) === JSON.stringify(result)
-        && JSON.stringify(run.resultWorld) === JSON.stringify(resultWorld)
+        JSON.stringify(run.result) === JSON.stringify(result) &&
+        JSON.stringify(run.resultWorld) === JSON.stringify(resultWorld)
       ) {
         return false;
       }
@@ -147,9 +168,10 @@ class MemoryApiStore implements ApiStore {
   }
 }
 
-function createHarness(
-  overrides: Partial<BuildAppDependencies> = {},
-): { app: ReturnType<typeof buildApp>; store: MemoryApiStore } {
+function createHarness(overrides: Partial<BuildAppDependencies> = {}): {
+  app: ReturnType<typeof buildApp>;
+  store: MemoryApiStore;
+} {
   const store = new MemoryApiStore();
   let id = 0;
   const app = buildApp({
@@ -167,13 +189,50 @@ function createHarness(
   return { app, store };
 }
 
-async function createSession(app: ReturnType<typeof buildApp>): Promise<string> {
-  const response = await app.inject({ method: 'POST', url: '/api/sessions', payload: {} });
+async function createSession(
+  app: ReturnType<typeof buildApp>,
+): Promise<string> {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/sessions',
+    payload: {},
+  });
   return response.json().session.id as string;
 }
 
 function turnPayload() {
-  return { playerMessage: 'Please check the window.', world, recentActionResults: [] };
+  return {
+    playerMessage: 'Please check the window.',
+    world,
+    recentActionResults: [],
+  };
+}
+
+function pulseResponse(sessionId: string) {
+  const pet = createAuthoredPetDefinitions()[0]!;
+  return TownPulseResponseSchema.parse({
+    status: 'advanced',
+    projection: {
+      sessionId,
+      version: 0,
+      lastEventSequence: 0,
+      residents: [
+        {
+          residentId: pet.id,
+          pet,
+          position: { x: 2, y: 4 },
+          zoneId: 'gate',
+          availability: 'available',
+        },
+      ],
+      relationships: [],
+      modifications: [],
+      activities: [],
+    },
+    events: [],
+    degraded: false,
+    degradedResidentIds: [],
+  });
 }
 
 describe('Fastify BFF', () => {
@@ -203,7 +262,10 @@ describe('Fastify BFF', () => {
     const degraded = createHarness({
       readiness: () => ({ config: true, storage: false, knowledge: true }),
     });
-    const unavailable = await degraded.app.inject({ method: 'GET', url: '/health' });
+    const unavailable = await degraded.app.inject({
+      method: 'GET',
+      url: '/health',
+    });
     await degraded.app.close();
     expect(unavailable.statusCode).toBe(503);
     expect(unavailable.json().status).toBe('degraded');
@@ -212,7 +274,10 @@ describe('Fastify BFF', () => {
   it('creates and retrieves sessions with persisted state', async () => {
     const { app } = createHarness();
     const sessionId = await createSession(app);
-    const response = await app.inject({ method: 'GET', url: `/api/sessions/${sessionId}` });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}`,
+    });
     await app.close();
 
     expect(response.statusCode).toBe(200);
@@ -231,15 +296,20 @@ describe('Fastify BFF', () => {
       headers: { 'x-correlation-id': 'browser-request-1' },
       payload: { playerMessage: '', world, recentActionResults: [] },
     });
-    const unknown = await app.inject({ method: 'GET', url: '/api/sessions/missing' });
+    const unknown = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/missing',
+    });
     await app.close();
 
     expect(invalid.statusCode).toBe(422);
     expect(invalid.headers['x-correlation-id']).toBe('browser-request-1');
-    expect(invalid.json().error).toEqual(expect.objectContaining({
-      code: 'VALIDATION_ERROR',
-      correlationId: 'browser-request-1',
-    }));
+    expect(invalid.json().error).toEqual(
+      expect.objectContaining({
+        code: 'VALIDATION_ERROR',
+        correlationId: 'browser-request-1',
+      }),
+    );
     expect(unknown.statusCode).toBe(404);
     expect(unknown.json().error.code).toBe('SESSION_NOT_FOUND');
   });
@@ -329,7 +399,9 @@ describe('Fastify BFF', () => {
 
   it('rejects concurrent turns for the same session', async () => {
     let release: (() => void) | undefined;
-    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const { app } = createHarness({
       agentService: {
         turnDetailed: async () => {
@@ -375,10 +447,12 @@ describe('Fastify BFF', () => {
 
     expect(limited.statusCode).toBe(429);
     expect(limited.headers['retry-after']).toBe('10');
-    expect(limited.json().error).toEqual(expect.objectContaining({
-      code: 'RATE_LIMITED',
-      retryAfterMs: expect.any(Number),
-    }));
+    expect(limited.json().error).toEqual(
+      expect.objectContaining({
+        code: 'RATE_LIMITED',
+        retryAfterMs: expect.any(Number),
+      }),
+    );
   });
 
   it('persists validated action results and the resulting world snapshot', async () => {
@@ -434,12 +508,14 @@ describe('Fastify BFF', () => {
     const payload = {
       turnCorrelationId: turn.json().correlationId as string,
       world,
-      results: [{
-        actionId: 'move-window',
-        type: 'move_to' as const,
-        status: 'succeeded' as const,
-        completedAt: now,
-      }],
+      results: [
+        {
+          actionId: 'move-window',
+          type: 'move_to' as const,
+          status: 'succeeded' as const,
+          completedAt: now,
+        },
+      ],
     };
     const beforeResults = {
       worldUpdates: store.worldUpdates,
@@ -479,12 +555,14 @@ describe('Fastify BFF', () => {
     const succeeded = {
       turnCorrelationId: turn.json().correlationId as string,
       world,
-      results: [{
-        actionId: 'move-window',
-        type: 'move_to' as const,
-        status: 'succeeded' as const,
-        completedAt: now,
-      }],
+      results: [
+        {
+          actionId: 'move-window',
+          type: 'move_to' as const,
+          status: 'succeeded' as const,
+          completedAt: now,
+        },
+      ],
     };
     await app.inject({
       method: 'POST',
@@ -497,11 +575,13 @@ describe('Fastify BFF', () => {
       payload: {
         turnCorrelationId: succeeded.turnCorrelationId,
         world,
-        results: [{
-          ...succeeded.results[0],
-          status: 'failed',
-          errorCode: 'PATH_BLOCKED',
-        }],
+        results: [
+          {
+            ...succeeded.results[0],
+            status: 'failed',
+            errorCode: 'PATH_BLOCKED',
+          },
+        ],
       },
     });
     expect(conflict.statusCode).toBe(409);
@@ -561,10 +641,12 @@ describe('Fastify BFF', () => {
     expect(mismatch.statusCode).toBe(422);
     expect(mismatch.json().error.code).toBe('ACTION_RESULT_INVALID');
     expect(failed.statusCode).toBe(500);
-    expect(failed.json().error).toEqual(expect.objectContaining({
-      code: 'INTERNAL_ERROR',
-      message: 'The request could not be completed',
-    }));
+    expect(failed.json().error).toEqual(
+      expect.objectContaining({
+        code: 'INTERNAL_ERROR',
+        message: 'The request could not be completed',
+      }),
+    );
     expect(JSON.stringify(failed.json())).not.toContain('sensitive detail');
   });
 
@@ -582,7 +664,9 @@ describe('Fastify BFF', () => {
     });
     await app.close();
 
-    expect(allowed.headers['access-control-allow-origin']).toBe('http://127.0.0.1:5173');
+    expect(allowed.headers['access-control-allow-origin']).toBe(
+      'http://127.0.0.1:5173',
+    );
     expect(denied.headers['access-control-allow-origin']).toBeUndefined();
   });
 
@@ -644,12 +728,71 @@ describe('Fastify BFF', () => {
     expect(receivedSignal).toBe(injectedSignal);
   });
 
+  it('validates town pulse bodies and cannot accept a body sessionId', async () => {
+    const pulse = vi.fn(async () => pulseResponse('session-1'));
+    const { app } = createHarness({
+      townService: { pulse } as unknown as TownServicePort,
+    });
+    const sessionId = await createSession(app);
+
+    for (const payload of [
+      { baseVersion: 0, pulseId: 'pulse-valid', sessionId: 'other-session' },
+      { baseVersion: 0, pulseId: 'pulse-valid', extra: true },
+      { baseVersion: -1, pulseId: 'pulse-valid' },
+    ]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/town/pulse`,
+        payload,
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.json().error.code).toBe('VALIDATION_ERROR');
+    }
+    await app.close();
+
+    expect(pulse).not.toHaveBeenCalled();
+  });
+
+  it('requires the route session and forwards its request cancellation signal to town pulse', async () => {
+    const injectedSignal = new AbortController().signal;
+    const pulse = vi.fn(async (request: { sessionId: string }) =>
+      pulseResponse(request.sessionId),
+    );
+    const { app } = createHarness({
+      requestAbortSignal: () => injectedSignal,
+      townService: { pulse } as unknown as TownServicePort,
+    });
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/missing/town/pulse',
+      payload: { baseVersion: 0, pulseId: 'pulse-missing' },
+    });
+    const sessionId = await createSession(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/town/pulse`,
+      payload: { baseVersion: 0, pulseId: 'pulse-route' },
+    });
+    await app.close();
+
+    expect(missing.statusCode).toBe(404);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(pulseResponse(sessionId));
+    expect(pulse).toHaveBeenCalledOnce();
+    expect(pulse).toHaveBeenCalledWith(
+      { sessionId, baseVersion: 0, pulseId: 'pulse-route' },
+      injectedSignal,
+    );
+  });
+
   it('aborts immediately for closed transports and removes bridge listeners on finish', () => {
     const closedResponse = Object.assign(new EventEmitter(), {
       destroyed: true,
       writableEnded: false,
     });
-    expect(createRequestAbortSignal(new EventEmitter(), closedResponse).aborted).toBe(true);
+    expect(
+      createRequestAbortSignal(new EventEmitter(), closedResponse).aborted,
+    ).toBe(true);
 
     const request = new EventEmitter();
     const response = Object.assign(new EventEmitter(), {
