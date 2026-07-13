@@ -1,6 +1,7 @@
 import {
   IdentifierSchema,
   TownEventSchema,
+  TownIntentSchema,
   TownProjectionSchema,
   type TownEvent,
   type TownIntent,
@@ -154,16 +155,32 @@ export class OfflineRecoveryService {
       events.length < slots && attempt < slots * 4;
       attempt++
     ) {
-      const candidates = this.simulation
-        .candidates(state, playerId)
-        .filter(
-          (intent) =>
-            intent.type !== 'open-stall' && (!built || intent.type !== 'build'),
+      let candidates: TownIntent[];
+      let intent: TownIntent;
+      try {
+        candidates = this.simulation
+          .candidates(state, playerId)
+          .flatMap((candidate) => {
+            const parsed = TownIntentSchema.safeParse(
+              structuredClone(candidate),
+            );
+            return parsed.success ? [parsed.data] : [];
+          })
+          .filter(
+            (candidate) =>
+              candidate.type !== 'open-stall' &&
+              (!built || candidate.type !== 'build'),
+          );
+        const selected = TownIntentSchema.safeParse(
+          structuredClone(this.simulation.select(state, playerId)),
         );
+        if (!selected.success) continue;
+        intent = selected.data;
+      } catch {
+        continue;
+      }
       if (candidates.length === 0) break;
-      const intent = this.simulation.select(state, playerId);
       if (
-        intent === undefined ||
         !candidates.some(
           (candidate) => JSON.stringify(candidate) === JSON.stringify(intent),
         )

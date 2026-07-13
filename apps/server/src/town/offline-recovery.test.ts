@@ -236,6 +236,30 @@ describe('OfflineRecoveryService', () => {
     expect(service.recover(input(30)).events).toEqual([]);
     expect(generated).toBe(0);
   });
+  it('runtime-validates malformed candidate and selected intent values', () => {
+    const malformed = {
+      type: 'visit-zone',
+      zoneId: 'garden',
+    } as unknown as TownIntent;
+    let generated = 0;
+    const service = new OfflineRecoveryService(
+      {
+        candidates: () => [malformed],
+        select: () => malformed,
+        createEvents: () => {
+          generated++;
+          return [];
+        },
+      },
+      {
+        claimRecoveryWindow: () => ({ claimed: true }),
+        loadRecoveryResult: () => undefined,
+        saveRecoveryResult: () => undefined,
+      },
+    );
+    expect(service.recover(input(30)).events).toEqual([]);
+    expect(generated).toBe(0);
+  });
   it('rejects generated events outside the recovery time window', () => {
     const valid: TownIntent = {
       type: 'visit-zone',
