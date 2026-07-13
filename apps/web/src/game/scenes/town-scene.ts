@@ -30,12 +30,21 @@ const PET_SPRITES = [
   'cream-cat',
 ] as const;
 
+export function horizontalFacing(fromX: number, toX: number): 1 | -1 {
+  return toX < fromX ? -1 : 1;
+}
+
+export function residentMovementPath(from: Position, to: Position): Position[] {
+  return new TownNavigation().findPath(from, to);
+}
+
 export class TownScene extends Phaser.Scene implements TownScenePort {
   static readonly key = 'TownScene';
 
   readonly state = new TownSceneState();
   readonly #navigation = new TownNavigation();
   readonly #residents = new Map<string, Phaser.GameObjects.Sprite>();
+  readonly #residentPositions = new Map<string, Position>();
   readonly #modifications = new Map<string, Phaser.GameObjects.Image>();
   #projection: TownProjection | undefined;
   #bubble: Phaser.GameObjects.Container | undefined;
@@ -85,6 +94,7 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
     this.#navigation.restoreModifications(parsed.modifications);
     for (const sprite of this.#residents.values()) sprite.destroy();
     this.#residents.clear();
+    this.#residentPositions.clear();
     for (const resident of parsed.residents)
       this.#spawnResident(
         resident.residentId,
@@ -116,10 +126,20 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
     signal: AbortSignal,
   ): Promise<void> {
     const sprite = this.#requireResident(residentId);
-    const target = tileCenter(position);
+    const current = this.#residentPositions.get(residentId);
+    if (!current)
+      throw new Error(`Town resident position not tracked: ${residentId}`);
+    const path = residentMovementPath(current, position);
+    if (path.length === 0)
+      throw new Error(`Town resident path is not walkable: ${residentId}`);
     sprite.play(`${residentId}:walk`, true);
-    await this.#tweenTo(sprite, target, signal);
+    for (const step of path.slice(1)) {
+      const target = tileCenter(step);
+      sprite.setFlipX(horizontalFacing(sprite.x, target.x) < 0);
+      await this.#tweenTo(sprite, target, signal);
+    }
     sprite.play(`${residentId}:idle`, true);
+    this.#residentPositions.set(residentId, { ...position });
   }
 
   async speak(
@@ -141,6 +161,14 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
       : event.type.startsWith('stall.')
         ? 'sit'
         : 'happy';
+    if (event.participantIds.length === 2) {
+      const first = this.#residents.get(event.participantIds[0]!);
+      const second = this.#residents.get(event.participantIds[1]!);
+      if (first && second) {
+        first.setFlipX(horizontalFacing(first.x, second.x) < 0);
+        second.setFlipX(horizontalFacing(second.x, first.x) < 0);
+      }
+    }
     for (const id of event.participantIds)
       this.#residents.get(id)?.play(`${id}:${animation}`, true);
     await delay(this, 550, signal);
@@ -187,6 +215,7 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
       .setInteractive({ useHandCursor: true });
     sprite.on('pointerdown', () => this.followResident(residentId));
     this.#residents.set(residentId, sprite);
+    this.#residentPositions.set(residentId, { ...position });
     sprite.play(`${residentId}:idle`);
   }
 
@@ -298,6 +327,7 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
 
   #reset(): void {
     this.#residents.clear();
+    this.#residentPositions.clear();
     this.#modifications.clear();
     this.#bubble = undefined;
   }
