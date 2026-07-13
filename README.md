@@ -79,6 +79,17 @@ pnpm dev
 
 With `.env.example` values, the web app is at `http://localhost:5173`, the API is at `http://localhost:8787`, and health endpoints are `http://localhost:8787/live` and `http://localhost:8787/health`. `HOST`, `PORT`, `WEB_ORIGIN`, and `VITE_API_URL` can change those bindings; keep the origins aligned for CORS.
 
+### Pet Town Demo Walkthrough
+
+1. Start the app with `USE_FAKE_LLM=true` and open `http://localhost:5173`.
+2. Use the home/town control, or ask the pet to go outside, to release it into Pet Town.
+3. Select a resident to follow. The town contains the player pet plus Mikan, Huihui, Lanlan, and Doubao.
+4. Use natural language to socialize, draw a fortune with residents, build a registered town recipe, or open a personality showcase stall.
+5. Open the history, relationship, experience, and showcase drawers to inspect authoritative events and public display data.
+6. Recall the pet to receive a first-person account grounded in its persisted outing events. Reloading during an outing exercises bounded, idempotent offline recovery.
+
+The current vertical slice completes the full fortune (`started -> revealed -> interpreted`), build (`started -> completed`), and showcase (`opened -> visited -> closed`) lifecycles. Residents are deterministic local fixtures presented as town residents; the UI does not label them as mocks or claim that real users are online.
+
 ## Persistence And Knowledge
 
 `DATABASE_URL` defaults to `./data/cat-house.sqlite`. When started through the root scripts, that resolves to `apps/server/data/cat-house.sqlite`. The server creates the directory, enables foreign keys and WAL mode, and applies the ordered migrations in `apps/server/src/storage/migrations/` automatically at startup. Set `DATABASE_URL=:memory:` only for disposable runs.
@@ -88,6 +99,7 @@ Authored agent knowledge lives in `apps/server/content/`:
 - `character.md` and `world.md` define the cat and room.
 - `objects/*.md` describe each registered object and allowed behavior.
 - `minigames/*.md` describe mini-game availability and guidance.
+- `town/*.md` describes Pet Town rules and registered activity guidance.
 
 Files use validated YAML frontmatter followed by Markdown. IDs must match the allowlists in `KnowledgeService`, every required document must exist, and per-file/total character budgets are enforced. Restart the server after editing knowledge so it reloads the documents. Chat cannot modify these files.
 
@@ -181,7 +193,7 @@ The existing `OpenAICompatibleProvider` should be configured rather than replace
 Every generated or authored pet uses the same two versioned contracts before catalog registration:
 
 1. Add a schema-valid `pet-definition.v1` record with a stable pet ID, display name, source, species, sprite ID, three-color palette, bounded personality traits, voice, interests, and public bio. Keep private owner data outside this record.
-2. Produce a `128x224` RGBA PNG atlas: fixed `32x32` frames, exactly four columns, and seven required animation rows in contract order (`idle`, `walk`, `sit`, `sleep`, `happy`, `curious`, `play`). Unused pixels must remain transparent and visible body pixels must stay inside the safe frame bounds.
+2. Produce a `128x224` RGBA PNG atlas: fixed `32x32` frames, exactly four columns, and seven required animation rows in contract order (`idle`, `walk`, `sit`, `sleep`, `happy`, `curious`, `confused`). Unused pixels must remain transparent and visible body pixels must stay inside the safe frame bounds.
 3. Add a schema-valid `pet-sprite.v1` `manifest.json` beside `pet-atlas.png`, with the exact atlas size, frame geometry, animation row/frame mapping, alpha mode, and safe body bounds.
 4. Put web assets under `apps/web/public/assets/pets/<sprite-id>/`, register the validated definition in the server and web catalogs, and add its sprite ID to the town scene preload allowlist.
 5. Run the shared pet schema tests and `apps/web/src/game/assets/asset-manifest.test.ts`. Do not register an atlas that fails dimensions, transparency, frame mapping, or manifest validation.
