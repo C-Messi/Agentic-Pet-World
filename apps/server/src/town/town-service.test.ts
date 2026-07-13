@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { openDatabase } from '../storage/database.js';
 import { SessionRepository } from '../storage/repositories/index.js';
@@ -73,6 +73,61 @@ describe('TownService', () => {
         message: 'Stale town projection version',
       }),
     );
+    database.close();
+  });
+
+  it('runs and replays a deterministic degraded pulse without a provider', async () => {
+    const { database, service } = fixture();
+    const request = {
+      sessionId: 'session-1',
+      baseVersion: 0,
+      pulseId: 'pulse-deterministic',
+    };
+
+    const first = await service.pulse(request, new AbortController().signal);
+    const replay = await service.pulse(request, new AbortController().signal);
+
+    expect(first.status).toBe('advanced');
+    expect(first.degraded).toBe(true);
+    expect(first.degradedResidentIds).toEqual(['player-cat', 'resident-mikan']);
+    expect(first.events.length).toBeGreaterThan(0);
+    expect(replay).toEqual(first);
+    database.close();
+  });
+
+  it('uses the optional provider for town pulses', async () => {
+    const database = openDatabase(':memory:');
+    const complete = vi.fn(async () =>
+      JSON.stringify({ kind: 'rest', speech: 'A quiet moment.' }),
+    );
+    const service = new TownService(
+      database,
+      {
+        now: () => '2026-07-13T10:00:00.000Z',
+        nextId: (prefix) => `${prefix}-provider`,
+        random: () => 0.25,
+      },
+      { provider: { complete }, llmTimeoutMs: 2_000 },
+    );
+    new SessionRepository(database).create({
+      id: 'session-1',
+      createdAt: '2026-07-13T08:00:00.000Z',
+      updatedAt: '2026-07-13T08:00:00.000Z',
+    });
+    service.snapshot('session-1');
+
+    const result = await service.pulse(
+      { sessionId: 'session-1', baseVersion: 0, pulseId: 'pulse-provider' },
+      new AbortController().signal,
+    );
+
+    expect(result).toMatchObject({
+      status: 'advanced',
+      events: [],
+      degraded: false,
+      degradedResidentIds: [],
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
     database.close();
   });
 

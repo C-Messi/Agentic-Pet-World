@@ -12,6 +12,8 @@ import {
   TownEventResultsResponseSchema,
   TownHistoryResponseSchema,
   TownProjectionSchema,
+  type TownPulseRequest,
+  type TownPulseResponse,
   TownRecallRequestSchema,
   TownRecallResponseSchema,
   TownRelationshipsResponseSchema,
@@ -41,11 +43,13 @@ import {
   type ExperienceCardsResponse,
 } from '@cat-house/shared';
 
+import type { ProviderAdapter } from '../agent/provider.js';
 import type { StorageDatabase } from '../storage/database.js';
 import {
   TownEventRepository,
   TownProjectionRepository,
 } from '../storage/repositories/index.js';
+import { AutonomyEventBuilder } from './autonomy-event-builder.js';
 import {
   TownActivityRegistry,
   type ActivityContext,
@@ -74,6 +78,7 @@ import {
 } from './offline-recovery.js';
 import { createDefaultPetCatalog } from './pet-catalog.js';
 import { createAuthoredPetDefinitions } from './residents.js';
+import { ResidentAgent } from './resident-agent.js';
 import {
   TownSimulationService,
   type TownSimulationPorts,
@@ -82,6 +87,9 @@ import {
   TownEventCommitError,
   TownEventCommitter,
 } from './town-event-committer.js';
+import { TownPulseService } from './town-pulse-service.js';
+
+const DEFAULT_TOWN_LLM_TIMEOUT_MS = 15_000;
 
 export class TownServiceError extends Error {
   constructor(
@@ -98,6 +106,10 @@ export interface TownServicePort {
   release(request: TownReleaseRequest): TownReleaseResponse;
   recall(request: TownRecallRequest): TownRecallResponse;
   advance(request: TownAdvanceRequest): TownAdvanceResponse;
+  pulse(
+    request: TownPulseRequest,
+    signal: AbortSignal,
+  ): Promise<TownPulseResponse>;
   eventResults(request: TownEventResultsRequest): TownEventResultsResponse;
   recover(request: OfflineRecoveryRequest): OfflineRecoveryResponse;
   history(sessionId: string): TownHistoryResponse;
@@ -112,15 +124,22 @@ export interface TownServicePort {
   deleteShowcase(sessionId: string, itemId: string): ShowcaseDeleteResponse;
 }
 
+export interface TownServiceOptions {
+  readonly provider?: ProviderAdapter;
+  readonly llmTimeoutMs?: number;
+}
+
 export class TownService implements TownServicePort {
   readonly #projections: TownProjectionRepository;
   readonly #events: TownEventRepository;
   readonly #simulation: TownSimulationService;
   readonly #committer: TownEventCommitter;
+  readonly #pulse: TownPulseService;
 
   constructor(
     private readonly database: StorageDatabase,
     private readonly ports: TownSimulationPorts,
+    options: TownServiceOptions = {},
   ) {
     this.#projections = new TownProjectionRepository(database);
     this.#events = new TownEventRepository(database);
@@ -133,6 +152,16 @@ export class TownService implements TownServicePort {
         this.#projections
           .listPublicShowcaseItems(projection.sessionId)
           .map(({ id }) => id),
+    });
+    this.#pulse = new TownPulseService(database, {
+      residentAgent: new ResidentAgent(options.provider),
+      simulation: this.#simulation,
+      eventBuilder: new AutonomyEventBuilder(ports),
+      committer: this.#committer,
+      createInitialProjection: (sessionId) =>
+        this.#createInitialProjection(sessionId),
+      now: ports.now,
+      llmTimeoutMs: options.llmTimeoutMs ?? DEFAULT_TOWN_LLM_TIMEOUT_MS,
     });
   }
 
@@ -223,6 +252,13 @@ export class TownService implements TownServicePort {
         throw new TownServiceError('conflict', error.message);
       throw error;
     }
+  }
+
+  async pulse(
+    request: TownPulseRequest,
+    signal: AbortSignal,
+  ): Promise<TownPulseResponse> {
+    return await this.#pulse.pulse(request, signal);
   }
 
   eventResults(source: TownEventResultsRequest): TownEventResultsResponse {
