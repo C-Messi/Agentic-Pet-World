@@ -497,6 +497,61 @@ describe('TownActivityRegistry execution boundary', () => {
     ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
   });
 
+  it.each([
+    [
+      'sessionId',
+      (event: TownEvent): void => {
+        event.sessionId = 'other-session';
+      },
+    ],
+    [
+      'type',
+      (event: TownEvent): void => {
+        event.type = 'stall.opened';
+      },
+    ],
+    [
+      'id',
+      (event: TownEvent): void => {
+        event.id = 'other-event';
+      },
+    ],
+    [
+      'timestamp',
+      (event: TownEvent): void => {
+        event.timestamp = '2026-07-13T11:00:00.000Z';
+      },
+    ],
+    [
+      'baseVersion',
+      (event: TownEvent): void => {
+        event.baseVersion = 99;
+      },
+    ],
+    [
+      'participantIds',
+      (event: TownEvent): void => {
+        event.participantIds.push('resident-2');
+      },
+    ],
+  ] as const)(
+    'rejects validators that mutate result event %s',
+    (_field, mutate) => {
+      const registry = new TownActivityRegistry().register(
+        definition({
+          validateResultEvent: (event) => {
+            mutate(event as TownEvent);
+            return true;
+          },
+        }),
+      );
+
+      expect(() =>
+        registry.resultEvents('counter', { count: 0 }, context()),
+      ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    },
+  );
+
   it('requires a result ownership validator at runtime', () => {
     expect(() =>
       new TownActivityRegistry().register(

@@ -387,7 +387,7 @@ export class TownActivityRegistry {
         throw new TypeError('Activity result events must be an array');
       }
       const events = sourceEvents.map((event) =>
-        TownEventSchema.parse(structuredClone(event)),
+        deepFreeze(TownEventSchema.parse(structuredClone(event))),
       );
       const ids = new Set(
         parsedContext.emittedResults.map(({ eventId }) => eventId),
