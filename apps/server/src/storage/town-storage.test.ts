@@ -9,6 +9,7 @@ import type {
   PublicShowcaseItem,
   TownEvent,
   TownOuting,
+  TownPulseResponse,
   TownProjection,
 } from '@cat-house/shared';
 import { ZodError } from 'zod';
@@ -18,6 +19,7 @@ import { openDatabase, type StorageDatabase } from './database.js';
 import {
   SessionRepository,
   TownEventRepository,
+  TownPulseRepository,
   TownProjectionRepository,
 } from './repositories/index.js';
 
@@ -162,6 +164,16 @@ function recoveryResult(): OfflineRecoveryResponse {
   };
 }
 
+function pulseResponse(): TownPulseResponse {
+  return {
+    status: 'stale',
+    projection: projection(),
+    events: [],
+    degraded: false,
+    degradedResidentIds: [],
+  };
+}
+
 describe('pet town storage', () => {
   let directory: string;
   let databasePath: string;
@@ -212,6 +224,198 @@ describe('pet town storage', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM town_residents').get()).toEqual({ count: 2 });
     expect(database.prepare('SELECT COUNT(*) AS count FROM town_relationships').get()).toEqual({ count: 1 });
     expect(database.prepare('SELECT COUNT(*) AS count FROM town_activity_instances').get()).toEqual({ count: 1 });
+  });
+
+  it('claims, completes, and replays an autonomous pulse', () => {
+    const repository = new TownPulseRepository(database);
+    const response = pulseResponse();
+
+    expect(repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    })).toEqual({ kind: 'claimed' });
+    expect(repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-2',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    })).toEqual({ kind: 'in-flight' });
+
+    repository.complete('session-1', 'pulse-1', 'lease-1', response, laterTimestamp);
+
+    expect(repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-3',
+      now: laterTimestamp,
+      leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+    })).toEqual({ kind: 'complete', response });
+  });
+
+  it('atomically takes over an expired pulse lease', () => {
+    const first = new TownPulseRepository(database);
+    const otherDatabase = openDatabase(databasePath);
+    try {
+      const second = new TownPulseRepository(otherDatabase);
+      const response = pulseResponse();
+
+      expect(first.claim({
+        sessionId: 'session-1',
+        pulseId: 'pulse-1',
+        baseVersion: 0,
+        leaseToken: 'old-lease',
+        now: timestamp,
+        leaseExpiresAt: laterTimestamp,
+      })).toEqual({ kind: 'claimed' });
+      expect(second.claim({
+        sessionId: 'session-1',
+        pulseId: 'pulse-1',
+        baseVersion: 0,
+        leaseToken: 'new-lease',
+        now: laterTimestamp,
+        leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+      })).toEqual({ kind: 'claimed' });
+      expect(first.claim({
+        sessionId: 'session-1',
+        pulseId: 'pulse-1',
+        baseVersion: 0,
+        leaseToken: 'racing-lease',
+        now: laterTimestamp,
+        leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+      })).toEqual({ kind: 'in-flight' });
+
+      expect(() => first.complete(
+        'session-1',
+        'pulse-1',
+        'old-lease',
+        response,
+        laterTimestamp,
+      )).toThrow(/pending lease/i);
+      second.complete(
+        'session-1',
+        'pulse-1',
+        'new-lease',
+        response,
+        '2026-07-12T08:32:00.000Z',
+      );
+      expect(first.claim({
+        sessionId: 'session-1',
+        pulseId: 'pulse-1',
+        baseVersion: 0,
+        leaseToken: 'lease-after-complete',
+        now: '2026-07-12T08:32:00.000Z',
+        leaseExpiresAt: '2026-07-12T08:33:00.000Z',
+      })).toEqual({ kind: 'complete', response });
+    } finally {
+      otherDatabase.close();
+    }
+  });
+
+  it('rejects pulse ID reuse with another base version', () => {
+    const repository = new TownPulseRepository(database);
+    const claim = {
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    };
+
+    expect(repository.claim(claim)).toEqual({ kind: 'claimed' });
+    expect(() => repository.claim({ ...claim, baseVersion: 1 })).toThrow(/base version conflict/i);
+    repository.complete('session-1', 'pulse-1', 'lease-1', pulseResponse(), laterTimestamp);
+    expect(() => repository.claim({ ...claim, baseVersion: 1 })).toThrow(/base version conflict/i);
+  });
+
+  it('completes only a matching pending pulse lease', () => {
+    const repository = new TownPulseRepository(database);
+    const response = pulseResponse();
+    repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    });
+
+    expect(() => repository.complete(
+      'session-1',
+      'pulse-1',
+      'wrong-lease',
+      response,
+      laterTimestamp,
+    )).toThrow(/pending lease/i);
+    repository.complete('session-1', 'pulse-1', 'lease-1', response, laterTimestamp);
+    expect(() => repository.complete(
+      'session-1',
+      'pulse-1',
+      'lease-1',
+      response,
+      laterTimestamp,
+    )).toThrow(/pending lease/i);
+  });
+
+  it('validates pulse responses on write and read', () => {
+    const repository = new TownPulseRepository(database);
+    repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    });
+    const invalidResponse = {
+      ...pulseResponse(),
+      status: 'stale',
+      events: [event()],
+    } as unknown as TownPulseResponse;
+
+    expect(() => repository.complete(
+      'session-1',
+      'pulse-1',
+      'lease-1',
+      invalidResponse,
+      laterTimestamp,
+    )).toThrow(ZodError);
+    expect(repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-2',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    })).toEqual({ kind: 'in-flight' });
+
+    repository.complete('session-1', 'pulse-1', 'lease-1', pulseResponse(), laterTimestamp);
+    database.prepare(
+      `UPDATE town_agent_pulses
+       SET result_json = ?
+       WHERE session_id = ? AND pulse_id = ?`,
+    ).run(JSON.stringify({ status: 'stale', unsafe: true }), 'session-1', 'pulse-1');
+
+    expect(() => repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-3',
+      now: laterTimestamp,
+      leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+    })).toThrow(ZodError);
+    expect(() => database.prepare(
+      `UPDATE town_agent_pulses
+       SET result_json = ?
+       WHERE session_id = ? AND pulse_id = ?`,
+    ).run('{not-json', 'session-1', 'pulse-1')).toThrow();
   });
 
   it('enforces idempotent event IDs and rejects sequence collisions', () => {
@@ -562,6 +766,7 @@ describe('pet town storage', () => {
 
   it('cascades every town record when its session is deleted', () => {
     const events = new TownEventRepository(database);
+    const pulses = new TownPulseRepository(database);
     const projections = new TownProjectionRepository(database);
     events.append(event());
     projections.save('session-1', -1, projection());
@@ -569,6 +774,14 @@ describe('pet town storage', () => {
     projections.saveOuting(outing());
     projections.saveCard(card());
     projections.savePublicShowcaseItem(showcaseItem());
+    pulses.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    });
 
     database.prepare('DELETE FROM sessions WHERE id = ?').run('session-1');
 
@@ -583,6 +796,7 @@ describe('pet town storage', () => {
       'town_experience_cards',
       'town_experience_card_events',
       'public_showcase_items',
+      'town_agent_pulses',
     ]) {
       expect(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }

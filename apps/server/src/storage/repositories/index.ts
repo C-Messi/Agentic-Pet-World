@@ -4,6 +4,7 @@ export { MemoryRepository } from './memory-repository.js';
 export { MessageRepository } from './message-repository.js';
 export { SessionRepository } from './session-repository.js';
 export { TownEventRepository } from './town-event-repository.js';
+export { TownPulseRepository } from './town-pulse-repository.js';
 export { TownProjectionRepository } from './town-projection-repository.js';
 export { WorldStateRepository } from './world-state-repository.js';
 
