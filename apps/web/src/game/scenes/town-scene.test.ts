@@ -5,6 +5,7 @@ const phaser = vi.hoisted(() => {
   type Sprite = {
     x: number;
     y: number;
+    depth?: number;
     destroy: ReturnType<typeof vi.fn>;
     play: ReturnType<typeof vi.fn>;
     setDepth: ReturnType<typeof vi.fn>;
@@ -20,16 +21,42 @@ const phaser = vi.hoisted(() => {
     onUpdate: () => void;
     onComplete: () => void;
   };
+  type DisplayObject = {
+    x: number;
+    y: number;
+    texture?: string;
+    frame?: number;
+    depth?: number;
+    destroy: ReturnType<typeof vi.fn>;
+    setDepth: ReturnType<typeof vi.fn>;
+    setOrigin: ReturnType<typeof vi.fn>;
+  };
 
   const sprites: Sprite[] = [];
   const tweens: TweenConfig[] = [];
-  const chainable = () => {
+  const images: DisplayObject[] = [];
+  const containers: DisplayObject[] = [];
+  const texts: DisplayObject[] = [];
+  const shutdownCallbacks: (() => void)[] = [];
+  const displayObject = (
+    x = 0,
+    y = 0,
+    texture?: string,
+    frame?: number,
+  ): DisplayObject => {
     const object = {
+      x,
+      y,
+      ...(texture === undefined ? {} : { texture }),
+      ...(frame === undefined ? {} : { frame }),
       destroy: vi.fn(),
       setDepth: vi.fn(),
       setOrigin: vi.fn(),
-    };
-    object.setDepth.mockReturnValue(object);
+    } as DisplayObject;
+    object.setDepth.mockImplementation((depth: number) => {
+      object.depth = depth;
+      return object;
+    });
     object.setOrigin.mockReturnValue(object);
     return object;
   };
@@ -45,7 +72,10 @@ const phaser = vi.hoisted(() => {
       setScale: vi.fn(),
       on: vi.fn(),
     } as Sprite;
-    sprite.setDepth.mockReturnValue(sprite);
+    sprite.setDepth.mockImplementation((depth: number) => {
+      sprite.depth = depth;
+      return sprite;
+    });
     sprite.setFlipX.mockReturnValue(sprite);
     sprite.setInteractive.mockReturnValue(sprite);
     sprite.setScale.mockReturnValue(sprite);
@@ -53,25 +83,50 @@ const phaser = vi.hoisted(() => {
     return sprite;
   };
 
-  class Scene {
-    cameras = {
-      main: {
-        centerOn: vi.fn(),
-        stopFollow: vi.fn(),
-      },
+  const camera = () => {
+    const main = {
+      centerOn: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setBounds: vi.fn(),
+      setZoom: vi.fn(),
+      stopFollow: vi.fn(),
     };
+    main.setBackgroundColor.mockReturnValue(main);
+    main.setBounds.mockReturnValue(main);
+    main.setZoom.mockReturnValue(main);
+    return main;
+  };
+
+  class Scene {
+    cameras = { main: camera() };
     add = {
-      container: vi.fn(chainable),
-      image: vi.fn(chainable),
+      container: vi.fn((x: number, y: number) => {
+        const object = displayObject(x, y);
+        containers.push(object);
+        return object;
+      }),
+      image: vi.fn((x: number, y: number, texture: string, frame?: number) => {
+        const object = displayObject(x, y, texture, frame);
+        images.push(object);
+        return object;
+      }),
       sprite: vi.fn((x: number, y: number) => makeSprite(x, y)),
-      text: vi.fn(chainable),
+      text: vi.fn((x: number, y: number) => {
+        const object = displayObject(x, y);
+        texts.push(object);
+        return object;
+      }),
     };
     anims = {
       create: vi.fn(),
       exists: vi.fn(() => false),
       generateFrameNumbers: vi.fn(() => []),
     };
-    events = { once: vi.fn() };
+    events = {
+      once: vi.fn((_event: string, callback: () => void) => {
+        shutdownCallbacks.push(callback);
+      }),
+    };
     time = {
       delayedCall: vi.fn((_duration: number, callback: () => void) => {
         queueMicrotask(callback);
@@ -88,10 +143,18 @@ const phaser = vi.hoisted(() => {
 
   return {
     Scene,
+    containers,
+    images,
+    shutdownCallbacks,
     sprites,
+    texts,
     tweens,
     reset: () => {
+      containers.length = 0;
+      images.length = 0;
+      shutdownCallbacks.length = 0;
       sprites.length = 0;
+      texts.length = 0;
       tweens.length = 0;
     },
   };
@@ -162,6 +225,15 @@ const projection: TownProjection = {
   activities: [],
 };
 
+const blockingModification: TownProjection['modifications'][number] = {
+  id: 'mod-blocker',
+  recipeId: 'garden-bench',
+  plotId: 'plot-1',
+  occupiedCells: [{ x: 9, y: 9 }],
+  atlasFrame: 12,
+  collision: true,
+};
+
 beforeEach(() => {
   phaser.reset();
   vi.clearAllMocks();
@@ -219,6 +291,97 @@ describe('TownScene state', () => {
     expect(phaser.sprites[0]?.setFlipX).toHaveBeenCalledTimes(path.length - 1);
   });
 
+  it('routes resident movement around restored modification collisions', async () => {
+    const scene = new TownScene();
+    scene.applySnapshot({
+      ...projection,
+      modifications: [blockingModification],
+    });
+    const navigation = new TownNavigation();
+    navigation.restoreModifications([blockingModification]);
+    const path = navigation.findPath({ x: 10, y: 9 }, { x: 8, y: 9 });
+
+    expect(path).not.toContainEqual({ x: 9, y: 9 });
+    const moving = scene.moveResident(
+      'player-cat',
+      { x: 8, y: 9 },
+      new AbortController().signal,
+    );
+
+    await completeMovement(path, moving);
+  });
+
+  it('restores idle at the current grid cell when movement starts aborted', async () => {
+    const scene = new TownScene();
+    scene.applySnapshot(projection);
+    const sprite = phaser.sprites[0]!;
+    const start = tilePoint({ x: 10, y: 9 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      scene.moveResident('player-cat', { x: 4, y: 3 }, controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(phaser.tweens).toHaveLength(0);
+    expect({ x: sprite.x, y: sprite.y, depth: sprite.depth }).toEqual({
+      ...start,
+      depth: start.y + 32,
+    });
+    expect(sprite.play).toHaveBeenLastCalledWith('player-cat:idle', true);
+  });
+
+  it('rejects a pre-aborted move that already targets the current grid cell', async () => {
+    const scene = new TownScene();
+    scene.applySnapshot(projection);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      scene.moveResident('player-cat', { x: 10, y: 9 }, controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('snaps aborted movement to its last completed grid step and resumes there', async () => {
+    const scene = new TownScene();
+    scene.applySnapshot(projection);
+    const sprite = phaser.sprites[0]!;
+    const destination = { x: 4, y: 3 };
+    const path = residentMovementPath({ x: 10, y: 9 }, destination);
+    const confirmed = path[1]!;
+    const confirmedPoint = tilePoint(confirmed);
+    const controller = new AbortController();
+    const moving = scene.moveResident(
+      'player-cat',
+      destination,
+      controller.signal,
+    );
+
+    completeNextTween();
+    await Promise.resolve();
+    const activeTween = phaser.tweens[0]!;
+    sprite.x = (confirmedPoint.x + activeTween.x) / 2;
+    sprite.y = (confirmedPoint.y + activeTween.y) / 2;
+    activeTween.onUpdate();
+    controller.abort();
+
+    await expect(moving).rejects.toMatchObject({ name: 'AbortError' });
+    expect({ x: sprite.x, y: sprite.y, depth: sprite.depth }).toEqual({
+      ...confirmedPoint,
+      depth: confirmedPoint.y + 32,
+    });
+    expect(sprite.play).toHaveBeenLastCalledWith('player-cat:idle', true);
+
+    phaser.tweens.length = 0;
+    const resumedPath = residentMovementPath(confirmed, destination);
+    const resumed = scene.moveResident(
+      'player-cat',
+      destination,
+      new AbortController().signal,
+    );
+    await completeMovement(resumedPath, resumed);
+  });
+
   it('rejects resident movement when no walkable path exists', async () => {
     const scene = new TownScene();
     scene.applySnapshot(projection);
@@ -249,6 +412,55 @@ describe('TownScene state', () => {
 
     expect(phaser.sprites[0]?.setFlipX).toHaveBeenCalledWith(true);
     expect(phaser.sprites[1]?.setFlipX).toHaveBeenCalledWith(false);
+  });
+
+  it('renders layered zone parts and signs during scene creation', () => {
+    const scene = new TownScene();
+    scene.create();
+
+    const expected = Object.values(TOWN_ZONE_PRESENTATIONS).flatMap((zone) => {
+      const parts = zone.parts.map((part) => {
+        const anchor = tilePoint(part.anchor);
+        return {
+          x: anchor.x + part.offset.x,
+          y: anchor.y + part.offset.y,
+          frame: part.frame,
+          depth: part.foreground ? 9_000 : anchor.y + part.depthOffset,
+        };
+      });
+      const entrance = tilePoint(zone.entrance);
+      return [
+        ...parts,
+        {
+          x: entrance.x,
+          y: entrance.y - 22,
+          frame: zone.signFrame,
+          depth: entrance.y - 1,
+        },
+      ];
+    });
+    const atlasImages = phaser.images
+      .filter(({ texture }) => texture === 'town-atlas')
+      .map(({ x, y, frame, depth }) => ({ x, y, frame, depth }));
+
+    expect(atlasImages).toEqual(expected);
+    expect(phaser.texts).toHaveLength(0);
+    expect(phaser.shutdownCallbacks).toHaveLength(1);
+    expect(() => phaser.shutdownCallbacks[0]!()).not.toThrow();
+  });
+
+  it('keeps resident speech bubbles above foreground layers', async () => {
+    const scene = new TownScene();
+    scene.applySnapshot(projection);
+
+    const speaking = scene.speak(
+      'player-cat',
+      'Hello town',
+      new AbortController().signal,
+    );
+
+    expect(phaser.containers.at(-1)?.depth).toBe(10_000);
+    await speaking;
   });
 
   it('provides five stable resident spawn positions', () => {
@@ -419,4 +631,28 @@ function tilePoint({ x, y }: { x: number; y: number }): {
     x: TOWN_CAMERA_LAYOUT.background.x + x * TOWN_GRID.tileSize + 16,
     y: TOWN_CAMERA_LAYOUT.background.y + y * TOWN_GRID.tileSize + 16,
   };
+}
+
+function completeNextTween(): void {
+  const tween = phaser.tweens.shift();
+  expect(tween).toBeDefined();
+  if (!tween) return;
+  tween.targets.x = tween.x;
+  tween.targets.y = tween.y;
+  tween.onUpdate();
+  tween.onComplete();
+}
+
+async function completeMovement(
+  path: readonly { x: number; y: number }[],
+  moving: Promise<void>,
+): Promise<void> {
+  for (const step of path.slice(1)) {
+    expect(phaser.tweens).toHaveLength(1);
+    const tween = phaser.tweens[0]!;
+    expect({ x: tween.x, y: tween.y }).toEqual(tilePoint(step));
+    completeNextTween();
+    await Promise.resolve();
+  }
+  await moving;
 }

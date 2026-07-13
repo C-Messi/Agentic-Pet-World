@@ -34,8 +34,12 @@ export function horizontalFacing(fromX: number, toX: number): 1 | -1 {
   return toX < fromX ? -1 : 1;
 }
 
-export function residentMovementPath(from: Position, to: Position): Position[] {
-  return new TownNavigation().findPath(from, to);
+export function residentMovementPath(
+  from: Position,
+  to: Position,
+  navigation = new TownNavigation(),
+): Position[] {
+  return navigation.findPath(from, to);
 }
 
 export class TownScene extends Phaser.Scene implements TownScenePort {
@@ -129,17 +133,29 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
     const current = this.#residentPositions.get(residentId);
     if (!current)
       throw new Error(`Town resident position not tracked: ${residentId}`);
-    const path = residentMovementPath(current, position);
+    const path = residentMovementPath(current, position, this.#navigation);
     if (path.length === 0)
       throw new Error(`Town resident path is not walkable: ${residentId}`);
+    let confirmed = current;
     sprite.play(`${residentId}:walk`, true);
-    for (const step of path.slice(1)) {
-      const target = tileCenter(step);
-      sprite.setFlipX(horizontalFacing(sprite.x, target.x) < 0);
-      await this.#tweenTo(sprite, target, signal);
+    try {
+      if (signal.aborted) throw abortError();
+      for (const step of path.slice(1)) {
+        const target = tileCenter(step);
+        sprite.setFlipX(horizontalFacing(sprite.x, target.x) < 0);
+        await this.#tweenTo(sprite, target, signal);
+        confirmed = step;
+        this.#residentPositions.set(residentId, { ...confirmed });
+      }
+      sprite.play(`${residentId}:idle`, true);
+    } catch (error) {
+      const point = tileCenter(confirmed);
+      sprite.x = point.x;
+      sprite.y = point.y;
+      sprite.setDepth(point.y + 32);
+      sprite.play(`${residentId}:idle`, true);
+      throw error;
     }
-    sprite.play(`${residentId}:idle`, true);
-    this.#residentPositions.set(residentId, { ...position });
   }
 
   async speak(
