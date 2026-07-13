@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { TOWN_ZONES } from '../town/town-navigation';
 import {
   DEFAULT_TOWN_SPAWNS,
+  TOWN_CAMERA_LAYOUT,
   TOWN_ZONE_PRESENTATIONS,
 } from './town-scene-layout';
 import { TownSceneState } from './town-scene-state';
@@ -10,7 +11,10 @@ import { TownSceneState } from './town-scene-state';
 describe('TownScene state', () => {
   it('provides five stable resident spawn positions', () => {
     expect(Object.keys(DEFAULT_TOWN_SPAWNS)).toHaveLength(5);
-    expect(new Set(Object.values(DEFAULT_TOWN_SPAWNS).map(({ x, y }) => `${x}:${y}`)).size).toBe(5);
+    expect(
+      new Set(Object.values(DEFAULT_TOWN_SPAWNS).map(({ x, y }) => `${x}:${y}`))
+        .size,
+    ).toBe(5);
   });
 
   it('provides a distinct visual presentation for every town zone', () => {
@@ -23,9 +27,9 @@ describe('TownScene state', () => {
     expect(new Set(presentations.map(({ label }) => label)).size).toBe(
       TOWN_ZONES.length,
     );
-    expect(new Set(presentations.map(({ landmarkFrame }) => landmarkFrame)).size).toBe(
-      TOWN_ZONES.length,
-    );
+    expect(
+      new Set(presentations.map(({ landmarkFrame }) => landmarkFrame)).size,
+    ).toBe(TOWN_ZONES.length);
 
     for (const presentation of presentations) {
       const zone = byId.get(presentation.zoneId);
@@ -37,6 +41,25 @@ describe('TownScene state', () => {
     }
   });
 
+  it('fills the camera width while keeping the complete town visible', () => {
+    const visibleWidth =
+      TOWN_CAMERA_LAYOUT.viewport.width / TOWN_CAMERA_LAYOUT.zoom;
+    const visibleHeight =
+      TOWN_CAMERA_LAYOUT.viewport.height / TOWN_CAMERA_LAYOUT.zoom;
+    const visibleLeft = (TOWN_CAMERA_LAYOUT.world.width - visibleWidth) / 2;
+    const visibleTop = (TOWN_CAMERA_LAYOUT.world.height - visibleHeight) / 2;
+
+    expect(visibleWidth).toBe(TOWN_CAMERA_LAYOUT.background.width);
+    expect(visibleLeft).toBe(TOWN_CAMERA_LAYOUT.background.x);
+    expect(TOWN_CAMERA_LAYOUT.background.y).toBeGreaterThanOrEqual(visibleTop);
+    expect(visibleHeight).toBeGreaterThanOrEqual(
+      TOWN_CAMERA_LAYOUT.background.height,
+    );
+    expect(
+      TOWN_CAMERA_LAYOUT.background.y + TOWN_CAMERA_LAYOUT.background.height,
+    ).toBeLessThanOrEqual(visibleTop + visibleHeight);
+  });
+
   it('switches camera follow and keeps bubbles owned by one resident', () => {
     const state = new TownSceneState();
     expect(state.followedResidentId).toBe('player-cat');
@@ -44,7 +67,10 @@ describe('TownScene state', () => {
     state.follow('resident-mikan');
     state.showBubble('resident-mikan', '来抽签吧');
     expect(state.followedResidentId).toBe('resident-mikan');
-    expect(state.bubble).toEqual({ ownerId: 'resident-mikan', text: '来抽签吧' });
+    expect(state.bubble).toEqual({
+      ownerId: 'resident-mikan',
+      text: '来抽签吧',
+    });
 
     state.showBubble('resident-huihui', '等等我');
     expect(state.bubble?.ownerId).toBe('resident-huihui');

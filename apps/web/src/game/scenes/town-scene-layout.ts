@@ -10,6 +10,13 @@ export type TownZonePresentation = {
   signFrame: number;
 };
 
+export const TOWN_CAMERA_LAYOUT = {
+  viewport: { width: 768, height: 512 },
+  world: { width: 768, height: 512 },
+  background: { x: 64, y: 64, width: 640, height: 360 },
+  zoom: 1.2,
+} as const;
+
 export const DEFAULT_TOWN_SPAWNS: Readonly<Record<string, Position>> = {
   'player-cat': { x: 3, y: 9 },
   'resident-mikan': { x: 9, y: 6 },

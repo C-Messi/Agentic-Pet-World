@@ -10,15 +10,18 @@ import Phaser from 'phaser';
 import { gameEvents } from '../events';
 import { TOWN_GRID, TownNavigation } from '../town/town-navigation';
 import type { TownScenePort } from '../town/town-event-player';
-import { TOWN_ZONE_PRESENTATIONS } from './town-scene-layout';
+import {
+  TOWN_CAMERA_LAYOUT,
+  TOWN_ZONE_PRESENTATIONS,
+} from './town-scene-layout';
 import { TownSceneState } from './town-scene-state';
 
 export { DEFAULT_TOWN_SPAWNS } from './town-scene-layout';
 
 const PET_SCALE = 1.5;
-const WORLD_WIDTH = 768;
-const WORLD_HEIGHT = 512;
-const TOWN_BACKGROUND = { x: 64, y: 64, width: 640, height: 360 } as const;
+const WORLD_WIDTH = TOWN_CAMERA_LAYOUT.world.width;
+const WORLD_HEIGHT = TOWN_CAMERA_LAYOUT.world.height;
+const TOWN_BACKGROUND = TOWN_CAMERA_LAYOUT.background;
 const PET_SPRITES = [
   'player-cat',
   'orange-cat',
@@ -65,7 +68,7 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
     this.cameras.main
       .setBackgroundColor('#73b98b')
       .setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
-      .setZoom(0.75);
+      .setZoom(TOWN_CAMERA_LAYOUT.zoom);
     this.add
       .image(TOWN_BACKGROUND.x, TOWN_BACKGROUND.y, 'town-background')
       .setOrigin(0)
