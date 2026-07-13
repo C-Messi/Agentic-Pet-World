@@ -56,16 +56,60 @@ describe('Fastify BFF production integration', () => {
 
   it('exposes the persistent pet town snapshot and outing routes', async () => {
     const fixture = createProductionFixture();
-    const created = await fixture.app.inject({ method: 'POST', url: '/api/sessions', payload: {} });
+    const created = await fixture.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {},
+    });
     const sessionId = created.json().session.id as string;
-    const snapshot = await fixture.app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/town` });
-    const release = await fixture.app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/town/release`, payload: { residentId: 'player-cat' } });
-    const invalid = await fixture.app.inject({ method: 'PUT', url: `/api/sessions/${sessionId}/town/showcase/item-1`, payload: { item: { id: 'item-1', sessionId, kind: 'text', title: 'Secret', content: 'private', presetIconId: 'star', isPublic: false } } });
+    const snapshot = await fixture.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/town`,
+    });
+    const release = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/town/release`,
+      payload: { residentId: 'player-cat' },
+    });
+    const fortune = await fixture.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/town/advance`,
+      payload: {
+        baseVersion: 0,
+        intents: [
+          {
+            type: 'start-activity',
+            actorId: 'player-cat',
+            activityId: 'fortune-draw',
+            invitedResidentIds: [],
+          },
+        ],
+      },
+    });
+    const invalid = await fixture.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${sessionId}/town/showcase/item-1`,
+      payload: {
+        item: {
+          id: 'item-1',
+          sessionId,
+          kind: 'text',
+          title: 'Secret',
+          content: 'private',
+          presetIconId: 'star',
+          isPublic: false,
+        },
+      },
+    });
 
     expect(snapshot.statusCode).toBe(200);
     expect(snapshot.json().projection.residents).toHaveLength(5);
     expect(release.statusCode).toBe(200);
     expect(release.json().outing.status).toBe('town');
+    expect(fortune.statusCode).toBe(200);
+    expect(
+      fortune.json().events.map(({ type }: { type: string }) => type),
+    ).toEqual(['fortune.started', 'fortune.revealed', 'fortune.interpreted']);
     expect(invalid.statusCode).toBe(422);
   });
 
@@ -105,12 +149,20 @@ describe('Fastify BFF production integration', () => {
     const action = await fixture.app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
-      payload: { turnCorrelationId: firstTurnCorrelationId, world, results: [result] },
+      payload: {
+        turnCorrelationId: firstTurnCorrelationId,
+        world,
+        results: [result],
+      },
     });
     const retry = await fixture.app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/action-results`,
-      payload: { turnCorrelationId: firstTurnCorrelationId, world, results: [result] },
+      payload: {
+        turnCorrelationId: firstTurnCorrelationId,
+        world,
+        results: [result],
+      },
     });
     const conflict = await fixture.app.inject({
       method: 'POST',
@@ -173,32 +225,42 @@ describe('Fastify BFF production integration', () => {
     expect(secondTurnCorrelationId).not.toBe(firstTurnCorrelationId);
     expect(secondTurn.json().decision.actions[0].id).toBe('fake-window-move');
     expect(secondAction.statusCode).toBe(202);
-    const roles = session.json().messages.map(
-      (message: { role: string }) => message.role,
-    );
+    const roles = session
+      .json()
+      .messages.map((message: { role: string }) => message.role);
     expect(roles.filter((role: string) => role === 'player')).toHaveLength(2);
     expect(roles.filter((role: string) => role === 'agent')).toHaveLength(2);
     expect(session.json().world).toEqual(world);
-    expect(memories.json().memories).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'memory-integration', sessionId }),
-    ]));
+    expect(memories.json().memories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'memory-integration', sessionId }),
+      ]),
+    );
     expect(
-      fixture.database.prepare(
-        `SELECT turn_correlation_id, status
+      fixture.database
+        .prepare(
+          `SELECT turn_correlation_id, status
          FROM action_runs
          WHERE session_id = ?
          ORDER BY turn_correlation_id`,
-      ).all(sessionId),
-    ).toEqual([
-      { turn_correlation_id: firstTurnCorrelationId, status: 'succeeded' },
-      { turn_correlation_id: secondTurnCorrelationId, status: 'succeeded' },
-    ].sort((left, right) => left.turn_correlation_id.localeCompare(right.turn_correlation_id)));
+        )
+        .all(sessionId),
+    ).toEqual(
+      [
+        { turn_correlation_id: firstTurnCorrelationId, status: 'succeeded' },
+        { turn_correlation_id: secondTurnCorrelationId, status: 'succeeded' },
+      ].sort((left, right) =>
+        left.turn_correlation_id.localeCompare(right.turn_correlation_id),
+      ),
+    );
     expect(
-      fixture.database.prepare(
-        `SELECT COUNT(*) AS count
+      fixture.database
+        .prepare(
+          `SELECT COUNT(*) AS count
          FROM events
          WHERE session_id = ? AND type = 'actions.results.recorded'`,
-      ).get(sessionId),
+        )
+        .get(sessionId),
     ).toEqual({ count: 2 });
   });
 
@@ -249,7 +311,10 @@ describe('Fastify BFF production integration', () => {
       DATABASE_URL: join(directory, 'degraded.sqlite'),
       WEB_ORIGIN: 'http://127.0.0.1:5173',
     });
-    const health = await production.app.inject({ method: 'GET', url: '/health' });
+    const health = await production.app.inject({
+      method: 'GET',
+      url: '/health',
+    });
     const create = await production.app.inject({
       method: 'POST',
       url: '/api/sessions',
@@ -269,10 +334,12 @@ describe('Fastify BFF production integration', () => {
     expect(health.statusCode).toBe(503);
     expect(health.json().checks.config).toBe(false);
     expect(turn.statusCode).toBe(503);
-    expect(turn.json()).toEqual(expect.objectContaining({
-      degraded: true,
-      fallbackReason: 'provider_unavailable',
-    }));
+    expect(turn.json()).toEqual(
+      expect.objectContaining({
+        degraded: true,
+        fallbackReason: 'provider_unavailable',
+      }),
+    );
   });
 
   function createProductionFixture() {

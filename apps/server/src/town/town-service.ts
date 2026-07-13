@@ -30,6 +30,8 @@ import {
   type TownEventResultsRequest,
   type TownEventResultsResponse,
   type TownHistoryResponse,
+  type TownEvent,
+  type TownIntent,
   type TownProjection,
   type TownRecallRequest,
   type TownRecallResponse,
@@ -45,6 +47,22 @@ import {
   TownEventRepository,
   TownProjectionRepository,
 } from '../storage/repositories/index.js';
+import {
+  TownActivityRegistry,
+  type ActivityContext,
+} from './activity-registry.js';
+import { createShowcaseStallDefinition } from './activities/showcase-stall.js';
+import {
+  createFallbackFortuneInterpretation,
+  FORTUNE_ACTIVITY_DEFINITION,
+  FORTUNE_POOL,
+  FortuneStateSchema,
+} from './activities/fortune.js';
+import {
+  BUILD_PLOTS,
+  createBuildCompletedEvent,
+  validateBuildPlacement,
+} from './build-recipes.js';
 import { reduceTownEvent } from './event-reducer.js';
 import {
   fallbackReturnHomeRecap,
@@ -103,7 +121,7 @@ export class TownService implements TownServicePort {
     this.#projections = new TownProjectionRepository(database);
     this.#events = new TownEventRepository(database);
     this.#simulation = new TownSimulationService(ports, {
-      buildPlots: ['plot-1', 'plot-2', 'plot-3', 'plot-4', 'plot-5', 'plot-6'],
+      buildPlots: BUILD_PLOTS.map(({ id }) => id),
       publicShowcaseItemIds: (_actorId, projection) =>
         this.#projections
           .listPublicShowcaseItems(projection.sessionId)
@@ -172,31 +190,31 @@ export class TownService implements TownServicePort {
             'conflict',
             'Stale town projection version',
           );
-        const events = [];
-        for (const intent of request.intents) {
-          for (const event of this.#simulation.createEvents(
-            projection,
-            intent,
-          )) {
-            if (events.length >= 24) break;
-            this.#events.append(event);
-            projection = reduceTownEvent(projection, event);
-            events.push(event);
-          }
-          if (events.length >= 24) break;
-        }
-        if (
-          events.length > 0 &&
-          !this.#projections.save(
-            request.sessionId,
-            request.baseVersion,
-            projection,
+        const events: TownEvent[] = [];
+        const apply = (event: TownEvent) => {
+          if (events.length >= 24) return;
+          this.#events.append(event);
+          const next = reduceTownEvent(projection, event);
+          if (
+            !this.#projections.save(request.sessionId, projection.version, next)
           )
-        ) {
-          throw new TownServiceError(
-            'conflict',
-            'Town projection changed concurrently',
-          );
+            throw new TownServiceError(
+              'conflict',
+              'Town projection changed concurrently',
+            );
+          projection = next;
+          events.push(event);
+        };
+        for (const intent of request.intents) {
+          const primary = this.#simulation.createEvents(projection, intent);
+          for (const event of primary) apply(event);
+          for (const event of this.#completionEvents(
+            intent,
+            projection,
+            primary,
+          ))
+            apply(event);
+          if (events.length >= 24) break;
         }
         return TownAdvanceResponseSchema.parse({ projection, events });
       })
@@ -396,6 +414,192 @@ export class TownService implements TownServicePort {
     if (resident === undefined)
       throw new TownServiceError('invalid', 'Town resident not found');
     return resident;
+  }
+
+  #completionEvents(
+    intent: TownIntent,
+    projection: TownProjection,
+    primary: readonly TownEvent[],
+  ): readonly TownEvent[] {
+    if (
+      intent.type === 'start-activity' &&
+      intent.activityId === 'fortune-draw'
+    )
+      return this.#fortuneCompletion(projection, primary[0]!);
+    if (intent.type === 'build')
+      return this.#buildCompletion(intent, projection, primary[0]!);
+    if (intent.type === 'open-stall')
+      return this.#stallCompletion(intent, projection, primary[0]!);
+    return [];
+  }
+
+  #activityContext(
+    projection: TownProjection,
+    activityInstanceId: string,
+    participantIds: readonly string[],
+    zoneId: ActivityContext['zoneId'],
+    emittedResults: ActivityContext['emittedResults'] = [],
+  ): ActivityContext {
+    return {
+      sessionId: projection.sessionId,
+      activityInstanceId,
+      baseVersion: projection.version,
+      lastEventSequence: projection.lastEventSequence,
+      participantIds,
+      zoneId,
+      now: this.ports.now(),
+      emittedResults,
+      nextEventId: () => this.ports.nextId('town-event'),
+    };
+  }
+
+  #fortuneCompletion(
+    projection: TownProjection,
+    started: TownEvent,
+  ): readonly TownEvent[] {
+    if (started.type !== 'fortune.started') return [];
+    const registry = new TownActivityRegistry().register(
+      FORTUNE_ACTIVITY_DEFINITION,
+    );
+    const context = this.#activityContext(
+      projection,
+      started.payload.activityInstanceId,
+      started.participantIds,
+      'fortune-pavilion',
+    );
+    let state = registry.createInitialState('fortune-draw', context);
+    state = registry.transition(
+      'fortune-draw',
+      state,
+      { type: 'ask', question: 'What should I notice today?' },
+      context,
+    );
+    state = registry.transition(
+      'fortune-draw',
+      state,
+      { type: 'draw', seed: Math.floor(this.ports.random() * 1_000_000) },
+      context,
+    );
+    state = registry.transition(
+      'fortune-draw',
+      state,
+      { type: 'reveal' },
+      context,
+    );
+    const parsed = FortuneStateSchema.parse(state);
+    if (parsed.phase !== 'revealed') return [];
+    const fortune = FORTUNE_POOL.fortunes.find(
+      ({ id }) => id === parsed.fortuneId,
+    )!;
+    const interpretation = createFallbackFortuneInterpretation(fortune);
+    state = registry.transition(
+      'fortune-draw',
+      state,
+      { type: 'interpret', ...interpretation },
+      context,
+    );
+    return registry.resultEvents('fortune-draw', state, context);
+  }
+
+  #buildCompletion(
+    intent: Extract<TownIntent, { type: 'build' }>,
+    projection: TownProjection,
+    started: TownEvent,
+  ): readonly TownEvent[] {
+    if (started.type !== 'build.started') return [];
+    const plot = BUILD_PLOTS.find(({ id }) => id === intent.plotId)!;
+    const plan = validateBuildPlacement({
+      projection,
+      recipeId: intent.recipeId,
+      plotId: intent.plotId,
+      originCell: plot.origin,
+      participantIds: started.participantIds,
+      modificationId: started.payload.modificationId,
+    });
+    return [
+      createBuildCompletedEvent(plan, {
+        id: this.ports.nextId('town-event'),
+        sessionId: projection.sessionId,
+        sequence: projection.lastEventSequence + 1,
+        baseVersion: projection.version,
+        timestamp: this.ports.now(),
+      }),
+    ];
+  }
+
+  #stallCompletion(
+    intent: Extract<TownIntent, { type: 'open-stall' }>,
+    projection: TownProjection,
+    opened: TownEvent,
+  ): readonly TownEvent[] {
+    if (opened.type !== 'stall.opened') return [];
+    const visitor = projection.residents.find(
+      ({ residentId, availability }) =>
+        residentId !== intent.actorId && availability === 'available',
+    );
+    if (visitor === undefined) return [];
+    const items = this.#projections
+      .listPublicShowcaseItems(projection.sessionId)
+      .filter(({ id }) => intent.showcaseItemIds.includes(id));
+    const definition = createShowcaseStallDefinition({
+      pet: this.#requireResident(projection, intent.actorId).pet,
+      sessionId: projection.sessionId,
+      items,
+      availableResidentIds: projection.residents
+        .filter(({ availability }) => availability === 'available')
+        .map(({ residentId }) => residentId),
+    });
+    const registry = new TownActivityRegistry().register(definition);
+    const context = this.#activityContext(
+      projection,
+      intent.stallId,
+      [intent.actorId],
+      'market',
+      [
+        {
+          activityInstanceId: intent.stallId,
+          eventType: 'stall.opened',
+          factKey: 'stall-opened',
+          eventId: opened.id,
+        },
+      ],
+    );
+    let state = registry.createInitialState('showcase-stall', context);
+    state = registry.transition(
+      'showcase-stall',
+      state,
+      {
+        type: 'setup',
+        theme: 'playful',
+        signStyle: 'chalkboard',
+        showcaseItemIds: intent.showcaseItemIds,
+        openDurationMs: 30_000,
+      },
+      context,
+    );
+    state = registry.transition(
+      'showcase-stall',
+      state,
+      { type: 'open' },
+      context,
+    );
+    state = registry.transition(
+      'showcase-stall',
+      state,
+      {
+        type: 'view',
+        visitorResidentId: visitor.residentId,
+        interactionId: this.ports.nextId('activity'),
+      },
+      context,
+    );
+    state = registry.transition(
+      'showcase-stall',
+      state,
+      { type: 'close' },
+      context,
+    );
+    return registry.resultEvents('showcase-stall', state, context);
   }
 
   #createRecoveryCards(

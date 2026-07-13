@@ -109,4 +109,102 @@ describe('TownService', () => {
     database.close();
     rmSync(directory, { recursive: true, force: true });
   });
+
+  it('returns a complete deterministic fortune lifecycle from advance', () => {
+    const { database, service } = fixture();
+    const result = service.advance({
+      sessionId: 'session-1',
+      baseVersion: 0,
+      intents: [
+        {
+          type: 'start-activity',
+          actorId: 'player-cat',
+          activityId: 'fortune-draw',
+          invitedResidentIds: [],
+        },
+      ],
+    });
+    expect(result.events.map(({ type }) => type)).toEqual([
+      'fortune.started',
+      'fortune.revealed',
+      'fortune.interpreted',
+    ]);
+    database.close();
+  });
+
+  it('completes a validated street lamp build from advance', () => {
+    const { database, service } = fixture();
+    const result = service.advance({
+      sessionId: 'session-1',
+      baseVersion: 0,
+      intents: [
+        {
+          type: 'build',
+          actorId: 'player-cat',
+          recipeId: 'street-lamp',
+          plotId: 'plaza-north',
+        },
+      ],
+    });
+    expect(result.events.map(({ type }) => type)).toEqual([
+      'build.started',
+      'build.completed',
+    ]);
+    expect(result.projection.modifications[0]).toMatchObject({
+      recipeId: 'street-lamp',
+      plotId: 'plaza-north',
+    });
+    database.close();
+  });
+
+  it('plays an opened, visited, and closed showcase lifecycle', () => {
+    const { database, service } = fixture();
+    service.upsertShowcase('session-1', 'item-1', {
+      item: {
+        id: 'item-1',
+        sessionId: 'session-1',
+        kind: 'interest',
+        title: 'Window songs',
+        content: 'Sunny tunes and tiny discoveries',
+        presetIconId: 'star',
+        isPublic: true,
+      },
+    });
+    const result = service.advance({
+      sessionId: 'session-1',
+      baseVersion: 0,
+      intents: [
+        {
+          type: 'open-stall',
+          actorId: 'player-cat',
+          stallId: 'stall-player-cat',
+          showcaseItemIds: ['item-1'],
+        },
+      ],
+    });
+    expect(result.events.map(({ type }) => type)).toEqual([
+      'stall.opened',
+      'stall.visited',
+      'stall.closed',
+    ]);
+    expect(result.projection.activities).toEqual([]);
+    database.close();
+  });
 });
+
+function fixture() {
+  const database = openDatabase(':memory:');
+  let id = 0;
+  const service = new TownService(database, {
+    now: () => '2026-07-13T10:00:00.000Z',
+    nextId: (prefix) => `${prefix}-fixture-${++id}`,
+    random: () => 0.25,
+  });
+  new SessionRepository(database).create({
+    id: 'session-1',
+    createdAt: '2026-07-13T08:00:00.000Z',
+    updatedAt: '2026-07-13T08:00:00.000Z',
+  });
+  service.snapshot('session-1');
+  return { database, service };
+}
