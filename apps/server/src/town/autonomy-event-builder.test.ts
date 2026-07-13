@@ -19,7 +19,7 @@ import { reduceTownEvent } from './event-reducer.js';
 import { createAuthoredPetDefinitions } from './residents.js';
 
 const timestamp = '2026-07-13T08:00:00.000Z';
-const pets = createAuthoredPetDefinitions().slice(0, 3);
+const pets = createAuthoredPetDefinitions().slice(0, 4);
 
 function projection(
   options: {
@@ -36,7 +36,7 @@ function projection(
     residents: pets.map((pet, index) => ({
       residentId: pet.id,
       pet,
-      position: { x: index + 7, y: 6 },
+      position: { x: index, y: 0 },
       zoneId: index === 1 ? (options.responderZoneId ?? 'plaza') : 'plaza',
       availability: index === 1 ? responderAvailability : 'available',
       ...(index === 1 && responderAvailability === 'busy'
@@ -339,7 +339,95 @@ describe('AutonomyEventBuilder', () => {
     }
   });
 
+  it('selects the first encounter pair not occupied by another resident', () => {
+    const source = projection();
+    const firstPair = TOWN_ENCOUNTER_PAIRS.plaza[0]!;
+    const secondPair = TOWN_ENCOUNTER_PAIRS.plaza[1]!;
+    const occupied = TownProjectionSchema.parse({
+      ...source,
+      residents: source.residents.map((resident, index) =>
+        index === 2 ? { ...resident, position: firstPair[0] } : resident,
+      ),
+    });
+    const events = new AutonomyEventBuilder(ports()).encounter(occupied, {
+      initiatorId: pets[0]!.id,
+      responderId: pets[1]!.id,
+      opening: 'Hello',
+      reply: 'Hi',
+      animation: 'happy',
+    });
+
+    expect(events.slice(0, 2).map((event) => event.payload)).toEqual([
+      { residentId: pets[0]!.id, position: secondPair[0] },
+      { residentId: pets[1]!.id, position: secondPair[1] },
+    ]);
+  });
+
+  it('fails closed before using ports when every encounter pair is occupied', () => {
+    const source = projection();
+    const pairs = TOWN_ENCOUNTER_PAIRS.plaza;
+    const occupied = TownProjectionSchema.parse({
+      ...source,
+      residents: source.residents.map((resident, index) =>
+        index === 2
+          ? { ...resident, position: pairs[0]![0] }
+          : index === 3
+            ? { ...resident, position: pairs[1]![0] }
+            : resident,
+      ),
+    });
+    const eventPorts = ports();
+
+    expect(() =>
+      new AutonomyEventBuilder(eventPorts).encounter(occupied, {
+        initiatorId: pets[0]!.id,
+        responderId: pets[1]!.id,
+        opening: 'Hello',
+        reply: 'Hi',
+        animation: 'happy',
+      }),
+    ).toThrow(/encounter pair.*occupied|available encounter pair/i);
+    expect(eventPorts.now).not.toHaveBeenCalled();
+    expect(eventPorts.nextId).not.toHaveBeenCalled();
+  });
+
+  it('does not block a pair occupied only by its encounter participants', () => {
+    const source = projection();
+    const firstPair = TOWN_ENCOUNTER_PAIRS.plaza[0]!;
+    const participantsOnPair = TownProjectionSchema.parse({
+      ...source,
+      residents: source.residents.map((resident, index) =>
+        index < 2 ? { ...resident, position: firstPair[index]! } : resident,
+      ),
+    });
+    const events = new AutonomyEventBuilder(ports()).encounter(
+      participantsOnPair,
+      {
+        initiatorId: pets[0]!.id,
+        responderId: pets[1]!.id,
+        opening: 'Hello',
+        reply: 'Hi',
+        animation: 'happy',
+      },
+    );
+
+    expect(events.slice(0, 2).map((event) => event.payload)).toEqual([
+      { residentId: pets[0]!.id, position: firstPair[0] },
+      { residentId: pets[1]!.id, position: firstPair[1] },
+    ]);
+  });
+
   it('changes affinity for every accepted play regardless of animation and omits a zero delta', () => {
+    const nearCap = new AutonomyEventBuilder(ports()).encounter(
+      projection({ affinity: 0.9999999 }),
+      {
+        initiatorId: pets[0]!.id,
+        responderId: pets[1]!.id,
+        opening: 'Hello',
+        reply: 'Hi',
+        animation: 'confused',
+      },
+    );
     const capped = new AutonomyEventBuilder(ports()).encounter(
       projection({ affinity: 1 }),
       {
@@ -358,6 +446,10 @@ describe('AutonomyEventBuilder', () => {
       animation: 'confused',
     });
 
+    expect(nearCap.at(-1)).toMatchObject({
+      type: 'relationship.changed',
+      payload: { affinity: 1 },
+    });
     expect(capped.some(({ type }) => type === 'relationship.changed')).toBe(
       false,
     );

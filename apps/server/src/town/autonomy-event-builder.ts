@@ -17,7 +17,7 @@ import { z } from 'zod';
 import {
   EncounterAnimationSchema,
   ResidentSpeechSchema,
-} from './resident-agent.js';
+} from './resident-agent-contracts.js';
 import { autonomousPlayRelationshipChange } from './relationship-rules.js';
 
 const MAX_ID_ATTEMPTS = 8;
@@ -107,9 +107,9 @@ export class AutonomyEventBuilder {
     requireAvailable(initiator);
     requireAvailable(responder);
 
-    const zoneId = input.zoneId ?? initiator.zoneId;
-    const pair = requireEncounterPair(zoneId);
     const participantIds = [input.initiatorId, input.responderId];
+    const zoneId = input.zoneId ?? initiator.zoneId;
+    const pair = requireEncounterPair(projection, zoneId, participantIds);
     const timestamp = this.timestamp();
     const usedIds = new Set<string>();
     const events: TownEvent[] = [];
@@ -288,13 +288,35 @@ function requireAvailable(resident: TownResidentState): void {
   }
 }
 
-function requireEncounterPair(zoneId: TownZoneId) {
-  const pair = TOWN_ENCOUNTER_PAIRS[zoneId][0];
-  if (pair === undefined) {
+function requireEncounterPair(
+  projection: TownProjection,
+  zoneId: TownZoneId,
+  participantIds: readonly string[],
+) {
+  const pairs = TOWN_ENCOUNTER_PAIRS[zoneId];
+  if (pairs.length === 0) {
     throw new AutonomyEventBuilderError(
       `Town zone has no encounter pair: ${zoneId}`,
     );
   }
+  const occupied = new Set(
+    projection.residents
+      .filter(({ residentId }) => !participantIds.includes(residentId))
+      .map(({ position }) => `${position.x}:${position.y}`),
+  );
+  for (const pair of pairs) {
+    requireWalkableEncounterPair(zoneId, pair);
+    if (pair.every(({ x, y }) => !occupied.has(`${x}:${y}`))) return pair;
+  }
+  throw new AutonomyEventBuilderError(
+    `Town zone has no available encounter pair; all pairs are occupied: ${zoneId}`,
+  );
+}
+
+function requireWalkableEncounterPair(
+  zoneId: TownZoneId,
+  pair: (typeof TOWN_ENCOUNTER_PAIRS)[TownZoneId][number],
+): void {
   if (pair[0].x === pair[1].x && pair[0].y === pair[1].y) {
     throw new AutonomyEventBuilderError(
       `Town zone encounter pair must be distinct: ${zoneId}`,
@@ -318,7 +340,6 @@ function requireEncounterPair(zoneId: TownZoneId) {
       `Town zone encounter pair is not walkable: ${zoneId}`,
     );
   }
-  return pair;
 }
 
 function relationshipAffinity(

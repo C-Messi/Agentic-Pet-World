@@ -19,26 +19,20 @@ import type {
   ProviderCompletionRequest,
   UntrustedProviderContext,
 } from '../agent/provider.js';
+import {
+  EncounterAnimationSchema,
+  ResidentSpeechSchema,
+} from './resident-agent-contracts.js';
 import { createAuthoredPetDefinitions } from './residents.js';
+
+export {
+  EncounterAnimationSchema,
+  ResidentSpeechSchema,
+} from './resident-agent-contracts.js';
 
 const GraphemeSegmenter = new Intl.Segmenter('en', {
   granularity: 'grapheme',
 });
-export const ResidentSpeechSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(280)
-  .refine((value) => graphemeCount(value) <= 80, {
-    message: 'Speech must contain at most 80 grapheme clusters',
-  });
-
-export const EncounterAnimationSchema = z.enum([
-  'curious',
-  'happy',
-  'sit',
-  'confused',
-]);
 
 export const ResidentDecisionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rest'), speech: ResidentSpeechSchema }).strict(),
@@ -570,10 +564,6 @@ function truncateGraphemes(
     graphemes += 1;
   }
   return bounded;
-}
-
-function graphemeCount(value: string): number {
-  return Array.from(GraphemeSegmenter.segment(value)).length;
 }
 
 function stableHash(value: string): number {

@@ -26,6 +26,14 @@ describe('autonomousPlayRelationshipChange', () => {
     });
   });
 
+  it('preserves a nonzero delta from a valid near-cap raw affinity', () => {
+    const change = autonomousPlayRelationshipChange(0.9999999);
+
+    expect(change.affinity).toBe(1);
+    expect(change.delta).toBeGreaterThan(0);
+    expect(change.delta).toBeCloseTo(0.0000001, 12);
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -1.01, 1.01])(
     'rejects an out-of-domain current affinity: %s',
     (currentAffinity) => {

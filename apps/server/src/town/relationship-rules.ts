@@ -18,11 +18,12 @@ export function autonomousPlayRelationshipChange(
       'Current relationship affinity must be between -1 and 1',
     );
   }
-  const current = roundAffinity(currentAffinity);
-  const affinity = roundAffinity(Math.min(1, current + AFFINITY_STEP));
+  const affinity = roundAffinity(Math.min(1, currentAffinity + AFFINITY_STEP));
+  const rawDelta = affinity - currentAffinity;
+  const roundedDelta = roundAffinity(rawDelta);
   return {
     affinity,
-    delta: roundAffinity(affinity - current),
+    delta: rawDelta !== 0 && roundedDelta === 0 ? rawDelta : roundedDelta,
   };
 }
 
