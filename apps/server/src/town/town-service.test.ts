@@ -211,6 +211,42 @@ describe('TownService', () => {
     expect(result.projection.activities).toEqual([]);
     database.close();
   });
+
+  it('opens the player stall after resident fortune and build activities', () => {
+    const { database, service } = fixture();
+    service.upsertShowcase('session-1', 'showcase-player', {
+      item: {
+        id: 'showcase-player',
+        sessionId: 'session-1',
+        kind: 'text',
+        title: 'Night playlist',
+        content: 'Soft synthesizer music.',
+        presetIconId: 'music',
+        isPublic: true,
+      },
+    });
+    const fortune = service.advance({
+      sessionId: 'session-1',
+      baseVersion: 0,
+      intents: [{ type: 'start-activity', actorId: 'resident-huihui', activityId: 'fortune-draw', invitedResidentIds: ['resident-mikan'] }],
+    });
+    const build = service.advance({
+      sessionId: 'session-1',
+      baseVersion: fortune.projection.version,
+      intents: [{ type: 'build', actorId: 'resident-lanlan', recipeId: 'street-lamp', plotId: 'plaza-north' }],
+    });
+    const stall = service.advance({
+      sessionId: 'session-1',
+      baseVersion: build.projection.version,
+      intents: [{ type: 'open-stall', actorId: 'player-cat', stallId: 'stall-player-cat', showcaseItemIds: ['showcase-player'] }],
+    });
+    expect(stall.events.map(({ type }) => type)).toEqual([
+      'stall.opened',
+      'stall.visited',
+      'stall.closed',
+    ]);
+    database.close();
+  });
 });
 
 function fixture() {

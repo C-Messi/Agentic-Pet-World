@@ -5,7 +5,7 @@ import type { ActivityContext, TownActivityDefinition } from '../activity-regist
 
 export const ShowcaseThemeSchema = z.enum(['cozy', 'playful', 'gallery']);
 export const ShowcaseSignStyleSchema = z.enum(['chalkboard', 'banner', 'minimal']);
-export const ShowcaseIconSchema = z.enum(['star', 'heart', 'sparkle']);
+export const ShowcaseIconSchema = z.enum(['star', 'heart', 'sparkle', 'music']);
 const InteractionSchema = z.object({ id: IdentifierSchema, visitorResidentId: IdentifierSchema, kind: z.enum(['greet', 'view', 'ask', 'compliment', 'respond']) }).strict();
 const SummarySchema = z.object({ visitorCount: z.number().int().nonnegative().max(100), interactionCount: z.number().int().nonnegative().max(200) }).strict();
 const Base = { version: z.literal('showcase-state.v1'), operatorResidentId: IdentifierSchema, stallId: IdentifierSchema, theme: ShowcaseThemeSchema.optional(), signStyle: ShowcaseSignStyleSchema.optional(), showcaseItemIds: z.array(IdentifierSchema).max(3), openDurationMs: z.number().int().min(1_000).max(600_000).optional(), promotionLine: z.string().min(1).max(80).optional(), interactions: z.array(InteractionSchema).max(100), summary: SummarySchema };
