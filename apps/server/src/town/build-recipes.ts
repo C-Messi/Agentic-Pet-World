@@ -81,7 +81,10 @@ export function validateBuildPlacement(source: { projection: Readonly<TownProjec
   if (cells.some(c => occupied.has(`${c.x}:${c.y}`))) throw new TypeError('Build placement overlaps an existing modification');
   const permanent = new Set(PERMANENT_BLOCKED_CELLS.map(c => `${c.x}:${c.y}`));
   if (cells.some(c => permanent.has(`${c.x}:${c.y}`))) throw new TypeError('Build placement overlaps a permanent blocker');
-  const overlay = recipe.collision ? cells : [];
+  const overlay = [
+    ...projection.modifications.filter(m => m.collision).flatMap(m => m.occupiedCells.map(c => ({ x: c.x, y: c.y }))),
+    ...(recipe.collision ? cells : []),
+  ];
   if (!routesRemainReachable(overlay)) throw new TypeError('Build placement blocks a critical route');
   const modificationId = IdentifierSchema.parse(source.modificationId ?? `${recipe.id}-${plot.id}-${origin.x}-${origin.y}`);
   const modification = TownWorldModificationSchema.parse({ id: modificationId, recipeId: recipe.id, plotId: plot.id, occupiedCells: cells, atlasFrame: recipe.atlasFrame, collision: recipe.collision });

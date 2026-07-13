@@ -42,10 +42,10 @@ export function createShowcaseStallDefinition(source: unknown): TownActivityDefi
   const assertContext = (state: ShowcaseState, context: ActivityContext) => { if (context.participantIds.length !== 1 || context.participantIds[0] !== state.operatorResidentId || context.activityInstanceId !== state.stallId) throw new ShowcaseActivityError('invalid-participant', 'Operator/context mismatch'); };
   const definition: TownActivityDefinition<ShowcaseState, ShowcaseTool> = {
     id: 'showcase-stall', zoneId: 'market', capacity: 1, resultEventTypes: ['stall.opened', 'stall.visited', 'stall.closed'], stateSchema: ShowcaseStateSchema, toolSchema: ShowcaseToolSchema,
-    createInitialState: context => ({ version: 'showcase-state.v1', phase: 'setting-up', operatorResidentId: context.participantIds[0]!, stallId: context.activityInstanceId, showcaseItemIds: [], interactions: [], summary: { visitorCount: 0, interactionCount: 0 } }),
+    createInitialState: context => ({ version: 'showcase-state.v1', phase: 'closed', operatorResidentId: context.participantIds[0]!, stallId: context.activityInstanceId, showcaseItemIds: [], interactions: [], summary: { visitorCount: 0, interactionCount: 0 } }),
     transition: (state, tool, context) => {
       assertContext(state, context);
-      if (tool.type === 'setup') { if (state.phase !== 'setting-up') return illegal('Setup is only legal while setting up'); if (new Set(tool.showcaseItemIds).size !== tool.showcaseItemIds.length || tool.showcaseItemIds.some(id => !items.has(id))) throw new ShowcaseActivityError('invalid-item', 'Unknown or duplicate showcase item'); return { ...state, theme: tool.theme, signStyle: tool.signStyle, showcaseItemIds: [...tool.showcaseItemIds], openDurationMs: tool.openDurationMs, promotionLine: buildShowcasePromotion(parsed.pet, tool.showcaseItemIds.map(id => items.get(id)!), tool.theme) }; }
+      if (tool.type === 'setup') { if (state.phase !== 'closed') return illegal('Setup is only legal from closed'); if (new Set(tool.showcaseItemIds).size !== tool.showcaseItemIds.length || tool.showcaseItemIds.some(id => !items.has(id))) throw new ShowcaseActivityError('invalid-item', 'Unknown or duplicate showcase item'); return { ...state, phase: 'setting-up', theme: tool.theme, signStyle: tool.signStyle, showcaseItemIds: [...tool.showcaseItemIds], openDurationMs: tool.openDurationMs, promotionLine: buildShowcasePromotion(parsed.pet, tool.showcaseItemIds.map(id => items.get(id)!), tool.theme) }; }
       if (tool.type === 'open') { if (state.phase !== 'setting-up' || !state.theme || !state.signStyle || !state.openDurationMs || !state.promotionLine || state.showcaseItemIds.length === 0) return illegal('Configured stall required before opening'); return { ...state, phase: 'open', theme: state.theme, signStyle: state.signStyle, openDurationMs: state.openDurationMs, promotionLine: state.promotionLine, showcaseItemIds: state.showcaseItemIds }; }
       if (tool.type === 'close') { if (state.phase !== 'open') return illegal('Only an open stall can close'); return { ...state, phase: 'closing' }; }
       if (state.phase !== 'open') return illegal('Visitor interactions require an open stall');
@@ -56,17 +56,21 @@ export function createShowcaseStallDefinition(source: unknown): TownActivityDefi
     },
     resultEvents: (state, context) => {
       assertContext(state, context); const emitted = new Set(context.emittedResults.map(x => x.factKey)); const facts: { key: string; type: 'stall.opened' | 'stall.visited' | 'stall.closed'; participants: string[]; payload: object }[] = [];
-      if ((state.phase === 'open' || state.phase === 'closing') && !emitted.has('stall-opened')) facts.push({ key: 'stall-opened', type: 'stall.opened', participants: [state.operatorResidentId], payload: { stallId: state.stallId, showcaseItemIds: state.showcaseItemIds } });
+      if (state.phase === 'open' && !emitted.has('stall-opened')) facts.push({ key: 'stall-opened', type: 'stall.opened', participants: [state.operatorResidentId], payload: { stallId: state.stallId, showcaseItemIds: state.showcaseItemIds } });
       for (const interaction of state.interactions) { const key = `stall-visited-${interaction.visitorResidentId}-${interaction.id}`; if (!emitted.has(key)) facts.push({ key, type: 'stall.visited', participants: [state.operatorResidentId, interaction.visitorResidentId], payload: { stallId: state.stallId, visitorResidentId: interaction.visitorResidentId } }); }
       if (state.phase === 'closing' && !emitted.has('stall-closed')) facts.push({ key: 'stall-closed', type: 'stall.closed', participants: [state.operatorResidentId], payload: { stallId: state.stallId } });
       return facts.map((f, i) => TownEventSchema.parse({ id: context.nextEventId(), sessionId: context.sessionId, sequence: context.lastEventSequence + i + 1, baseVersion: context.baseVersion + i, type: f.type, zoneId: 'market', participantIds: f.participants, timestamp: context.now, payload: f.payload }));
     },
     validateResultEvent: (event, state, context) => {
       if (event.type !== 'stall.opened' && event.type !== 'stall.visited' && event.type !== 'stall.closed') return false;
-      return event.zoneId === 'market' && event.payload.stallId === state.stallId && event.participantIds.includes(state.operatorResidentId) && (event.type !== 'stall.visited' || (event.participantIds.includes(event.payload.visitorResidentId) && event.payload.visitorResidentId !== state.operatorResidentId)) && event.sessionId === context.sessionId;
+      if (event.zoneId !== 'market' || event.payload.stallId !== state.stallId || event.sessionId !== context.sessionId) return false;
+      if (event.type === 'stall.opened') return state.phase === 'open' && exact(event.participantIds, [state.operatorResidentId]) && exact(event.payload.showcaseItemIds, state.showcaseItemIds);
+      if (event.type === 'stall.closed') return state.phase === 'closing' && exact(event.participantIds, [state.operatorResidentId]);
+      return state.phase === 'open' && event.payload.visitorResidentId !== state.operatorResidentId && exact(event.participantIds, [state.operatorResidentId, event.payload.visitorResidentId]) && state.interactions.some(interaction => interaction.visitorResidentId === event.payload.visitorResidentId);
     },
   };
   return Object.freeze(definition);
 }
 function illegal(message: string): never { throw new ShowcaseActivityError('illegal-transition', message); }
+function exact(left: readonly string[], right: readonly string[]): boolean { return left.length === right.length && left.every((value, index) => value === right[index]); }
 function deepFreeze<T>(value: T): T { if (value && typeof value === 'object' && !Object.isFrozen(value)) { for (const v of Object.values(value)) deepFreeze(v); Object.freeze(value); } return value; }

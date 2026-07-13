@@ -70,6 +70,16 @@ describe('safe build recipes', () => {
     expect(() => validateBuildPlacement({ ...base, originCell: { x: 2, y: 4 } })).toThrow(/critical route/);
   });
 
+  it('includes prior collision builds when a cumulative overlay disconnects an entrance', () => {
+    const blockers: TownProjection['modifications'] = [
+      { id: 'left', recipeId: 'street-lamp', plotId: 'legacy', occupiedCells: [{ x: 17, y: 6 }], atlasFrame: 3, collision: true },
+      { id: 'right', recipeId: 'street-lamp', plotId: 'legacy', occupiedCells: [{ x: 19, y: 6 }], atlasFrame: 3, collision: true },
+      { id: 'top', recipeId: 'street-lamp', plotId: 'legacy', occupiedCells: [{ x: 18, y: 5 }], atlasFrame: 3, collision: true },
+      { id: 'decoration', recipeId: 'flower-patch', plotId: 'legacy', occupiedCells: [{ x: 20, y: 6 }], atlasFrame: 2, collision: false },
+    ];
+    expect(() => validateBuildPlacement({ projection: projection(blockers), recipeId: 'street-lamp', plotId: 'market-east', originCell: { x: 18, y: 7 }, participantIds: ['owner'] })).toThrow(/critical route/);
+  });
+
   it('creates deterministic exact events that reduce sequentially and reject duplicate completion', () => {
     const plan = validateBuildPlacement({ projection: projection(), recipeId: 'flower-patch', plotId: 'garden-west', originCell: { x: 4, y: 11 }, participantIds: ['owner', 'helper'], modificationId: 'build-1' });
     const started = createBuildStartedEvent(plan, { id: 'event-1', sessionId: 'session-1', sequence: 1, baseVersion: 0, timestamp: '2026-07-13T08:00:00.000Z' });
