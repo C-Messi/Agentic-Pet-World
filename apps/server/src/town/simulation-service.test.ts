@@ -672,6 +672,108 @@ describe('TownSimulationService validation', () => {
     ).toThrow(expect.objectContaining({ code: 'invalid-intent' }));
   });
 
+  it('allows four default fortune participants and rejects a fifth live participant', () => {
+    const base = projection();
+    const fourth = {
+      ...base.residents[2]!,
+      residentId: 'doubao',
+      pet: {
+        ...base.residents[2]!.pet,
+        id: 'doubao-pet',
+        displayName: 'Doubao',
+        spriteId: 'doubao',
+      },
+    };
+    const fourResidents = TownProjectionSchema.parse({
+      ...base,
+      residents: [...base.residents, fourth],
+    });
+    const subject = new TownSimulationService(ports());
+    const intent: TownIntent = {
+      type: 'start-activity',
+      actorId: 'player',
+      activityId: 'fortune-draw',
+      invitedResidentIds: ['huihui', 'reserved', 'doubao'],
+    };
+    expect(subject.validateIntent(fourResidents, intent)).toEqual(intent);
+    expect(subject.candidates(fourResidents, 'player')).toContainEqual(
+      expect.objectContaining({
+        type: 'start-activity',
+        activityId: 'fortune-draw',
+      }),
+    );
+
+    const occupant = {
+      ...fourth,
+      residentId: 'occupant',
+      pet: {
+        ...fourth.pet,
+        id: 'occupant-pet',
+        displayName: 'Occupant',
+        spriteId: 'occupant',
+      },
+      zoneId: 'fortune-pavilion' as const,
+      availability: 'busy' as const,
+      activityInstanceId: 'active-fortune',
+    };
+    const fiveResidents = TownProjectionSchema.parse({
+      ...fourResidents,
+      residents: [...fourResidents.residents, occupant],
+      activities: [
+        {
+          id: 'active-fortune',
+          activityId: 'fortune-draw',
+          zoneId: 'fortune-pavilion',
+          participantIds: ['occupant'],
+          version: 0,
+          state: { status: 'started' },
+        },
+      ],
+    });
+    expect(() => subject.validateIntent(fiveResidents, intent)).toThrow(
+      /capacity/i,
+    );
+  });
+
+  it('honors an explicitly configured fortune capacity', () => {
+    const base = projection();
+    const fourth = {
+      ...base.residents[2]!,
+      residentId: 'doubao',
+      pet: {
+        ...base.residents[2]!.pet,
+        id: 'doubao-pet',
+        displayName: 'Doubao',
+        spriteId: 'doubao',
+      },
+    };
+    const town = TownProjectionSchema.parse({
+      ...base,
+      residents: [...base.residents, fourth],
+    });
+    const subject = new TownSimulationService(ports(), {
+      activities: [
+        { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 3 },
+      ],
+    });
+    expect(
+      subject.validateIntent(town, {
+        type: 'start-activity',
+        actorId: 'player',
+        activityId: 'fortune-draw',
+        invitedResidentIds: ['huihui', 'reserved'],
+      }),
+    ).toBeDefined();
+    expect(() =>
+      subject.validateIntent(town, {
+        type: 'start-activity',
+        actorId: 'player',
+        activityId: 'fortune-draw',
+        invitedResidentIds: ['huihui', 'reserved', 'doubao'],
+      }),
+    ).toThrow(/capacity/i);
+  });
+
   it('rejects an already-home player return', () => {
     const home = TownProjectionSchema.parse({
       ...projection(),

@@ -71,7 +71,7 @@ export interface TownSimulationOptions {
 
 const ALL_ZONES = TownZoneIdSchema.options;
 const DEFAULT_ACTIVITIES: readonly TownActivityDefinition[] = [
-  { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 2 },
+  { id: 'fortune-draw', zoneId: 'fortune-pavilion', capacity: 4 },
   { id: 'social-play', zoneId: 'arcade-house', capacity: 4 },
   { id: 'showcase-stall', zoneId: 'market', capacity: 1 },
 ];
