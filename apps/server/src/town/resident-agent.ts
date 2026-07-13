@@ -4,13 +4,14 @@ import {
   TOWN_ENCOUNTER_PAIRS,
   TOWN_ZONE_ORDER,
   TownEventSchema,
-  TownIntentSchema,
   TownProjectionSchema,
+  TownZoneIdSchema,
   type PetDefinition,
   type TownEvent,
   type TownIntent,
   type TownProjection,
 } from '@cat-house/shared';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 
 import type {
@@ -18,8 +19,18 @@ import type {
   ProviderCompletionRequest,
   UntrustedProviderContext,
 } from '../agent/provider.js';
+import { createAuthoredPetDefinitions } from './residents.js';
 
-const SpeechSchema = z.string().trim().min(1).max(80);
+const GraphemeSegmenter = new Intl.Segmenter('en', {
+  granularity: 'grapheme',
+});
+const SpeechSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => graphemeCount(value) <= 80, {
+    message: 'Speech must contain at most 80 grapheme clusters',
+  });
 
 export const ResidentDecisionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rest'), speech: SpeechSchema }).strict(),
@@ -44,7 +55,6 @@ export type EncounterReply = z.infer<typeof EncounterReplySchema>;
 
 export interface ResidentDecisionContext {
   readonly residentId: string;
-  readonly pet: PetDefinition;
   readonly candidates: readonly TownIntent[];
   readonly projection: TownProjection;
   readonly recentEvents: readonly TownEvent[];
@@ -54,7 +64,6 @@ export interface ResidentDecisionContext {
 
 export interface ResidentResponseContext {
   readonly residentId: string;
-  readonly pet: PetDefinition;
   readonly opening: string;
   readonly initiatorId: string;
   readonly projection: TownProjection;
@@ -65,7 +74,6 @@ export interface ResidentResponseContext {
 
 export interface ResidentFollowUpContext {
   readonly residentId: string;
-  readonly pet: PetDefinition;
   readonly opening: string;
   readonly reply: string;
   readonly responderId: string;
@@ -90,9 +98,37 @@ const SignalSchema = z.custom<AbortSignal>(
   'Expected an AbortSignal',
 );
 const EventsSchema = z.array(TownEventSchema).max(8);
+const ResidentCandidateSchema = z
+  .discriminatedUnion('type', [
+    z
+      .object({
+        type: z.literal('socialize'),
+        actorId: IdentifierSchema,
+        targetResidentId: IdentifierSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal('visit-zone'),
+        actorId: IdentifierSchema,
+        zoneId: TownZoneIdSchema,
+      })
+      .strict(),
+  ])
+  .superRefine((candidate, context) => {
+    if (
+      candidate.type === 'socialize' &&
+      candidate.actorId === candidate.targetResidentId
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A resident cannot socialize with itself',
+        path: ['targetResidentId'],
+      });
+    }
+  });
 const SharedContextFields = {
   residentId: IdentifierSchema,
-  pet: PetDefinitionSchema,
   projection: TownProjectionSchema,
   recentEvents: EventsSchema,
   signal: SignalSchema,
@@ -101,17 +137,10 @@ const SharedContextFields = {
 const ResidentDecisionContextSchema = z
   .object({
     ...SharedContextFields,
-    candidates: z.array(TownIntentSchema).max(16),
+    candidates: z.array(ResidentCandidateSchema).max(16),
   })
   .strict()
-  .superRefine(({ residentId, pet, candidates }, context) => {
-    if (pet.id !== residentId) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Resident pet identity does not match residentId',
-        path: ['pet', 'id'],
-      });
-    }
+  .superRefine(({ residentId, candidates }, context) => {
     for (const [index, candidate] of candidates.entries()) {
       if (candidate.actorId !== residentId) {
         context.addIssue({
@@ -128,8 +157,7 @@ const ResidentResponseContextSchema = z
     opening: SpeechSchema,
     initiatorId: IdentifierSchema,
   })
-  .strict()
-  .superRefine(validateResidentIdentity);
+  .strict();
 const ResidentFollowUpContextSchema = z
   .object({
     ...SharedContextFields,
@@ -137,8 +165,16 @@ const ResidentFollowUpContextSchema = z
     reply: SpeechSchema,
     responderId: IdentifierSchema,
   })
-  .strict()
-  .superRefine(validateResidentIdentity);
+  .strict();
+
+const AuthoredPetDefinitions = deepFreeze(
+  createAuthoredPetDefinitions().map((pet) =>
+    PetDefinitionSchema.parse(structuredClone(pet)),
+  ),
+);
+const AuthoredPetsByResidentId: ReadonlyMap<string, PetDefinition> = new Map(
+  AuthoredPetDefinitions.map((pet) => [pet.id, pet]),
+);
 
 export const RESIDENT_DECISION_OUTPUT_CONTRACT_V1 = `[Output Contract: resident-decision.v1]
 Return exactly one strict JSON object.
@@ -172,14 +208,17 @@ export class ResidentAgent {
     source: ResidentDecisionContext,
   ): Promise<ResidentDecisionResult> {
     const context = ResidentDecisionContextSchema.parse(source);
+    const pet = requireAuthoredResident(context);
+    validateDecisionSemantics(context);
     throwIfAborted(context.signal);
-    const fallback = deterministicDecision(context);
+    const fallback = deterministicDecision(context, pet);
     if (!this.provider) return { decision: fallback, degraded: true };
 
     try {
       const output = await this.provider.complete(
         providerRequest(
           context,
+          pet,
           RESIDENT_DECISION_OUTPUT_CONTRACT_V1,
           [],
           context.candidates,
@@ -204,10 +243,13 @@ export class ResidentAgent {
     source: ResidentResponseContext,
   ): Promise<EncounterReplyResult> {
     const context = ResidentResponseContextSchema.parse(source);
+    const pet = requireAuthoredResident(context);
+    requireEncounterCounterpart(context, context.initiatorId);
     return this.completeReply(
       context,
+      pet,
       [{ source: 'messages', content: context.opening }],
-      deterministicReply(context.pet, false),
+      deterministicReply(pet, false),
     );
   }
 
@@ -215,8 +257,11 @@ export class ResidentAgent {
     source: ResidentFollowUpContext,
   ): Promise<EncounterReplyResult> {
     const context = ResidentFollowUpContextSchema.parse(source);
+    const pet = requireAuthoredResident(context);
+    requireEncounterCounterpart(context, context.responderId);
     return this.completeReply(
       context,
+      pet,
       [
         {
           source: 'messages',
@@ -226,12 +271,13 @@ export class ResidentAgent {
           }),
         },
       ],
-      deterministicReply(context.pet, true),
+      deterministicReply(pet, true),
     );
   }
 
   private async completeReply(
     context: ParsedSharedContext,
+    pet: PetDefinition,
     untrustedContext: readonly UntrustedProviderContext[],
     fallback: EncounterReply,
   ): Promise<EncounterReplyResult> {
@@ -242,6 +288,7 @@ export class ResidentAgent {
       const output = await this.provider.complete(
         providerRequest(
           context,
+          pet,
           ENCOUNTER_REPLY_OUTPUT_CONTRACT_V1,
           untrustedContext,
         ),
@@ -260,28 +307,107 @@ export class ResidentAgent {
 
 type ParsedSharedContext = {
   readonly residentId: string;
-  readonly pet: PetDefinition;
   readonly projection: TownProjection;
   readonly recentEvents: readonly TownEvent[];
   readonly signal: AbortSignal;
   readonly correlationId: string;
 };
 
-function validateResidentIdentity(
-  value: { readonly residentId: string; readonly pet: PetDefinition },
-  context: z.RefinementCtx,
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function requireAuthoredResident(context: ParsedSharedContext): PetDefinition {
+  const residentIds = new Set(
+    context.projection.residents.map(({ residentId }) => residentId),
+  );
+  for (const resident of context.projection.residents) {
+    const authored = AuthoredPetsByResidentId.get(resident.residentId);
+    if (authored === undefined) {
+      throw new TypeError(`Unknown authored resident: ${resident.residentId}`);
+    }
+    if (!isDeepStrictEqual(resident.pet, authored)) {
+      throw new TypeError(
+        `Resident pet snapshot does not match authored definition: ${resident.residentId}`,
+      );
+    }
+  }
+  let previousSequence = 0;
+  for (const event of context.recentEvents) {
+    if (event.sessionId !== context.projection.sessionId) {
+      throw new TypeError('Recent event session does not match projection');
+    }
+    if (event.participantIds.some((id) => !residentIds.has(id))) {
+      throw new TypeError('Recent event references an unknown resident');
+    }
+    if (
+      event.sequence <= previousSequence ||
+      event.sequence > context.projection.lastEventSequence
+    ) {
+      throw new TypeError('Recent event sequence is inconsistent');
+    }
+    previousSequence = event.sequence;
+  }
+
+  const resident = context.projection.residents.find(
+    ({ residentId }) => residentId === context.residentId,
+  );
+  if (resident === undefined) {
+    throw new TypeError(
+      `Resident is missing from projection: ${context.residentId}`,
+    );
+  }
+  if (resident.availability !== 'available') {
+    throw new TypeError(`Resident is unavailable: ${context.residentId}`);
+  }
+  return AuthoredPetsByResidentId.get(context.residentId)!;
+}
+
+function validateDecisionSemantics(
+  context: z.infer<typeof ResidentDecisionContextSchema>,
 ): void {
-  if (value.pet.id !== value.residentId) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Resident pet identity does not match residentId',
-      path: ['pet', 'id'],
-    });
+  const resident = context.projection.residents.find(
+    ({ residentId }) => residentId === context.residentId,
+  )!;
+  for (const candidate of context.candidates) {
+    if (candidate.type === 'visit-zone') {
+      if (candidate.zoneId === resident.zoneId) {
+        throw new TypeError('Visit candidate must leave the current zone');
+      }
+      continue;
+    }
+    const target = context.projection.residents.find(
+      ({ residentId }) => residentId === candidate.targetResidentId,
+    );
+    if (target === undefined || target.availability !== 'available') {
+      throw new TypeError('Socialize target is missing or unavailable');
+    }
+  }
+}
+
+function requireEncounterCounterpart(
+  context: ParsedSharedContext,
+  counterpartId: string,
+): void {
+  if (counterpartId === context.residentId) {
+    throw new TypeError('Encounter residents must be distinct');
+  }
+  if (
+    !context.projection.residents.some(
+      ({ residentId }) => residentId === counterpartId,
+    )
+  ) {
+    throw new TypeError(`Encounter counterpart is missing: ${counterpartId}`);
   }
 }
 
 function providerRequest(
   context: ParsedSharedContext,
+  pet: PetDefinition,
   outputContract: string,
   untrustedContext: readonly UntrustedProviderContext[],
   candidates: readonly TownIntent[] = [],
@@ -325,7 +451,7 @@ function providerRequest(
   };
   return {
     trustedInstructions: [
-      buildResidentSystemPrompt(context.pet),
+      buildResidentSystemPrompt(pet),
       outputContract,
       `[Authoritative Public Town State]\n${JSON.stringify(publicState)}`,
     ],
@@ -338,8 +464,9 @@ function providerRequest(
 
 function deterministicDecision(
   context: z.infer<typeof ResidentDecisionContextSchema>,
+  pet: PetDefinition,
 ): ResidentDecision {
-  const speech = fallbackSpeech(context.pet, false);
+  const speech = fallbackSpeech(pet, false);
   if (context.candidates.length === 0) {
     return ResidentDecisionSchema.parse({ kind: 'rest', speech });
   }
@@ -375,12 +502,25 @@ function deterministicReply(
 function fallbackSpeech(pet: PetDefinition, followUp: boolean): string {
   const catchphrase = pet.voice.catchphrases[followUp ? 1 : 0]?.trim();
   const residentSpecific = `${pet.displayName} pauses to consider the next step.`;
-  const bounded = (catchphrase || residentSpecific).slice(0, 80).trim();
-  return SpeechSchema.parse(bounded || residentSpecific.slice(0, 80));
+  const bounded = truncateGraphemes(catchphrase || residentSpecific, 80);
+  return SpeechSchema.parse(bounded || truncateGraphemes(residentSpecific, 80));
 }
 
 function boundPromptText(value: string): string {
-  return value.trim().slice(0, 80);
+  return truncateGraphemes(value, 80);
+}
+
+function truncateGraphemes(value: string, maximum: number): string {
+  return Array.from(
+    GraphemeSegmenter.segment(value.trim()),
+    ({ segment }) => segment,
+  )
+    .slice(0, maximum)
+    .join('');
+}
+
+function graphemeCount(value: string): number {
+  return Array.from(GraphemeSegmenter.segment(value)).length;
 }
 
 function stableHash(value: string): number {
