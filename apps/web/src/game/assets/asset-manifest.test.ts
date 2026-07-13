@@ -422,6 +422,47 @@ describe('generated pixel asset manifests', () => {
     ).toBeGreaterThan(16);
   });
 
+  it('composites district ground pads over the road network', () => {
+    const png = pngInfo(`public/assets/town/${townManifest.background.image}`);
+    const [red, green, blue] = pngPixel(png, 180, 105);
+
+    expect(rgbKey([red, green, blue])).toBe('135,157,104');
+  });
+
+  it('uses the approved named background layer order', () => {
+    const generatorSource = readFileSync(
+      resolve(process.cwd(), '../../scripts/generate-pixel-assets.mjs'),
+      'utf8',
+    );
+    const declaration = generatorSource.match(
+      /const townBackgroundLayerOrder = Object\.freeze\(\[([\s\S]*?)\]\);/,
+    );
+
+    expect(
+      declaration,
+      'missing townBackgroundLayerOrder contract',
+    ).not.toBeNull();
+    const layerNames = Array.from(
+      (declaration?.[1] ?? '').matchAll(/'([^']+)'/g),
+      (match) => match[1],
+    );
+    expect(layerNames).toEqual([
+      'base-grass',
+      'tree-line',
+      'roads',
+      'district-pads',
+      'plaza',
+      'water',
+      'shoreline-reeds',
+      'bridge',
+      'decorations',
+    ]);
+    expect(generatorSource).toContain(
+      'for (const layerName of townBackgroundLayerOrder)',
+    );
+    expect(generatorSource).toContain('layers[layerName]();');
+  });
+
   it('keeps original town frames pixel-identical', () => {
     const { frame, columns } = townManifest.atlas;
     const png = pngInfo(`public/assets/town/${townManifest.atlas.image}`);

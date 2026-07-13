@@ -27,6 +27,18 @@ const palette = {
   white: '#fff4d6',
 };
 
+const townBackgroundLayerOrder = Object.freeze([
+  'base-grass',
+  'tree-line',
+  'roads',
+  'district-pads',
+  'plaza',
+  'water',
+  'shoreline-reeds',
+  'bridge',
+  'decorations',
+]);
+
 function rgba(hex, alpha = 255) {
   const value = Number.parseInt(hex.slice(1), 16);
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255, alpha];
@@ -552,232 +564,247 @@ function drawTownBackground() {
       image.rect(x + offset, y + height - 6, 10, 2, colors.pathEdge);
   };
 
-  image.rect(0, 0, 640, 360, colors.grass);
+  const layers = {
+    'base-grass'() {
+      image.rect(0, 0, 640, 360, colors.grass);
+      // Small offset clusters keep the lawn lively without becoming a tiled carpet.
+      for (let y = 58; y < 266; y += 31) {
+        for (let x = 12 + ((y * 7) % 29); x < 628; x += 43) {
+          const offsetY = (x + y) % 7;
+          image.rect(x, y + offsetY, 5, 2, colors.grassMid);
+          image.rect(x + 3, y + offsetY - 3, 2, 3, colors.grassLight);
+          if ((x + y) % 3 === 0)
+            image.pixel(x + 8, y + offsetY + 2, colors.grassDark);
+        }
+      }
+    },
+    'tree-line'() {
+      // Distant silhouettes belong to terrain, not the interactive tree atlas.
+      image.rect(0, 0, 640, 48, colors.treeDeep);
+      image.rect(0, 17, 640, 31, colors.treeShadow);
+      let treeIndex = 0;
+      for (let x = -18; x < 640; x += 34) {
+        const rise = [4, 10, 1, 7][treeIndex % 4];
+        image.rect(x, 19 + rise, 40, 25 - rise, colors.treeMid);
+        image.rect(x + 4, 11 + rise, 32, 27 - rise, colors.treeMid);
+        image.rect(x + 10, 5 + rise, 20, 28 - rise, colors.treeMid);
+        image.rect(x + 15, 1 + rise, 10, 26 - rise, colors.treeMid);
+        image.rect(x + 7, 18 + rise, 12, 6, colors.treeMoss);
+        image.rect(x + 19, 11 + rise, 9, 7, colors.treeMoss);
+        image.rect(x + 27, 26 + (rise % 3), 8, 5, colors.treeMoss);
+        image.rect(x + 3, 32 + (rise % 4), 34, 12, colors.treeShadow);
+        treeIndex += 1;
+      }
+      image.rect(0, 44, 640, 4, colors.treeDeep);
+      for (let x = 18; x < 640; x += 61) {
+        image.rect(x, 12 + (x % 9), 8, 4, colors.treeMoss);
+        image.rect(x + 16, 28 - (x % 5), 11, 3, colors.treeShadow);
+      }
+    },
+    roads() {
+      // Row three, the garden-plaza-gate spine, and the lower district loop.
+      drawPath(112, 98, 400, 30);
+      drawPath(308, 96, 56, 184);
+      drawPath(480, 100, 32, 62);
+      drawPath(160, 218, 352, 38);
+      drawPath(160, 202, 42, 54);
+      drawPath(438, 202, 74, 54);
+    },
+    'district-pads'() {
+      // District terrain overlays the network while preserving its own entrance aprons.
+      image.rect(32, 52, 160, 66, colors.fortune);
+      image.outline(32, 52, 160, 66, colors.grassDark);
+      for (let x = 44; x < 184; x += 24) {
+        image.rect(x, 62 + ((x / 4) % 3) * 8, 9, 5, colors.fortuneLight);
+        image.rect(x + 2, 61 + ((x / 4) % 3) * 8, 5, 1, colors.pathLight);
+      }
+      for (let y = 56; y < 96; y += 13) {
+        for (let x = 38 + (y % 11); x < 188; x += 31) {
+          image.rect(x, y, 4, 2, colors.grassDark);
+          image.pixel(x + 7, y + 3, colors.fortuneLight);
+        }
+      }
+      image.rect(124, 100, 40, 18, colors.fortuneLight);
+      image.rect(130, 104, 10, 3, colors.pathLight);
+      image.rect(148, 111, 10, 3, colors.pathEdge);
 
-  // Small offset clusters keep the lawn lively without turning it into a tiled carpet.
-  for (let y = 58; y < 266; y += 31) {
-    for (let x = 12 + ((y * 7) % 29); x < 628; x += 43) {
-      const offsetY = (x + y) % 7;
-      image.rect(x, y + offsetY, 5, 2, colors.grassMid);
-      image.rect(x + 3, y + offsetY - 3, 2, 3, colors.grassLight);
-      if ((x + y) % 3 === 0)
-        image.pixel(x + 8, y + offsetY + 2, colors.grassDark);
-    }
-  }
+      image.rect(224, 52, 192, 66, colors.grassMid);
+      image.outline(224, 52, 192, 66, colors.grassDark);
+      for (const x of [236, 278, 350, 392]) {
+        image.rect(x, 59, 30, 32, colors.gardenSoil);
+        image.rect(x + 3, 62, 24, 3, colors.gardenSoilLight);
+        for (let y = 70; y < 88; y += 9)
+          image.rect(x + 5, y, 20, 2, colors.gardenSoilLight);
+      }
+      image.rect(316, 98, 40, 20, colors.fortuneLight);
+      image.rect(320, 102, 12, 4, colors.pathLight);
+      image.rect(340, 110, 11, 3, colors.pathEdge);
 
-  // Distant layered canopy silhouettes belong to the terrain, not the interactive tree atlas.
-  image.rect(0, 0, 640, 48, colors.treeDeep);
-  image.rect(0, 17, 640, 31, colors.treeShadow);
-  let treeIndex = 0;
-  for (let x = -18; x < 640; x += 34) {
-    const rise = [4, 10, 1, 7][treeIndex % 4];
-    image.rect(x, 19 + rise, 40, 25 - rise, colors.treeMid);
-    image.rect(x + 4, 11 + rise, 32, 27 - rise, colors.treeMid);
-    image.rect(x + 10, 5 + rise, 20, 28 - rise, colors.treeMid);
-    image.rect(x + 15, 1 + rise, 10, 26 - rise, colors.treeMid);
-    image.rect(x + 7, 18 + rise, 12, 6, colors.treeMoss);
-    image.rect(x + 19, 11 + rise, 9, 7, colors.treeMoss);
-    image.rect(x + 27, 26 + (rise % 3), 8, 5, colors.treeMoss);
-    image.rect(x + 3, 32 + (rise % 4), 34, 12, colors.treeShadow);
-    treeIndex += 1;
-  }
-  image.rect(0, 44, 640, 4, colors.treeDeep);
-  for (let x = 18; x < 640; x += 61) {
-    image.rect(x, 12 + (x % 9), 8, 4, colors.treeMoss);
-    image.rect(x + 16, 28 - (x % 5), 11, 3, colors.treeShadow);
-  }
+      image.rect(448, 52, 160, 102, colors.market);
+      image.outline(448, 52, 160, 102, colors.pathShadow);
+      for (let y = 62; y < 144; y += 22) {
+        image.rect(458 + ((y / 2) % 3) * 9, y, 28, 5, colors.marketLight);
+        image.rect(566 - ((y / 2) % 3) * 7, y + 8, 25, 4, colors.pathEdge);
+      }
+      for (let y = 58; y < 150; y += 14) {
+        for (let x = 454 + (y % 9); x < 602; x += 27) {
+          image.rect(x, y, 6, 2, colors.pathEdge);
+          image.rect(x + 9, y + 4, 3, 2, colors.marketLight);
+        }
+      }
 
-  // District terrain pads stop below building footprints and keep each neighborhood legible.
-  image.rect(32, 52, 160, 66, colors.fortune);
-  image.outline(32, 52, 160, 66, colors.grassDark);
-  for (let x = 44; x < 184; x += 24) {
-    image.rect(x, 62 + ((x / 4) % 3) * 8, 9, 5, colors.fortuneLight);
-    image.rect(x + 2, 61 + ((x / 4) % 3) * 8, 5, 1, colors.pathLight);
-  }
-  for (let y = 56; y < 96; y += 13) {
-    for (let x = 38 + (y % 11); x < 188; x += 31) {
-      image.rect(x, y, 4, 2, colors.grassDark);
-      image.pixel(x + 7, y + 3, colors.fortuneLight);
-    }
-  }
+      image.rect(32, 164, 160, 92, colors.arcade);
+      image.outline(32, 164, 160, 92, rgba('#696C61'));
+      for (let y = 174; y < 220; y += 16) {
+        for (let x = 42 + ((y / 2) % 2) * 9; x < 184; x += 32)
+          image.rect(x, y, 13, 6, colors.arcadeLight);
+      }
+      for (let y = 170; y < 218; y += 19) {
+        for (let x = 38 + (y % 7); x < 188; x += 39) {
+          image.rect(x, y, 8, 2, rgba('#777769'));
+          image.rect(x + 6, y + 2, 2, 5, rgba('#777769'));
+        }
+      }
 
-  image.rect(224, 52, 192, 66, colors.grassMid);
-  image.outline(224, 52, 192, 66, colors.grassDark);
-  for (const x of [236, 278, 350, 392]) {
-    image.rect(x, 59, 30, 32, colors.gardenSoil);
-    image.rect(x + 3, 62, 24, 3, colors.gardenSoilLight);
-    for (let y = 70; y < 88; y += 9)
-      image.rect(x + 5, y, 20, 2, colors.gardenSoilLight);
-  }
+      image.rect(448, 164, 160, 92, colors.workshop);
+      image.outline(448, 164, 160, 92, rgba('#72583E'));
+      for (let y = 174; y < 222; y += 15) {
+        for (let x = 458 + (y % 3) * 6; x < 598; x += 37)
+          image.rect(x, y, 16, 4, colors.workshopLight);
+      }
+      for (let y = 169; y < 220; y += 13) {
+        for (let x = 454 + (y % 8); x < 602; x += 29) {
+          image.rect(x, y, 5, 3, rgba('#876544'));
+          image.pixel(x + 9, y + 4, colors.workshopLight);
+        }
+      }
+    },
+    plaza() {
+      const paving = [
+        rgba('#D6C99F'),
+        rgba('#DDCFA4'),
+        rgba('#CFC198'),
+        rgba('#E0D2A7'),
+        rgba('#D4C49A'),
+        rgba('#E1D2A6'),
+        rgba('#CABD95'),
+        rgba('#DACAA0'),
+        rgba('#D5C7A0'),
+      ];
+      image.rect(224, 128, 192, 128, paving[0]);
+      image.outline(224, 128, 192, 128, colors.pathShadow);
+      for (let y = 132; y < 252; y += 12) {
+        const row = Math.floor((y - 132) / 12);
+        for (let x = 228 + (row % 2) * 8; x < 412; x += 24) {
+          const shade = paving[(row + Math.floor(x / 24)) % paving.length];
+          image.rect(x, y, Math.min(16, 412 - x), 7, shade);
+          image.rect(x, y + 7, Math.min(16, 412 - x), 1, colors.pathLight);
+        }
+      }
+      for (let y = 139; y < 250; y += 24)
+        image.rect(226, y, 188, 1, rgba('#A89B77'));
 
-  image.rect(448, 52, 160, 102, colors.market);
-  image.outline(448, 52, 160, 102, colors.pathShadow);
-  for (let y = 62; y < 144; y += 22) {
-    image.rect(458 + ((y / 2) % 3) * 9, y, 28, 5, colors.marketLight);
-    image.rect(566 - ((y / 2) % 3) * 7, y + 8, 25, 4, colors.pathEdge);
-  }
-  for (let y = 58; y < 150; y += 14) {
-    for (let x = 454 + (y % 9); x < 602; x += 27) {
-      image.rect(x, y, 6, 2, colors.pathEdge);
-      image.rect(x + 9, y + 4, 3, 2, colors.marketLight);
-    }
-  }
+      // The detailed fountain sprite sits over this shallow footprint.
+      image.rect(270, 150, 66, 50, rgba('#8F856C'));
+      image.rect(274, 154, 58, 42, rgba('#D8CBA4'));
+      image.rect(280, 160, 46, 30, rgba('#A9C4B7'));
+      image.rect(285, 165, 36, 20, rgba('#78A8B1'));
+      image.rect(292, 170, 22, 10, colors.waveLight);
+      image.rect(278, 192, 50, 4, rgba('#B1A584'));
+    },
+    water() {
+      image.rect(0, 264, 640, 12, colors.shoreDark);
+      image.rect(0, 268, 640, 8, colors.shore);
+      image.rect(0, 274, 640, 8, colors.shoreLight);
+      image.rect(0, 276, 640, 28, colors.waterLight);
+      image.rect(0, 304, 640, 28, colors.water);
+      image.rect(0, 332, 640, 28, colors.waterDeep);
+      for (let x = 0; x < 640; x += 32) {
+        const inlet = (x / 32) % 3;
+        image.rect(x + 4, 276, 18, 3 + inlet, colors.shoreLight);
+        image.rect(x + 12, 279 + inlet, 14, 2, colors.waterLight);
+      }
+      for (let x = 14; x < 640; x += 53) {
+        image.rect(x, 292 + (x % 5), 18, 2, colors.waveLight);
+        image.rect(x + 7, 318 + (x % 7), 24, 3, colors.wave);
+        image.rect(x + 2, 345 - (x % 4), 15, 2, colors.waterDark);
+      }
+      for (let x = 42; x < 640; x += 79) {
+        image.rect(x, 304, 8, 2, colors.waterDeep);
+        image.rect(x + 10, 304, 12, 2, colors.wave);
+      }
+    },
+    'shoreline-reeds'() {
+      for (const x of [20, 92, 182, 420, 532, 610]) {
+        image.rect(x, 270, 3, 12, colors.reed);
+        image.rect(x + 4, 273, 2, 9, colors.shoreDark);
+        image.rect(x + 7, 268, 2, 14, colors.reed);
+      }
+    },
+    bridge() {
+      const bridgePlanks = [
+        rgba('#A96F48'),
+        rgba('#B8794D'),
+        rgba('#C18455'),
+        rgba('#AD744B'),
+        rgba('#C98C5E'),
+        rgba('#B77D55'),
+        rgba('#D09A69'),
+      ];
+      image.rect(256, 276, 128, 84, colors.ink);
+      image.rect(262, 276, 116, 84, bridgePlanks[0]);
+      for (let y = 278; y < 360; y += 11) {
+        const plank =
+          bridgePlanks[Math.floor((y - 278) / 11) % bridgePlanks.length];
+        image.rect(264, y, 112, 8, plank);
+        image.rect(264, y, 112, 1, rgba('#E0AA79'));
+        image.rect(264, y + 8, 112, 2, rgba('#76503B'));
+        const joinX = 282 + ((y * 3) % 66);
+        image.rect(joinX, y + 2, 2, 6, rgba('#8A5B42'));
+      }
+      image.rect(260, 276, 5, 84, rgba('#714B38'));
+      image.rect(375, 276, 5, 84, rgba('#714B38'));
+      image.rect(258, 281, 5, 6, colors.ink);
+      image.rect(377, 281, 5, 6, colors.ink);
+      image.rect(258, 323, 5, 7, colors.ink);
+      image.rect(377, 323, 5, 7, colors.ink);
+    },
+    decorations() {
+      const flowerClusters = [
+        [18, 76],
+        [204, 82],
+        [426, 72],
+        [614, 104],
+        [12, 190],
+        [204, 190],
+        [420, 184],
+        [616, 214],
+      ];
+      flowerClusters.forEach(([x, y], index) => {
+        image.rect(x + 2, y + 4, 2, 6, colors.reed);
+        image.rect(
+          x,
+          y + 1,
+          6,
+          4,
+          index % 2 === 0 ? rgba(palette.sunflower) : rgba(palette.coral),
+        );
+        image.pixel(x + 2, y, rgba(palette.cream));
+      });
+      for (const [x, width] of [
+        [38, 62],
+        [536, 66],
+      ]) {
+        image.rect(x, 258, width, 3, colors.treeShadow);
+        for (let post = x + 5; post < x + width; post += 18) {
+          image.rect(post, 252, 3, 9, rgba('#76543C'));
+          image.rect(post - 1, 251, 5, 2, rgba('#B18458'));
+        }
+      }
+    },
+  };
 
-  image.rect(32, 164, 160, 92, colors.arcade);
-  image.outline(32, 164, 160, 92, rgba('#696C61'));
-  for (let y = 174; y < 220; y += 16) {
-    for (let x = 42 + ((y / 2) % 2) * 9; x < 184; x += 32)
-      image.rect(x, y, 13, 6, colors.arcadeLight);
-  }
-  for (let y = 170; y < 218; y += 19) {
-    for (let x = 38 + (y % 7); x < 188; x += 39) {
-      image.rect(x, y, 8, 2, rgba('#777769'));
-      image.rect(x + 6, y + 2, 2, 5, rgba('#777769'));
-    }
-  }
-
-  image.rect(448, 164, 160, 92, colors.workshop);
-  image.outline(448, 164, 160, 92, rgba('#72583E'));
-  for (let y = 174; y < 222; y += 15) {
-    for (let x = 458 + (y % 3) * 6; x < 598; x += 37)
-      image.rect(x, y, 16, 4, colors.workshopLight);
-  }
-  for (let y = 169; y < 220; y += 13) {
-    for (let x = 454 + (y % 8); x < 602; x += 29) {
-      image.rect(x, y, 5, 3, rgba('#876544'));
-      image.pixel(x + 9, y + 4, colors.workshopLight);
-    }
-  }
-
-  // The row-three road and garden-plaza-gate spine establish the main village axis.
-  drawPath(112, 98, 400, 30);
-  drawPath(308, 96, 56, 184);
-  drawPath(480, 100, 32, 62);
-
-  // A lower loop joins the arcade and workshop entrances around the plaza.
-  drawPath(160, 218, 352, 38);
-  drawPath(160, 202, 42, 54);
-  drawPath(438, 202, 74, 54);
-
-  const paving = [
-    rgba('#D6C99F'),
-    rgba('#DDCFA4'),
-    rgba('#CFC198'),
-    rgba('#E0D2A7'),
-    rgba('#D4C49A'),
-    rgba('#E1D2A6'),
-    rgba('#CABD95'),
-    rgba('#DACAA0'),
-    rgba('#D5C7A0'),
-  ];
-  image.rect(224, 128, 192, 128, paving[0]);
-  image.outline(224, 128, 192, 128, colors.pathShadow);
-  for (let y = 132; y < 252; y += 12) {
-    const row = Math.floor((y - 132) / 12);
-    for (let x = 228 + (row % 2) * 8; x < 412; x += 24) {
-      const shade = paving[(row + Math.floor(x / 24)) % paving.length];
-      image.rect(x, y, Math.min(16, 412 - x), 7, shade);
-      image.rect(x, y + 7, Math.min(16, 412 - x), 1, colors.pathLight);
-    }
-  }
-  for (let y = 139; y < 250; y += 24)
-    image.rect(226, y, 188, 1, rgba('#A89B77'));
-
-  // The detailed fountain sprite sits over this shallow ornamental footprint.
-  image.rect(270, 150, 66, 50, rgba('#8F856C'));
-  image.rect(274, 154, 58, 42, rgba('#D8CBA4'));
-  image.rect(280, 160, 46, 30, rgba('#A9C4B7'));
-  image.rect(285, 165, 36, 20, rgba('#78A8B1'));
-  image.rect(292, 170, 22, 10, colors.waveLight);
-  image.rect(278, 192, 50, 4, rgba('#B1A584'));
-
-  // Shore layers lead into flat pixel-art water depth bands.
-  image.rect(0, 264, 640, 12, colors.shoreDark);
-  image.rect(0, 268, 640, 8, colors.shore);
-  image.rect(0, 274, 640, 8, colors.shoreLight);
-  image.rect(0, 276, 640, 28, colors.waterLight);
-  image.rect(0, 304, 640, 28, colors.water);
-  image.rect(0, 332, 640, 28, colors.waterDeep);
-  for (let x = 0; x < 640; x += 32) {
-    const inlet = (x / 32) % 3;
-    image.rect(x + 4, 276, 18, 3 + inlet, colors.shoreLight);
-    image.rect(x + 12, 279 + inlet, 14, 2, colors.waterLight);
-  }
-  for (let x = 14; x < 640; x += 53) {
-    image.rect(x, 292 + (x % 5), 18, 2, colors.waveLight);
-    image.rect(x + 7, 318 + (x % 7), 24, 3, colors.wave);
-    image.rect(x + 2, 345 - (x % 4), 15, 2, colors.waterDark);
-  }
-  for (let x = 42; x < 640; x += 79) {
-    image.rect(x, 304, 8, 2, colors.waterDeep);
-    image.rect(x + 10, 304, 12, 2, colors.wave);
-  }
-
-  // The bridge owns grid columns 8-11 and leaves the gate sprite's centerline open.
-  const bridgePlanks = [
-    rgba('#A96F48'),
-    rgba('#B8794D'),
-    rgba('#C18455'),
-    rgba('#AD744B'),
-    rgba('#C98C5E'),
-    rgba('#B77D55'),
-    rgba('#D09A69'),
-  ];
-  image.rect(256, 276, 128, 84, colors.ink);
-  image.rect(262, 276, 116, 84, bridgePlanks[0]);
-  for (let y = 278; y < 360; y += 11) {
-    const plank =
-      bridgePlanks[Math.floor((y - 278) / 11) % bridgePlanks.length];
-    image.rect(264, y, 112, 8, plank);
-    image.rect(264, y, 112, 1, rgba('#E0AA79'));
-    image.rect(264, y + 8, 112, 2, rgba('#76503B'));
-    const joinX = 282 + ((y * 3) % 66);
-    image.rect(joinX, y + 2, 2, 6, rgba('#8A5B42'));
-  }
-  image.rect(260, 276, 5, 84, rgba('#714B38'));
-  image.rect(375, 276, 5, 84, rgba('#714B38'));
-  image.rect(258, 281, 5, 6, colors.ink);
-  image.rect(377, 281, 5, 6, colors.ink);
-  image.rect(258, 323, 5, 7, colors.ink);
-  image.rect(377, 323, 5, 7, colors.ink);
-
-  // Low, sparse edge details add life without obscuring any navigation entrance.
-  const flowerClusters = [
-    [18, 76],
-    [204, 82],
-    [426, 72],
-    [614, 104],
-    [12, 190],
-    [204, 190],
-    [420, 184],
-    [616, 214],
-  ];
-  flowerClusters.forEach(([x, y], index) => {
-    image.rect(x + 2, y + 4, 2, 6, colors.reed);
-    image.rect(
-      x,
-      y + 1,
-      6,
-      4,
-      index % 2 === 0 ? rgba(palette.sunflower) : rgba(palette.coral),
-    );
-    image.pixel(x + 2, y, rgba(palette.cream));
-  });
-  for (const [x, width] of [
-    [38, 62],
-    [536, 66],
-  ]) {
-    image.rect(x, 258, width, 3, colors.treeShadow);
-    for (let post = x + 5; post < x + width; post += 18) {
-      image.rect(post, 252, 3, 9, rgba('#76543C'));
-      image.rect(post - 1, 251, 5, 2, rgba('#B18458'));
-    }
-  }
-  for (const x of [20, 92, 182, 420, 532, 610]) {
-    image.rect(x, 270, 3, 12, colors.reed);
-    image.rect(x + 4, 273, 2, 9, colors.shoreDark);
-    image.rect(x + 7, 268, 2, 14, colors.reed);
-  }
+  for (const layerName of townBackgroundLayerOrder) layers[layerName]();
   return image;
 }
 
