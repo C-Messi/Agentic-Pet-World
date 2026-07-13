@@ -1,6 +1,6 @@
 import type { TownEvent, TownResidentState } from '@cat-house/shared';
 
-export function TownHistoryPanel({ events, residents: _residents, loading }: { events: readonly TownEvent[]; residents: readonly TownResidentState[]; loading: boolean }) {
+export function TownHistoryPanel({ events, loading }: { events: readonly TownEvent[]; residents: readonly TownResidentState[]; loading: boolean }) {
   if (loading) return <p className="panel-state">正在加载小镇动态...</p>;
   if (events.length === 0) return <p className="panel-state">还没有小镇动态。</p>;
   return <ol className="town-list">{[...events].reverse().map((event) => <li key={event.id}><strong>{eventLabel(event)}</strong><time>{new Date(event.timestamp).toLocaleString()}</time></li>)}</ol>;

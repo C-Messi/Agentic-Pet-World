@@ -76,7 +76,8 @@ export class TownApiClient {
 
   #get<T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal) { return this.#request(path, signal ? { signal } : {}, schema); }
   #post<T>(path: string, body: unknown, schema: z.ZodType<T>, signal?: AbortSignal) {
-    const { sessionId: _sessionId, ...payload } = body as Record<string, unknown>;
+    const payload = { ...body as Record<string, unknown> };
+    delete payload.sessionId;
     return this.#request(path, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(payload), ...(signal ? { signal } : {}) }, schema);
   }
   async #request<T>(path: string, init: RequestInit, schema: z.ZodType<T>): Promise<T> {

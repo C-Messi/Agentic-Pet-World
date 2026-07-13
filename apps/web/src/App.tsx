@@ -1,4 +1,4 @@
-import type { ExperienceCard, MemoryRecord, MessageRecord, PublicShowcaseItem, TownEvent, TownProjection, TownRelationship, TownSnapshotResponse } from '@cat-house/shared';
+import type { ExperienceCard, MemoryRecord, MessageRecord, PublicShowcaseItem, TownEvent, TownRelationship, TownSnapshotResponse } from '@cat-house/shared';
 import { BookOpen, Brain, Heart, Images, MessageCircle, RefreshCw, Settings, Store, Volume2, VolumeX } from 'lucide-react';
 import { forwardRef, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
