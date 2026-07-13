@@ -564,9 +564,8 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         if (townEvent.zoneId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play requires an event zone', path: ['events', index, 'zoneId'] });
         townEvent.participantIds.forEach((residentId, participantIndex) => {
           const resident = residentStateAtEvent(residents, value.events, index, residentId);
-          if (resident === undefined) return;
-          if (resident.availability !== 'available') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must be available', path: ['events', index, 'participantIds', participantIndex] });
-          if (resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
+          if (resident?.availability !== 'available') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must be available', path: ['events', index, 'participantIds', participantIndex] });
+          if (resident !== undefined && resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
         });
       } else {
         const { activityInstanceId } = townEvent.payload;
@@ -722,8 +721,11 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   validateEventTransitionChain(value, context);
 }
 
-type EventTimeResidentState = {
-  availability: z.infer<typeof TownResidentStateSchema>['availability'];
+type EventTimeResidentAvailability =
+  | { availability: 'available' }
+  | { availability: 'busy'; activityInstanceId: string };
+
+type EventTimeResidentState = EventTimeResidentAvailability & {
   zoneId?: z.infer<typeof TownZoneIdSchema>;
 };
 
@@ -735,37 +737,72 @@ function residentStateAtEvent(
 ): EventTimeResidentState | undefined {
   const resident = residents.get(residentId);
   if (resident === undefined) return undefined;
-  for (let index = eventIndex - 1; index >= 0; index -= 1) {
-    const availability = residentAvailabilityAfterEvent(events[index]!, residentId);
-    if (availability !== undefined) return {
-      availability,
-      ...residentZoneAtEvent(events, eventIndex, residentId, resident.zoneId),
-    };
-  }
-  for (let index = eventIndex + 1; index < events.length; index += 1) {
-    const availability = residentAvailabilityAfterEvent(events[index]!, residentId);
-    if (availability !== undefined) return {
-      availability: availability === 'available' ? 'busy' : 'available',
-      ...residentZoneAtEvent(events, eventIndex, residentId, resident.zoneId),
-    };
-  }
+  const availability = residentAvailabilityAtEvent(resident, events, eventIndex, residentId);
+  if (availability === undefined) return undefined;
   return {
-    availability: resident.availability,
+    ...availability,
     ...residentZoneAtEvent(events, eventIndex, residentId, resident.zoneId),
   };
 }
 
-function residentAvailabilityAfterEvent(
+function residentAvailabilityAtEvent(
+  resident: z.infer<typeof TownResidentStateSchema>,
+  events: z.infer<typeof TownEventSchema>[],
+  eventIndex: number,
+  residentId: string,
+): EventTimeResidentAvailability | undefined {
+  let futureState: EventTimeResidentAvailability | undefined = resident.availability === 'available'
+    ? { availability: 'available' }
+    : resident.activityInstanceId === undefined
+      ? undefined
+      : { availability: 'busy', activityInstanceId: resident.activityInstanceId };
+  if (futureState === undefined) return undefined;
+  for (let index = events.length - 1; index > eventIndex; index -= 1) {
+    const transition = residentAvailabilityTransition(events[index]!, residentId);
+    if (transition === undefined) continue;
+    if (!residentAvailabilityEquals(futureState, transition.after)) return undefined;
+    futureState = transition.before;
+  }
+
+  let priorState: EventTimeResidentAvailability | undefined;
+  for (let index = 0; index < eventIndex; index += 1) {
+    const transition = residentAvailabilityTransition(events[index]!, residentId);
+    if (transition === undefined) continue;
+    if (priorState !== undefined && !residentAvailabilityEquals(priorState, transition.before)) return undefined;
+    priorState = transition.after;
+  }
+  if (priorState !== undefined && !residentAvailabilityEquals(priorState, futureState)) return undefined;
+  return priorState ?? futureState;
+}
+
+function residentAvailabilityTransition(
   townEvent: z.infer<typeof TownEventSchema>,
   residentId: string,
-): EventTimeResidentState['availability'] | undefined {
+): { before: EventTimeResidentAvailability; after: EventTimeResidentAvailability } | undefined {
   const startedActivity = activityStartedByEvent(townEvent);
-  if (startedActivity?.participantIds.includes(residentId)) return 'busy';
-  if ((townEvent.type === 'build.completed' || townEvent.type === 'stall.closed')
-    && townEvent.participantIds.includes(residentId)) {
-    return 'available';
-  }
+  if (startedActivity?.participantIds.includes(residentId)) return {
+    before: { availability: 'available' },
+    after: { availability: 'busy', activityInstanceId: startedActivity.id },
+  };
+  const closedActivityId = townEvent.type === 'build.completed'
+    ? townEvent.payload.modification.id
+    : townEvent.type === 'stall.closed'
+      ? townEvent.payload.stallId
+      : undefined;
+  if (closedActivityId !== undefined && townEvent.participantIds.includes(residentId)) return {
+    before: { availability: 'busy', activityInstanceId: closedActivityId },
+    after: { availability: 'available' },
+  };
   return undefined;
+}
+
+function residentAvailabilityEquals(
+  left: EventTimeResidentAvailability,
+  right: EventTimeResidentAvailability,
+): boolean {
+  return left.availability === right.availability
+    && (left.availability === 'available'
+      || (right.availability === 'busy' && left.activityInstanceId === right.activityInstanceId));
 }
 
 function residentZoneAtEvent(

@@ -758,6 +758,53 @@ describe('public town responses', () => {
     })).toThrow(/must be available/i);
   });
 
+  it('rejects standalone availability inferred from closure of a different activity', () => {
+    const activeActivity = {
+      ...startedActivity,
+      id: 'activity-b',
+      zoneId: 'plaza',
+    } as const;
+    const started = {
+      ...activityStartedEvent,
+      zoneId: 'plaza',
+      payload: { activity: activeActivity },
+    };
+    const unrelatedClosed = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      type: 'stall.closed',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { stallId: 'activity-a' },
+    };
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      sequence: 3,
+      baseVersion: 4,
+      type: 'residents.played',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { standalone: true, interactionId: 'standalone-play-1' },
+    };
+    const busyResidents = [resident, npcResident].map((value) => ({
+      ...value,
+      availability: 'busy',
+      activityInstanceId: activeActivity.id,
+    }));
+
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: {
+        ...validProjection,
+        version: 5,
+        lastEventSequence: 3,
+        residents: busyResidents,
+        activities: [activeActivity],
+      },
+      events: [started, unrelatedClosed, played],
+    })).toThrow(/must be available/i);
+  });
+
   it('validates standalone play participants against the final projection', () => {
     const played = {
       ...event,
