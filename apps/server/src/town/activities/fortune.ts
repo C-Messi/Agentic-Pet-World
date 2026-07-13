@@ -430,15 +430,22 @@ function resultEvents(
 ): readonly TownEvent[] {
   if (state.phase !== 'revealed' && state.phase !== 'completed') return [];
   try {
-    const emitted = new Set(context.emittedEventTypes);
+    const fortuneCursor = context.emittedEventTypes.filter(
+      (type): type is 'fortune.revealed' | 'fortune.interpreted' =>
+        type === 'fortune.revealed' || type === 'fortune.interpreted',
+    );
     if (
-      emitted.has('fortune.interpreted') &&
-      !emitted.has('fortune.revealed')
+      (fortuneCursor.length === 1 && fortuneCursor[0] !== 'fortune.revealed') ||
+      (fortuneCursor.length === 2 &&
+        (fortuneCursor[0] !== 'fortune.revealed' ||
+          fortuneCursor[1] !== 'fortune.interpreted')) ||
+      fortuneCursor.length > 2
     ) {
       throw new TypeError(
-        'A fortune interpretation cannot be emitted before its reveal',
+        'Fortune result events must follow reveal then interpretation order',
       );
     }
+    const emitted = new Set(fortuneCursor);
     const fortune = findFortune(state.fortuneId);
     const facts: Array<
       | {

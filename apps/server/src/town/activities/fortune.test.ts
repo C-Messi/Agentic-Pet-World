@@ -469,11 +469,29 @@ describe('fortune result events', () => {
       }).map(({ type }) => type),
     ).toEqual(['fortune.revealed']);
 
-    expect(() =>
+    expect(
       FORTUNE_ACTIVITY_DEFINITION.resultEvents(revealed, {
         ...activityContext,
-        emittedEventTypes: ['stall.opened', 'fortune.interpreted'],
+        emittedEventTypes: [
+          'stall.opened',
+          'fortune.revealed',
+          'resident.spoke',
+        ],
       }),
-    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    ).toEqual([]);
+
+    for (const emittedEventTypes of [
+      ['fortune.interpreted'],
+      ['fortune.interpreted', 'fortune.revealed'],
+      ['fortune.interpreted', 'stall.opened', 'fortune.revealed'],
+      ['stall.opened', 'fortune.interpreted'],
+    ] as const) {
+      expect(() =>
+        FORTUNE_ACTIVITY_DEFINITION.resultEvents(revealed, {
+          ...activityContext,
+          emittedEventTypes,
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    }
   });
 });
