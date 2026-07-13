@@ -1,4 +1,9 @@
-import type { AgentAction, ActionResult, TownProjection, WorldSnapshot } from '@cat-house/shared';
+import type {
+  AgentAction,
+  ActionResult,
+  TownProjection,
+  WorldSnapshot,
+} from '@cat-house/shared';
 
 export type ConnectionStatus =
   | 'connecting'
@@ -18,7 +23,11 @@ export interface GameEventMap {
   'world-ready': WorldSnapshot;
   'world-snapshot': WorldSnapshot;
   'agent-busy': { busy: boolean };
-  'bubble-changed': { kind: 'speech' | 'thought'; text?: string; ownerId?: string };
+  'bubble-changed': {
+    kind: 'speech' | 'thought';
+    text?: string;
+    ownerId?: string;
+  };
   'action-started': { turnCorrelationId: string; action: AgentAction };
   'action-completed': CorrelatedResultPayload;
   'action-failed': CorrelatedResultPayload;
@@ -26,21 +35,33 @@ export interface GameEventMap {
   'town-ready': TownProjection;
   'town-follow-changed': { residentId: string };
   'town-subtitle': { eventId: string; text: string };
+  'town-return-speech': { text: string };
+  'town-experience-card-created': { cardId: string };
 }
 
 type EventListener<T> = (payload: T) => void;
 
 export class GameEventBus {
-  private readonly listeners = new Map<keyof GameEventMap, Set<EventListener<unknown>>>();
+  private readonly listeners = new Map<
+    keyof GameEventMap,
+    Set<EventListener<unknown>>
+  >();
 
-  on<K extends keyof GameEventMap>(event: K, listener: EventListener<GameEventMap[K]>): () => void {
-    const listeners = this.listeners.get(event) ?? new Set<EventListener<unknown>>();
+  on<K extends keyof GameEventMap>(
+    event: K,
+    listener: EventListener<GameEventMap[K]>,
+  ): () => void {
+    const listeners =
+      this.listeners.get(event) ?? new Set<EventListener<unknown>>();
     listeners.add(listener as EventListener<unknown>);
     this.listeners.set(event, listeners);
     return () => this.off(event, listener);
   }
 
-  off<K extends keyof GameEventMap>(event: K, listener: EventListener<GameEventMap[K]>): void {
+  off<K extends keyof GameEventMap>(
+    event: K,
+    listener: EventListener<GameEventMap[K]>,
+  ): void {
     const listeners = this.listeners.get(event);
     listeners?.delete(listener as EventListener<unknown>);
     if (listeners?.size === 0) this.listeners.delete(event);
