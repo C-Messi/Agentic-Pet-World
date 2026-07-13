@@ -132,6 +132,27 @@ describe('TownService', () => {
     database.close();
   });
 
+  it('completes a fortune with invited residents', () => {
+    const { database, service } = fixture();
+    const result = service.advance({
+      sessionId: 'session-1',
+      baseVersion: 0,
+      intents: [{
+        type: 'start-activity',
+        actorId: 'player-cat',
+        activityId: 'fortune-draw',
+        invitedResidentIds: ['resident-huihui', 'resident-mikan'],
+      }],
+    });
+    expect(result.events.map(({ type }) => type)).toEqual([
+      'fortune.started',
+      'fortune.revealed',
+      'fortune.interpreted',
+    ]);
+    expect(result.events.every(({ participantIds }) => participantIds.length === 3)).toBe(true);
+    database.close();
+  });
+
   it('completes a validated street lamp build from advance', () => {
     const { database, service } = fixture();
     const result = service.advance({

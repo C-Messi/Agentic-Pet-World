@@ -468,6 +468,14 @@ export class TownService implements TownServicePort {
       'fortune-pavilion',
     );
     let state = registry.createInitialState('fortune-draw', context);
+    for (const residentId of started.participantIds.slice(1)) {
+      state = registry.transition(
+        'fortune-draw',
+        state,
+        { type: 'invite', residentId },
+        context,
+      );
+    }
     state = registry.transition(
       'fortune-draw',
       state,

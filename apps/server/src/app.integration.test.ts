@@ -81,7 +81,7 @@ describe('Fastify BFF production integration', () => {
             type: 'start-activity',
             actorId: 'player-cat',
             activityId: 'fortune-draw',
-            invitedResidentIds: [],
+            invitedResidentIds: ['resident-huihui', 'resident-mikan'],
           },
         ],
       },
