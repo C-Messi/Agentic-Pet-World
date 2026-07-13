@@ -95,6 +95,32 @@ function assertActivityTransition(
   }
 }
 
+function assertStandalonePlayEncounter(
+  projection: TownProjection,
+  event: Extract<TownEvent, { type: 'residents.played' }>,
+): void {
+  requireFreshActivityId(projection, event.payload.activityInstanceId);
+  if (event.participantIds.length !== 2) {
+    domainError('standalone play requires exactly two participants');
+  }
+  if (event.zoneId === undefined) {
+    domainError('standalone play requires an event zone');
+  }
+  for (const residentId of event.participantIds) {
+    const resident = requireResident(projection, residentId);
+    if (resident.availability !== 'available') {
+      domainError(
+        `standalone play participant is unavailable or busy: ${residentId}`,
+        'conflict',
+        {
+          residentId,
+          activityId: resident.activityInstanceId,
+        },
+      );
+    }
+  }
+}
+
 function assertStallVisit(
   projection: TownProjection,
   activity: TownActivityInstance,
@@ -243,10 +269,13 @@ export function reduceTownEvent(
       requireResident(next, parsedEvent.payload.residentId);
       break;
     case 'residents.played': {
-      const activity = requireActivity(
-        next,
-        parsedEvent.payload.activityInstanceId,
+      const activity = next.activities.find(
+        (candidate) => candidate.id === parsedEvent.payload.activityInstanceId,
       );
+      if (activity === undefined) {
+        assertStandalonePlayEncounter(next, parsedEvent);
+        break;
+      }
       assertActivityTransition(activity, parsedEvent, 'social-play');
       activity.version += 1;
       break;

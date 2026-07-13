@@ -178,10 +178,154 @@ describe('reduceTownEvent', () => {
       ),
     );
 
-    expect(result.activities[0]).toEqual({
-      ...input.activities[0],
-      version: 8,
+    expect(result).toEqual({
+      ...input,
+      version: 3,
+      lastEventSequence: 5,
+      activities: [
+        {
+          ...input.activities[0],
+          version: 8,
+        },
+      ],
     });
+  });
+
+  it('accepts a standalone play encounter without persisting activity or resident state', () => {
+    const input = projection();
+    const result = reduceTownEvent(
+      input,
+      event(
+        'residents.played',
+        { activityInstanceId: 'standalone-play-1' },
+        { participants: ['player', 'huihui'], zoneId: 'plaza' },
+      ),
+    );
+
+    expect(result).toEqual({
+      ...input,
+      version: 3,
+      lastEventSequence: 5,
+    });
+    expect(result.activities).toEqual([]);
+    expect(result.residents).toEqual(input.residents);
+  });
+
+  it.each([
+    ['one', ['player']],
+    ['three', ['player', 'huihui', 'doubao']],
+  ] as const)(
+    'rejects a standalone play encounter with %s participant count',
+    (_label, participantIds) => {
+      expect(() =>
+        reduceTownEvent(
+          projection(),
+          event(
+            'residents.played',
+            { activityInstanceId: 'standalone-play-1' },
+            { participants: [...participantIds], zoneId: 'plaza' },
+          ),
+        ),
+      ).toThrow(
+        expect.objectContaining({
+          code: 'conflict',
+          message: expect.stringMatching(/exactly two participants/i),
+        }),
+      );
+    },
+  );
+
+  it('rejects a standalone play encounter without a zone', () => {
+    const withoutZone = event(
+      'residents.played',
+      { activityInstanceId: 'standalone-play-1' },
+      { participants: ['player', 'huihui'], zoneId: 'plaza' },
+    );
+    delete withoutZone.zoneId;
+
+    expect(() => reduceTownEvent(projection(), withoutZone)).toThrow(
+      expect.objectContaining({
+        code: 'conflict',
+        message: expect.stringMatching(/zone/i),
+      }),
+    );
+  });
+
+  it('rejects a standalone play encounter with an unavailable participant', () => {
+    const input = projectionWithActivity({
+      id: 'fortune-1',
+      activityId: 'fortune-draw',
+      zoneId: 'plaza',
+      participantIds: ['player'],
+      version: 1,
+      state: { status: 'started' },
+    });
+
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event(
+          'residents.played',
+          { activityInstanceId: 'standalone-play-1' },
+          { participants: ['player', 'huihui'], zoneId: 'plaza' },
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'conflict',
+        message: expect.stringMatching(/unavailable|busy/i),
+      }),
+    );
+  });
+
+  it('rejects an unknown standalone play participant before encounter validation', () => {
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event(
+          'residents.played',
+          { activityInstanceId: 'standalone-play-1' },
+          { participants: ['player', 'missing'], zoneId: 'plaza' },
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'invalid-reference',
+        message: expect.stringMatching(/resident not found/i),
+      }),
+    );
+  });
+
+  it('rejects a standalone play encounter ID that collides with a live modification', () => {
+    const input = TownProjectionSchema.parse({
+      ...projection(),
+      modifications: [
+        {
+          id: 'standalone-play-1',
+          recipeId: 'stone-path',
+          plotId: 'plot-1',
+          occupiedCells: [{ x: 1, y: 1 }],
+          atlasFrame: 1,
+          collision: false,
+        },
+      ],
+    });
+
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event(
+          'residents.played',
+          { activityInstanceId: 'standalone-play-1' },
+          { participants: ['player', 'huihui'], zoneId: 'plaza' },
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'conflict',
+        message: expect.stringMatching(/already exists/i),
+      }),
+    );
   });
 
   it('starts a generic activity and sets reciprocal participant state', () => {
@@ -976,12 +1120,6 @@ describe('reduceTownEvent', () => {
         ),
       ),
     ).toThrow(/resident not found/i);
-    expect(() =>
-      reduceTownEvent(
-        projection(),
-        event('residents.played', { activityInstanceId: 'missing' }),
-      ),
-    ).toThrow(/activity not found/i);
     expect(() =>
       reduceTownEvent(
         projection(),
