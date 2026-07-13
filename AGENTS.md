@@ -88,6 +88,9 @@ specs. Do not claim a check passed unless you ran it in the current worktree.
   production wiring in `apps/server/src/production.ts`.
 - Provider output is data, never executable code. It must produce one validated decision or fall
   back through the existing degraded path.
+- Keep Provider calls outside SQLite write transactions. Revalidate prepared town intents against
+  the latest projection, then atomically append events, update the projection, and complete the
+  pulse claim through `TownEventCommitter`.
 - Provider adapters must translate timeout, cancellation, retryability, and upstream failures into
   the established provider error model without leaking secrets.
 - SQLite migrations are ordered and append-only once shipped. Update both migration registration
@@ -102,6 +105,9 @@ specs. Do not claim a check passed unless you ran it in the current worktree.
 - React and Phaser communicate through the typed event bus in `apps/web/src/game/events.ts`; avoid
   hidden cross-runtime mutable state.
 - Scene code must clean up listeners, timers, input handlers, and transient objects during shutdown.
+- Keep the autonomous town pulse loop non-overlapping and active only while Town Scene is visible.
+  It must wait for ordered playback, abort on scene exit, page hiding, recall, or runtime teardown,
+  and ignore late request or playback results after stopping.
 - Agent actions execute sequentially through the action runner. Keep client-side target validation,
   cancellation, timeouts, typed results, and stop-on-failure behavior intact.
 - Navigation and object placement must remain deterministic and reachable. Update registry/layout
@@ -115,6 +121,14 @@ specs. Do not claim a check passed unless you ran it in the current worktree.
 
 - Town events are authoritative; projections are derived snapshots. New behavior should append
   validated events and update reducers rather than mutating projections ad hoc.
+- Autonomous pulse IDs are idempotent durable claims. Preserve lease takeover, same-process joining,
+  completed-response replay, compare-and-swap projection checks, and all-or-nothing completion.
+- All resident Agents share the injected server Provider configuration. Build distinct prompts only
+  from authored public pet definitions and bounded public town state; never include private room
+  messages, memories, owner data, credentials, or arbitrary persisted text.
+- Autonomous candidates and encounter pairs must be deterministic, reachable, currently executable,
+  and rechecked in event order. Keep the two-request concurrency limit, prevent resident re-entry,
+  and cap one encounter at three Provider calls.
 - Activity transitions and event derivation must remain deterministic, bounded, and testable as
   pure logic.
 - Offline recovery is bounded and idempotent. It emits at most the configured recovery window,
