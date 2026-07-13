@@ -22,7 +22,7 @@ function projection(): TownProjection {
   return TownProjectionSchema.parse({
     sessionId: 'session-1',
     version: 0,
-    lastEventSequence: 0,
+    lastEventSequence: 10_000,
     residents: residentDefinitions.map((pet, index) => ({
       residentId: pet.id,
       pet,
@@ -199,6 +199,56 @@ describe('selectAutonomousResidents', () => {
     expect(second).toEqual(['resident-huihui', 'resident-lanlan']);
     expect(third).toEqual(['resident-doubao']);
     expect(new Set([...first, ...second, ...third]).size).toBe(5);
+  });
+
+  it('keeps every resident within one decision across one hundred rounds', () => {
+    let state = TownProjectionSchema.parse({
+      ...projection(),
+      lastEventSequence: 0,
+    });
+    const recentEvents: TownEvent[] = [];
+    const counts = new Map(residentIds.map((residentId) => [residentId, 0]));
+    let nowMs = Date.parse('2026-07-13T09:00:00.000Z');
+
+    for (let round = 0; round < 100; round++) {
+      const selected = selectAutonomousResidents({
+        projection: state,
+        recentEvents,
+        nowMs,
+        limit: 2,
+      });
+      const timestamp = new Date(nowMs).toISOString();
+      for (const residentId of selected) {
+        const sequence = recentEvents.length + 1;
+        recentEvents.push(
+          TownEventSchema.parse({
+            id: `fairness-${sequence}`,
+            sessionId: state.sessionId,
+            sequence,
+            baseVersion: 0,
+            type: 'resident.spoke',
+            zoneId: 'plaza',
+            participantIds: [residentId],
+            timestamp,
+            payload: { residentId, text: `round ${round}` },
+          }),
+        );
+        counts.set(residentId, counts.get(residentId)! + 1);
+      }
+      state = TownProjectionSchema.parse({
+        ...state,
+        lastEventSequence: recentEvents.length,
+      });
+      nowMs += 31_000;
+    }
+
+    const decisionCounts = residentIds.map((residentId) =>
+      counts.get(residentId)!,
+    );
+    expect(decisionCounts.reduce((total, count) => total + count, 0)).toBe(200);
+    expect(
+      Math.max(...decisionCounts) - Math.min(...decisionCounts),
+    ).toBeLessThanOrEqual(1);
   });
 
   it('sorts decided residents by oldest decision and breaks ties by projection order', () => {
@@ -439,6 +489,102 @@ describe('selectAutonomousResidents', () => {
         limit: 2,
       }),
     ).toThrow(/session/i);
+  });
+
+  it('rejects a schema-valid event with an unknown participant', () => {
+    const source = event(
+      'resident.spoke',
+      ['resident-mikan'],
+      '2026-07-13T09:00:59.000Z',
+    );
+    const unknownParticipant = TownEventSchema.parse({
+      ...source,
+      participantIds: ['resident-mikan', 'resident-unknown'],
+    });
+
+    expect(() =>
+      selectAutonomousResidents({
+        projection: projection(),
+        recentEvents: [unknownParticipant],
+        nowMs: NOW,
+        limit: 2,
+      }),
+    ).toThrow(/unknown resident/i);
+  });
+
+  it('rejects duplicate event IDs even when sequences differ', () => {
+    const first = event(
+      'resident.spoke',
+      ['resident-mikan'],
+      '2026-07-13T09:00:50.000Z',
+    );
+    const second = event(
+      'resident.spoke',
+      ['resident-huihui'],
+      '2026-07-13T09:00:51.000Z',
+    );
+    const duplicateId = TownEventSchema.parse({ ...second, id: first.id });
+
+    expect(() =>
+      selectAutonomousResidents({
+        projection: projection(),
+        recentEvents: [first, duplicateId],
+        nowMs: NOW,
+        limit: 2,
+      }),
+    ).toThrow(/duplicate event id/i);
+  });
+
+  it('rejects duplicate and descending event sequences', () => {
+    const first = event(
+      'resident.spoke',
+      ['resident-mikan'],
+      '2026-07-13T09:00:50.000Z',
+    );
+    const second = event(
+      'resident.spoke',
+      ['resident-huihui'],
+      '2026-07-13T09:00:51.000Z',
+    );
+    const duplicateSequence = TownEventSchema.parse({
+      ...second,
+      sequence: first.sequence,
+    });
+    const input = (recentEvents: readonly TownEvent[]) => ({
+      projection: projection(),
+      recentEvents,
+      nowMs: NOW,
+      limit: 2,
+    });
+
+    expect(() =>
+      selectAutonomousResidents(input([first, duplicateSequence])),
+    ).toThrow(/sequence/i);
+    expect(() => selectAutonomousResidents(input([second, first]))).toThrow(
+      /sequence/i,
+    );
+  });
+
+  it('rejects an event sequence ahead of the projection', () => {
+    const state = projection();
+    const source = event(
+      'resident.spoke',
+      ['resident-mikan'],
+      '2026-07-13T09:00:59.000Z',
+    );
+    const futureEvent = TownEventSchema.parse({
+      ...source,
+      sequence: state.lastEventSequence + 1,
+    });
+
+    expect(() =>
+      selectAutonomousResidents({
+        projection: state,
+        recentEvents: [futureEvent],
+        nowMs: NOW,
+        limit: 2,
+      }),
+    ).toThrow(/projection/i);
   });
 
   it('does not mutate frozen inputs and returns a fresh readonly array', () => {

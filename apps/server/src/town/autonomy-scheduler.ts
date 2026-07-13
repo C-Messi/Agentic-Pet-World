@@ -47,26 +47,55 @@ export function selectAutonomousResidents(
     input.projection.residents.map(({ residentId }) => residentId),
   );
   const latestDecisionMs = new Map<string, number>();
+  const latestDecisionSequence = new Map<string, number>();
 
-  const updateLatestDecision = (residentId: string, timestamp: string) => {
-    if (!residentIds.has(residentId)) return;
+  const updateLatestDecision = (
+    residentId: string,
+    timestamp: string,
+    sequence: number,
+  ) => {
     const timestampMs = Date.parse(timestamp);
-    const current = latestDecisionMs.get(residentId);
-    if (current === undefined || timestampMs > current) {
+    const currentTimestampMs = latestDecisionMs.get(residentId);
+    if (currentTimestampMs === undefined || timestampMs > currentTimestampMs) {
       latestDecisionMs.set(residentId, timestampMs);
+    }
+    const currentSequence = latestDecisionSequence.get(residentId);
+    if (currentSequence === undefined || sequence > currentSequence) {
+      latestDecisionSequence.set(residentId, sequence);
     }
   };
 
+  const eventIds = new Set<string>();
+  let previousSequence = 0;
   for (const townEvent of input.recentEvents) {
     if (townEvent.sessionId !== input.projection.sessionId) {
       throw new TypeError('Recent event session does not match projection');
     }
+    if (townEvent.participantIds.some((id) => !residentIds.has(id))) {
+      throw new TypeError('Recent event references an unknown resident');
+    }
+    if (eventIds.has(townEvent.id)) {
+      throw new TypeError(`Duplicate event ID: ${townEvent.id}`);
+    }
+    if (townEvent.sequence <= previousSequence) {
+      throw new TypeError('Recent event sequence must be strictly increasing');
+    }
+    if (townEvent.sequence > input.projection.lastEventSequence) {
+      throw new TypeError('Recent event sequence is ahead of the projection');
+    }
+    eventIds.add(townEvent.id);
+    previousSequence = townEvent.sequence;
+
     switch (townEvent.type) {
       case 'resident.moved':
       case 'resident.spoke':
       case 'residents.played':
         for (const residentId of townEvent.participantIds) {
-          updateLatestDecision(residentId, townEvent.timestamp);
+          updateLatestDecision(
+            residentId,
+            townEvent.timestamp,
+            townEvent.sequence,
+          );
         }
         break;
     }
@@ -78,6 +107,7 @@ export function selectAutonomousResidents(
       availability: resident.availability,
       projectionIndex,
       latestDecisionMs: latestDecisionMs.get(resident.residentId),
+      latestDecisionSequence: latestDecisionSequence.get(resident.residentId),
     }))
     .filter(({ residentId, availability, latestDecisionMs: latest }) => {
       if (availability !== 'available') return false;
@@ -95,6 +125,8 @@ export function selectAutonomousResidents(
       if (right.latestDecisionMs === undefined) return 1;
       return (
         left.latestDecisionMs - right.latestDecisionMs ||
+        (left.latestDecisionSequence ?? 0) -
+          (right.latestDecisionSequence ?? 0) ||
         left.projectionIndex - right.projectionIndex
       );
     })
