@@ -118,6 +118,17 @@ function assertStandalonePlayEncounter(
         },
       );
     }
+    if (resident.zoneId !== event.zoneId) {
+      domainError(
+        `standalone play participant zone does not match event zone: ${residentId}`,
+        'conflict',
+        {
+          residentId,
+          residentZoneId: resident.zoneId,
+          eventZoneId: event.zoneId,
+        },
+      );
+    }
   }
 }
 
@@ -269,13 +280,14 @@ export function reduceTownEvent(
       requireResident(next, parsedEvent.payload.residentId);
       break;
     case 'residents.played': {
-      const activity = next.activities.find(
-        (candidate) => candidate.id === parsedEvent.payload.activityInstanceId,
-      );
-      if (activity === undefined) {
+      if ('standalone' in parsedEvent.payload) {
         assertStandalonePlayEncounter(next, parsedEvent);
         break;
       }
+      const activity = requireActivity(
+        next,
+        parsedEvent.payload.activityInstanceId,
+      );
       assertActivityTransition(activity, parsedEvent, 'social-play');
       activity.version += 1;
       break;

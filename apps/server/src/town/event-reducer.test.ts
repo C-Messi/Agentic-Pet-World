@@ -197,8 +197,12 @@ describe('reduceTownEvent', () => {
       input,
       event(
         'residents.played',
-        { activityInstanceId: 'standalone-play-1' },
-        { participants: ['player', 'huihui'], zoneId: 'plaza' },
+        { activityInstanceId: 'standalone-play-1', standalone: true },
+        {
+          id: 'standalone-play-1',
+          participants: ['player', 'huihui'],
+          zoneId: 'plaza',
+        },
       ),
     );
 
@@ -222,8 +226,12 @@ describe('reduceTownEvent', () => {
           projection(),
           event(
             'residents.played',
-            { activityInstanceId: 'standalone-play-1' },
-            { participants: [...participantIds], zoneId: 'plaza' },
+            { activityInstanceId: 'standalone-play-1', standalone: true },
+            {
+              id: 'standalone-play-1',
+              participants: [...participantIds],
+              zoneId: 'plaza',
+            },
           ),
         ),
       ).toThrow(
@@ -238,8 +246,12 @@ describe('reduceTownEvent', () => {
   it('rejects a standalone play encounter without a zone', () => {
     const withoutZone = event(
       'residents.played',
-      { activityInstanceId: 'standalone-play-1' },
-      { participants: ['player', 'huihui'], zoneId: 'plaza' },
+      { activityInstanceId: 'standalone-play-1', standalone: true },
+      {
+        id: 'standalone-play-1',
+        participants: ['player', 'huihui'],
+        zoneId: 'plaza',
+      },
     );
     delete withoutZone.zoneId;
 
@@ -266,8 +278,12 @@ describe('reduceTownEvent', () => {
         input,
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1' },
-          { participants: ['player', 'huihui'], zoneId: 'plaza' },
+          { activityInstanceId: 'standalone-play-1', standalone: true },
+          {
+            id: 'standalone-play-1',
+            participants: ['player', 'huihui'],
+            zoneId: 'plaza',
+          },
         ),
       ),
     ).toThrow(
@@ -284,8 +300,12 @@ describe('reduceTownEvent', () => {
         projection(),
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1' },
-          { participants: ['player', 'missing'], zoneId: 'plaza' },
+          { activityInstanceId: 'standalone-play-1', standalone: true },
+          {
+            id: 'standalone-play-1',
+            participants: ['player', 'missing'],
+            zoneId: 'plaza',
+          },
         ),
       ),
     ).toThrow(
@@ -316,14 +336,114 @@ describe('reduceTownEvent', () => {
         input,
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1' },
-          { participants: ['player', 'huihui'], zoneId: 'plaza' },
+          { activityInstanceId: 'standalone-play-1', standalone: true },
+          {
+            id: 'standalone-play-1',
+            participants: ['player', 'huihui'],
+            zoneId: 'plaza',
+          },
         ),
       ),
     ).toThrow(
       expect.objectContaining({
         code: 'conflict',
         message: expect.stringMatching(/already exists/i),
+      }),
+    );
+  });
+
+  it('rejects a standalone play encounter when a participant is in another zone', () => {
+    const input = TownProjectionSchema.parse({
+      ...projection(),
+      residents: projection().residents.map((resident) =>
+        resident.residentId === 'huihui'
+          ? { ...resident, zoneId: 'garden' }
+          : resident,
+      ),
+    });
+
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event(
+          'residents.played',
+          { activityInstanceId: 'standalone-play-1', standalone: true },
+          {
+            id: 'standalone-play-1',
+            participants: ['player', 'huihui'],
+            zoneId: 'plaza',
+          },
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'conflict',
+        message: expect.stringMatching(/zone/i),
+      }),
+    );
+  });
+
+  it('rejects duplicate standalone play participants', () => {
+    expect(() =>
+      reduceTownEvent(projection(), {
+        id: 'standalone-play-1',
+        sessionId: 'session-1',
+        sequence: 5,
+        baseVersion: 2,
+        type: 'residents.played',
+        zoneId: 'plaza',
+        participantIds: ['player', 'player'],
+        timestamp,
+        payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a standalone play interaction ID colliding with a live activity', () => {
+    const input = projectionWithActivity({
+      id: 'standalone-play-1',
+      activityId: 'social-play',
+      zoneId: 'plaza',
+      participantIds: ['player', 'huihui'],
+      version: 1,
+      state: {},
+    });
+
+    expect(() =>
+      reduceTownEvent(
+        input,
+        event(
+          'residents.played',
+          { activityInstanceId: 'standalone-play-1', standalone: true },
+          {
+            id: 'standalone-play-1',
+            participants: ['player', 'huihui'],
+            zoneId: 'plaza',
+          },
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'conflict',
+        message: expect.stringMatching(/already exists/i),
+      }),
+    );
+  });
+
+  it('keeps legacy played events dependent on a live social-play activity', () => {
+    expect(() =>
+      reduceTownEvent(
+        projection(),
+        event(
+          'residents.played',
+          { activityInstanceId: 'missing-activity' },
+          { participants: ['player', 'huihui'] },
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'invalid-reference',
+        message: expect.stringMatching(/activity not found/i),
       }),
     );
   });

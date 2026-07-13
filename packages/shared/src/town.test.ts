@@ -277,6 +277,29 @@ describe('town events and intents', () => {
     expect(() => TownEventSchema.parse({ ...event, executableCode: 'run()' })).toThrow();
   });
 
+  it('accepts only an ID-bound strict standalone play payload', () => {
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      type: 'residents.played',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+    } as const;
+
+    expect(TownEventSchema.parse(played).payload).toEqual(played.payload);
+    expect(TownEventSchema.parse({ ...played, payload: { activityInstanceId: 'legacy-activity' } }).payload).toEqual({ activityInstanceId: 'legacy-activity' });
+    expect(() => TownEventSchema.parse({ ...played, payload: { ...played.payload, standalone: false } })).toThrow();
+    expect(() => TownEventSchema.parse({ ...played, payload: { ...played.payload, plugin: 'unexpected' } })).toThrow();
+
+    const mismatched = TownEventSchema.safeParse({
+      ...played,
+      payload: { ...played.payload, activityInstanceId: 'different-interaction' },
+    });
+    expect(mismatched.success).toBe(false);
+    if (mismatched.success) throw new Error('Expected standalone interaction ID mismatch');
+    expect(mismatched.error.issues.some(({ path }) => path.join('.') === 'payload.activityInstanceId')).toBe(true);
+  });
+
   it('bounds event text and stall selections', () => {
     expect(() =>
       TownEventSchema.parse({
@@ -525,24 +548,228 @@ describe('public town responses', () => {
   });
 
   it('rejects played events referencing an activity absent from the projection', () => {
-    expect(() =>
-      TownAdvanceResponseSchema.parse({
-        projection: validProjection,
-        events: [
-          {
-            ...event,
-            type: 'residents.played',
-            payload: { activityInstanceId: 'missing-activity' },
-          },
-        ],
-      }),
-    ).toThrow();
+    const response = {
+      projection: validProjection,
+      events: [{
+        ...event,
+        type: 'residents.played',
+        payload: { activityInstanceId: 'missing-activity' },
+      }],
+    };
+
+    expect(() => TownAdvanceResponseSchema.parse(response)).toThrow();
+    expect(() => TownPulseResponseSchema.parse({
+      status: 'advanced',
+      ...response,
+      degraded: false,
+      degradedResidentIds: [],
+    })).toThrow();
   });
+
+  it('accepts moved residents followed by a standalone play in advance and pulse responses', () => {
+    const movedResident = {
+      ...event,
+      zoneId: 'garden',
+      payload: { residentId: 'resident-1', position: { x: 8, y: 8 } },
+    };
+    const movedNpc = {
+      ...event,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      zoneId: 'garden',
+      participantIds: ['resident-2'],
+      payload: { residentId: 'resident-2', position: { x: 9, y: 8 } },
+    };
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      sequence: 3,
+      baseVersion: 4,
+      type: 'residents.played',
+      zoneId: 'garden',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+    };
+    const projection = {
+      ...validProjection,
+      version: 5,
+      lastEventSequence: 3,
+      residents: [
+        { ...resident, position: { x: 8, y: 8 }, zoneId: 'garden' },
+        { ...npcResident, position: { x: 9, y: 8 }, zoneId: 'garden' },
+      ],
+    };
+    const response = { projection, events: [movedResident, movedNpc, played] };
+
+    expect(TownAdvanceResponseSchema.parse(response).events).toHaveLength(3);
+    expect(TownPulseResponseSchema.parse({ status: 'advanced', ...response, degraded: false, degradedResidentIds: [] }).events).toHaveLength(3);
+  });
+
+  it('validates standalone play participants against the final projection', () => {
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      type: 'residents.played',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+    };
+    const thirdResident = {
+      ...npcResident,
+      residentId: 'resident-3',
+      pet: { ...npcResident.pet, id: 'resident-pet-3' },
+    };
+
+    expect(TownAdvanceResponseSchema.parse({ projection: validProjection, events: [played] }).events).toHaveLength(1);
+    for (const invalidEvent of [
+      { ...played, participantIds: ['resident-1'] },
+      { ...played, participantIds: ['resident-1', 'resident-2', 'resident-3'] },
+      { ...played, participantIds: ['resident-1', 'resident-missing'] },
+      { ...played, zoneId: undefined },
+      { ...played, zoneId: 'garden' },
+    ]) {
+      expect(() => TownAdvanceResponseSchema.parse({
+        projection: { ...validProjection, residents: [resident, npcResident, thirdResident] },
+        events: [invalidEvent],
+      })).toThrow();
+    }
+
+    const busyProjection = {
+      ...validProjection,
+      residents: [
+        { ...resident, availability: 'busy', activityInstanceId: 'fortune-1' },
+        npcResident,
+      ],
+      activities: [{
+        id: 'fortune-1',
+        activityId: 'fortune-draw',
+        zoneId: 'plaza',
+        participantIds: ['resident-1'],
+        version: 1,
+        state: { status: 'started' },
+      }],
+    };
+    expect(() => TownAdvanceResponseSchema.parse({ projection: busyProjection, events: [played] })).toThrow();
+  });
+
+  it('rejects standalone interaction IDs colliding with final durable state', () => {
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      type: 'residents.played',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+    };
+    const thirdResident = {
+      ...npcResident,
+      residentId: 'resident-3',
+      pet: { ...npcResident.pet, id: 'resident-pet-3' },
+      availability: 'busy',
+      activityInstanceId: 'standalone-play-1',
+    };
+    const collidingActivity = {
+      id: 'standalone-play-1',
+      activityId: 'fortune-draw',
+      zoneId: 'plaza',
+      participantIds: ['resident-3'],
+      version: 1,
+      state: { status: 'started' },
+    };
+    const collidingModification = { ...completedModification, id: 'standalone-play-1' };
+
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...validProjection, residents: [resident, npcResident, thirdResident], activities: [collidingActivity] },
+      events: [played],
+    })).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...validProjection, modifications: [collidingModification] },
+      events: [played],
+    })).toThrow();
+
+    const completed = {
+      ...buildCompletedEvent,
+      id: 'event-2',
+      sequence: 2,
+      baseVersion: 3,
+      payload: { modification: collidingModification },
+    };
+    const collision = TownAdvanceResponseSchema.safeParse({
+      projection: {
+        ...validProjection,
+        version: 4,
+        lastEventSequence: 2,
+        modifications: [collidingModification],
+      },
+      events: [played, completed],
+    });
+    expect(collision.success).toBe(false);
+    if (collision.success) throw new Error('Expected durable modification ID collision');
+    expect(collision.error.issues.some(({ message, path }) =>
+      message.includes('final modification')
+      && path.join('.') === 'events.0.payload.activityInstanceId'
+    )).toBe(true);
+  });
+
+  it('rejects reuse of a standalone interaction ID in the same response chain', () => {
+    const played = {
+      ...event,
+      id: 'standalone-play-1',
+      type: 'residents.played',
+      participantIds: ['resident-1', 'resident-2'],
+      payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+    };
+    const replayed = { ...played, id: 'standalone-play-2', sequence: 2, baseVersion: 3 };
+
+    expect(() => TownEventSchema.parse(replayed)).toThrow();
+    expect(() => TownAdvanceResponseSchema.parse({
+      projection: { ...validProjection, version: 4, lastEventSequence: 2 },
+      events: [played, replayed],
+    })).toThrow();
+  });
+
+  it.each(['activity', 'build'] as const)(
+    'rejects a %s start reusing a prior standalone interaction ID',
+    (kind) => {
+      const played = {
+        ...event,
+        id: 'standalone-play-1',
+        type: 'residents.played',
+        participantIds: ['resident-1', 'resident-2'],
+        payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+      };
+      const started = kind === 'activity'
+        ? {
+            ...activityStartedEvent,
+            id: 'event-2',
+            sequence: 2,
+            baseVersion: 3,
+            payload: { activity: { ...startedActivity, id: 'standalone-play-1' } },
+          }
+        : {
+            ...event,
+            id: 'event-2',
+            sequence: 2,
+            baseVersion: 3,
+            type: 'build.started',
+            zoneId: 'build-plots',
+            participantIds: ['resident-1', 'resident-2'],
+            payload: { modificationId: 'standalone-play-1', recipeId: 'garden-bench', plotId: 'plot-1' },
+          };
+      const result = TownAdvanceResponseSchema.safeParse({
+        projection: { ...validProjection, version: 4, lastEventSequence: 2 },
+        events: [played, started],
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected reused standalone interaction ID');
+      expect(result.error.issues.some(({ message }) => message.includes('referenced before its start'))).toBe(true);
+    },
+  );
 
   it('requires played event participants and zone to exactly match the activity', () => {
     const activity = {
       id: 'activity-1',
-      activityId: 'chess',
+      activityId: 'social-play',
       zoneId: 'arcade-house',
       participantIds: ['resident-1', 'resident-2'],
       version: 1,
