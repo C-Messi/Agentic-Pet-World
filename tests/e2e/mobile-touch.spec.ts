@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import {
   hasRenderedRoom,
@@ -7,6 +7,53 @@ import {
 } from './canvas-inspection';
 
 const MAX_TOWN_SPRITE_FRAME_DIFF = 500;
+const MIN_RESIDENT_PRIMARY_PIXELS = 300;
+const RESIDENT_PRIMARY_RGB = {
+  'player-cat': { red: 0xe9, green: 0x95, blue: 0x3d },
+  'resident-mikan': { red: 0xf2, green: 0x9a, blue: 0x38 },
+  'resident-huihui': { red: 0x89, green: 0x93, blue: 0x9e },
+  'resident-lanlan': { red: 0x5e, green: 0x91, blue: 0xc9 },
+  'resident-doubao': { red: 0xe8, green: 0xc9, blue: 0x8f },
+} as const;
+
+type ResidentId = keyof typeof RESIDENT_PRIMARY_RGB;
+
+async function inspectResidentPrimaryPixels(
+  page: Page,
+): Promise<Record<ResidentId, number>> {
+  return page
+    .locator('.game-surface canvas')
+    .evaluate(async (canvas: HTMLCanvasElement, residentColors) => {
+      const image = new Image();
+      image.src = canvas.toDataURL('image/png');
+      await image.decode();
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const context = copy.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('Resident pixel inspection is unavailable');
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      ).data;
+      const counts = Object.fromEntries(
+        Object.keys(residentColors).map((residentId) => [residentId, 0]),
+      ) as Record<string, number>;
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        const red = pixels[offset] ?? 0;
+        const green = pixels[offset + 1] ?? 0;
+        const blue = pixels[offset + 2] ?? 0;
+        for (const [residentId, color] of Object.entries(residentColors)) {
+          if (red === color.red && green === color.green && blue === color.blue)
+            counts[residentId] = (counts[residentId] ?? 0) + 1;
+        }
+      }
+      return counts;
+    }, RESIDENT_PRIMARY_RGB) as Promise<Record<ResidentId, number>>;
+}
 
 test('touch user can command the cat and operate the memory drawer', async ({
   page,
@@ -69,6 +116,21 @@ test('touch user can release and follow a town resident without obscuring the vi
       );
     })
     .toBe(true);
+  const residentPrimaryPixels = await inspectResidentPrimaryPixels(page);
+  expect(Object.keys(residentPrimaryPixels)).toEqual([
+    'player-cat',
+    'resident-mikan',
+    'resident-huihui',
+    'resident-lanlan',
+    'resident-doubao',
+  ]);
+  for (const [residentId, primaryPixels] of Object.entries(
+    residentPrimaryPixels,
+  )) {
+    expect(primaryPixels, residentId).toBeGreaterThan(
+      MIN_RESIDENT_PRIMARY_PIXELS,
+    );
+  }
   const canvas = await inspectTownCanvas(page);
   expect(canvas.opaqueRatio).toBeGreaterThan(0.95);
   expect(canvas.variedRatio).toBeGreaterThan(0.55);
