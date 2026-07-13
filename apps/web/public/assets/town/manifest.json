@@ -37,7 +37,12 @@
       "sign-market": 19,
       "sign-garden": 20,
       "sign-build": 21,
-      "sign-arcade": 22
+      "sign-arcade": 22,
+      "sign-plaza": 23,
+      "build-plot": 24,
+      "recipe-board": 25,
+      "fortune-banner": 26,
+      "market-crate": 27
     }
   }
 }

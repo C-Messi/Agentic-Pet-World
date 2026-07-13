@@ -8,15 +8,17 @@ import {
 import Phaser from 'phaser';
 
 import { gameEvents } from '../events';
-import { TOWN_GRID, TOWN_ZONES, TownNavigation } from '../town/town-navigation';
+import { TOWN_GRID, TownNavigation } from '../town/town-navigation';
 import type { TownScenePort } from '../town/town-event-player';
+import { TOWN_ZONE_PRESENTATIONS } from './town-scene-layout';
 import { TownSceneState } from './town-scene-state';
 
 export { DEFAULT_TOWN_SPAWNS } from './town-scene-layout';
 
-const PET_SCALE = 2;
-const WORLD_WIDTH = 640;
-const WORLD_HEIGHT = 360;
+const PET_SCALE = 1.5;
+const WORLD_WIDTH = 768;
+const WORLD_HEIGHT = 512;
+const TOWN_BACKGROUND = { x: 64, y: 64, width: 640, height: 360 } as const;
 const PET_SPRITES = [
   'player-cat',
   'orange-cat',
@@ -62,8 +64,12 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
   create(): void {
     this.cameras.main
       .setBackgroundColor('#73b98b')
-      .setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    this.add.image(0, 0, 'town-background').setOrigin(0).setDepth(0);
+      .setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
+      .setZoom(0.75);
+    this.add
+      .image(TOWN_BACKGROUND.x, TOWN_BACKGROUND.y, 'town-background')
+      .setOrigin(0)
+      .setDepth(0);
     this.#createZoneMarkers();
     this.#createAnimations();
     if (this.#projection) this.applySnapshot(this.#projection);
@@ -158,9 +164,10 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
   }
 
   followResident(residentId: string): void {
-    const sprite = this.#requireResident(residentId);
+    this.#requireResident(residentId);
     this.state.follow(residentId);
-    this.cameras.main.startFollow(sprite, true, 0.12, 0.12);
+    this.cameras.main.stopFollow();
+    this.cameras.main.centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
     gameEvents.emit('town-follow-changed', { residentId });
   }
 
@@ -199,11 +206,28 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
   }
 
   #createZoneMarkers(): void {
-    TOWN_ZONES.forEach((zone, index) => {
+    Object.values(TOWN_ZONE_PRESENTATIONS).forEach((zone) => {
+      const landmark = tileCenter(zone.landmarkTile);
+      this.add
+        .image(landmark.x, landmark.y, 'town-atlas', zone.landmarkFrame)
+        .setDepth(landmark.y + 8);
+
       const point = tileCenter(zone.entrance);
       this.add
-        .image(point.x, point.y - 22, 'town-atlas', 17 + Math.min(index, 5))
+        .image(point.x, point.y - 22, 'town-atlas', zone.signFrame)
         .setDepth(point.y - 1);
+
+      const label = tileCenter(zone.labelTile);
+      this.add
+        .text(label.x, label.y - 24, zone.label, {
+          fontFamily: 'monospace',
+          fontSize: '10px',
+          color: '#352820',
+          backgroundColor: '#fff1bd',
+          padding: { x: 4, y: 2 },
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(8_000);
     });
   }
 
@@ -283,8 +307,14 @@ export class TownScene extends Phaser.Scene implements TownScenePort {
 
 function tileCenter({ x, y }: Position): Position {
   return {
-    x: Math.min(WORLD_WIDTH - 16, Math.max(16, x * TOWN_GRID.tileSize + 16)),
-    y: Math.min(WORLD_HEIGHT - 16, Math.max(16, y * TOWN_GRID.tileSize + 16)),
+    x: Math.min(
+      WORLD_WIDTH - 16,
+      Math.max(16, TOWN_BACKGROUND.x + x * TOWN_GRID.tileSize + 16),
+    ),
+    y: Math.min(
+      WORLD_HEIGHT - 16,
+      Math.max(16, TOWN_BACKGROUND.y + y * TOWN_GRID.tileSize + 16),
+    ),
   };
 }
 

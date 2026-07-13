@@ -432,22 +432,73 @@ function drawPetAtlas(pet) {
 function drawTownBackground() {
   const image = canvas(640, 360);
   const ink = rgba(palette.ink);
-  image.rect(0, 0, 640, 360, rgba('#92AD70'));
-  image.rect(0, 278, 640, 82, rgba('#6F9EAD'));
-  image.rect(0, 294, 640, 4, rgba('#B9D8D8'));
-  image.rect(286, 0, 68, 320, rgba('#D7C58F'));
-  image.rect(0, 154, 640, 58, rgba('#D7C58F'));
-  image.rect(292, 0, 4, 320, rgba('#EBDCA8'));
-  image.rect(0, 160, 640, 4, rgba('#EBDCA8'));
-  image.rect(235, 108, 170, 142, rgba('#C8B77F'));
-  image.outline(235, 108, 170, 142, ink);
-  for (let x = 24; x < 620; x += 48) {
-    image.rect(x, 30 + ((x / 48) % 2) * 18, 6, 6, rgba(palette.sunflower));
-    image.rect(x + 14, 62, 5, 5, rgba(palette.coral));
+  const grass = rgba('#8FB86F');
+  const grassDark = rgba('#7BA45F');
+  const path = rgba('#D9C58C');
+  const pathLight = rgba('#EFDEAB');
+  const pathEdge = rgba('#B99A68');
+  image.rect(0, 0, 640, 360, grass);
+
+  for (let y = 10; y < 346; y += 24) {
+    for (let x = y % 48 === 10 ? 12 : 36; x < 628; x += 48)
+      image.rect(x, y, 5, 4, grassDark);
   }
-  image.rect(278, 278, 84, 82, rgba(palette.wood));
-  for (let y = 282; y < 360; y += 12)
-    image.rect(278, y, 84, 2, rgba(palette.woodLight));
+
+  image.rect(26, 28, 178, 132, rgba('#7FAE69'));
+  image.outline(26, 28, 178, 132, rgba('#5F844C'));
+  image.rect(448, 28, 184, 154, rgba('#A8B971'));
+  image.outline(448, 28, 184, 154, rgba('#6E8449'));
+  image.rect(28, 162, 190, 92, rgba('#73A867'));
+  image.outline(28, 162, 190, 92, rgba('#537F4C'));
+  image.rect(240, 118, 160, 132, rgba('#C7B77D'));
+  image.outline(240, 118, 160, 132, ink);
+  image.rect(258, 232, 150, 112, rgba('#A68D68'));
+  image.outline(258, 232, 150, 112, rgba('#725A45'));
+  image.rect(446, 192, 164, 128, rgba('#697B8F'));
+  image.outline(446, 192, 164, 128, rgba('#465569'));
+  image.rect(2, 228, 126, 118, rgba('#8B6B4B'));
+  image.outline(2, 228, 126, 118, rgba('#594330'));
+
+  image.rect(0, 276, 640, 84, rgba('#5F9FB4'));
+  image.rect(0, 270, 640, 8, rgba('#6B8B69'));
+  image.rect(0, 292, 640, 3, rgba('#B9D8D8'));
+  image.rect(0, 326, 640, 2, rgba('#4B8194'));
+  for (let x = 18; x < 640; x += 54)
+    image.rect(x, 306 + (x % 3), 16, 2, rgba('#86C2CF'));
+
+  image.rect(286, 0, 68, 276, path);
+  image.rect(0, 154, 640, 58, path);
+  image.rect(60, 212, 50, 64, path);
+  image.rect(354, 208, 54, 88, path);
+  image.rect(512, 178, 54, 76, path);
+  image.outline(286, 0, 68, 276, pathEdge);
+  image.outline(0, 154, 640, 58, pathEdge);
+  image.rect(292, 0, 4, 276, pathLight);
+  image.rect(0, 160, 640, 4, pathLight);
+  image.rect(246, 124, 148, 120, rgba('#D7C98F'));
+  image.outline(246, 124, 148, 120, ink);
+
+  image.rect(54, 270, 72, 90, rgba(palette.wood));
+  for (let y = 276; y < 360; y += 12)
+    image.rect(54, y, 72, 2, rgba(palette.woodLight));
+  image.outline(54, 270, 72, 90, ink);
+
+  for (let x = 48; x < 200; x += 30) {
+    image.rect(x, 56, 6, 6, rgba(palette.sunflower));
+    image.rect(x + 12, 114, 5, 5, rgba(palette.coral));
+  }
+  for (let x = 472; x < 620; x += 34) {
+    image.rect(x, 58, 22, 8, rgba('#D66B5F'));
+    image.rect(x + 4, 70, 14, 6, rgba('#F4D47C'));
+  }
+  for (let x = 52; x < 198; x += 26) {
+    image.rect(x, 188, 5, 5, rgba('#F2D25B'));
+    image.rect(x + 9, 224, 5, 5, rgba('#E38480'));
+  }
+  for (let x = 278; x < 392; x += 24)
+    image.rect(x, 248, 20, 16, rgba('#8C6B4B'));
+  for (let x = 470; x < 594; x += 28)
+    image.rect(x, 222, 14, 8, rgba('#90B8D8'));
   return image;
 }
 
@@ -484,6 +535,11 @@ function drawTownAtlas() {
     'sign-garden',
     'sign-build',
     'sign-arcade',
+    'sign-plaza',
+    'build-plot',
+    'recipe-board',
+    'fortune-banner',
+    'market-crate',
   ];
   names.forEach((name, index) => {
     const { x, y } = tile(index);
@@ -492,11 +548,84 @@ function drawTownAtlas() {
     else if (name.startsWith('sign-')) {
       image.rect(x + 28, y + 20, 7, 38, colors.ink);
       image.rect(x + 10, y + 8, 44, 30, colors.ink);
-      image.rect(x + 13, y + 11, 38, 24, colors.sunflower);
+      image.rect(
+        x + 13,
+        y + 11,
+        38,
+        24,
+        name === 'sign-plaza' ? colors.skyLight : colors.sunflower,
+      );
+      image.rect(x + 18, y + 20, 28, 3, colors.ink);
+    } else if (name === 'gate') {
+      image.rect(x + 8, y + 48, 48, 6, colors.ink);
+      image.rect(x + 12, y + 18, 8, 36, colors.wood);
+      image.rect(x + 44, y + 18, 8, 36, colors.wood);
+      image.rect(x + 7, y + 12, 50, 8, colors.ink);
+      image.rect(x + 10, y + 8, 44, 9, colors.coral);
+      image.rect(x + 20, y + 22, 24, 5, colors.sunflower);
+    } else if (name === 'plaza') {
+      image.rect(x + 13, y + 42, 38, 10, colors.ink);
+      image.rect(x + 16, y + 39, 32, 10, colors.cream);
+      image.rect(x + 20, y + 28, 24, 12, colors.ink);
+      image.rect(x + 23, y + 25, 18, 13, colors.sky);
+      image.rect(x + 29, y + 14, 6, 14, colors.skyLight);
+      image.rect(x + 25, y + 12, 14, 4, colors.white);
+    } else if (name === 'fortune-pavilion') {
+      image.rect(x + 9, y + 43, 46, 9, colors.ink);
+      image.rect(x + 13, y + 25, 38, 20, colors.coral);
+      image.rect(x + 17, y + 29, 30, 12, colors.cream);
+      image.rect(x + 5, y + 18, 54, 8, colors.ink);
+      image.rect(x + 9, y + 12, 46, 9, colors.sunflower);
+      image.rect(x + 21, y + 31, 8, 10, colors.sky);
+      image.rect(x + 36, y + 31, 8, 10, colors.moss);
+    } else if (name === 'garden') {
+      image.rect(x + 7, y + 35, 50, 17, colors.ink);
+      image.rect(x + 10, y + 38, 44, 11, colors.moss);
+      image.rect(x + 18, y + 20, 28, 15, colors.sky);
+      image.rect(x + 20, y + 22, 24, 11, colors.skyLight);
+      for (let offset = 13; offset < 54; offset += 10) {
+        image.rect(x + offset, y + 31, 4, 4, colors.sunflower);
+        image.rect(x + offset + 3, y + 43, 3, 3, colors.coral);
+      }
+    } else if (name === 'arcade-house') {
+      image.rect(x + 7, y + 19, 50, 36, colors.ink);
+      image.rect(x + 11, y + 23, 42, 28, rgba('#4F5F83'));
+      image.rect(x + 16, y + 28, 18, 12, colors.sky);
+      image.rect(x + 18, y + 30, 14, 8, colors.ink);
+      image.rect(x + 38, y + 31, 6, 6, colors.sunflower);
+      image.rect(x + 46, y + 35, 4, 4, colors.coral);
+      image.rect(x + 14, y + 14, 36, 8, colors.sunflower);
     } else if (name.includes('stall')) {
       image.rect(x + 7, y + 22, 50, 35, colors.ink);
       image.rect(x + 10, y + 25, 44, 29, index % 2 ? colors.coral : colors.sky);
       image.rect(x + 5, y + 13, 54, 12, colors.cream);
+      image.rect(x + 14, y + 30, 10, 10, colors.sunflower);
+      image.rect(x + 32, y + 32, 14, 8, colors.mossLight);
+    } else if (name === 'build-plot') {
+      image.rect(x + 7, y + 30, 50, 24, colors.ink);
+      image.rect(x + 10, y + 33, 44, 18, colors.wood);
+      image.rect(x + 15, y + 18, 34, 14, colors.ink);
+      image.rect(x + 18, y + 21, 28, 8, colors.cream);
+      image.rect(x + 12, y + 10, 6, 22, colors.woodLight);
+      image.rect(x + 46, y + 10, 6, 22, colors.woodLight);
+      image.rect(x + 22, y + 42, 20, 5, colors.sunflower);
+    } else if (name === 'recipe-board') {
+      image.rect(x + 13, y + 8, 38, 48, colors.ink);
+      image.rect(x + 16, y + 11, 32, 42, colors.cream);
+      image.rect(x + 21, y + 18, 22, 3, colors.coral);
+      image.rect(x + 21, y + 27, 18, 3, colors.moss);
+      image.rect(x + 21, y + 36, 24, 3, colors.sky);
+    } else if (name === 'fortune-banner') {
+      image.rect(x + 12, y + 9, 40, 46, colors.ink);
+      image.rect(x + 16, y + 13, 32, 38, colors.coral);
+      image.rect(x + 23, y + 20, 18, 18, colors.sunflower);
+      image.rect(x + 29, y + 26, 6, 6, colors.white);
+    } else if (name === 'market-crate') {
+      image.rect(x + 10, y + 32, 44, 22, colors.ink);
+      image.rect(x + 13, y + 35, 38, 16, colors.wood);
+      image.rect(x + 20, y + 21, 8, 12, colors.coral);
+      image.rect(x + 32, y + 18, 9, 15, colors.sunflower);
+      image.rect(x + 42, y + 24, 7, 9, colors.mossLight);
     } else {
       image.rect(x + 7, y + 16, 50, 42, colors.ink);
       image.rect(
