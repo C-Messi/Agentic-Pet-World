@@ -73,9 +73,14 @@ function definition(
         payload: { activityInstanceId: activityContext.activityInstanceId },
       }),
     ],
-    validateResultEvent: (event, activityContext) =>
+    validateResultEvent: (event, _state, activityContext) =>
       event.type === 'residents.played' &&
-      event.payload.activityInstanceId === activityContext.activityInstanceId,
+      event.payload.activityInstanceId === activityContext.activityInstanceId &&
+      event.zoneId === activityContext.zoneId &&
+      event.participantIds.length === activityContext.participantIds.length &&
+      event.participantIds.every((id) =>
+        activityContext.participantIds.includes(id),
+      ),
     ...overrides,
   };
 }
@@ -414,34 +419,62 @@ describe('TownActivityRegistry execution boundary', () => {
     ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
   });
 
-  it('lets definitions own new result event types and payload identity checks', () => {
-    const stallDefinition = definition({
-      resultEventTypes: ['stall.visited'],
-      resultEvents: (_state, activityContext) => [
-        TownEventSchema.parse({
-          id: activityContext.nextEventId(),
-          sessionId: activityContext.sessionId,
-          sequence: activityContext.lastEventSequence + 1,
-          baseVersion: activityContext.baseVersion,
-          type: 'stall.visited',
-          zoneId: activityContext.zoneId,
-          participantIds: activityContext.participantIds,
-          timestamp: activityContext.now,
-          payload: {
-            stallId: 'wrong-stall',
-            visitorResidentId: 'resident-1',
-          },
-        }),
-      ],
-      validateResultEvent: (event, activityContext) =>
-        event.type === 'stall.visited' &&
-        event.payload.stallId === activityContext.activityInstanceId,
-    });
-    const registry = new TownActivityRegistry().register(stallDefinition);
+  it('delegates external stall visitor ownership to the definition validator', () => {
+    const stallDefinition = (
+      eventOverrides: Record<string, unknown> = {},
+      payloadOverrides: Record<string, unknown> = {},
+    ) =>
+      definition({
+        capacity: 1,
+        resultEventTypes: ['stall.visited'],
+        resultEvents: (_state, activityContext) => [
+          TownEventSchema.parse({
+            id: activityContext.nextEventId(),
+            sessionId: activityContext.sessionId,
+            sequence: activityContext.lastEventSequence + 1,
+            baseVersion: activityContext.baseVersion,
+            type: 'stall.visited',
+            zoneId: activityContext.zoneId,
+            participantIds: ['resident-1', 'resident-2'],
+            timestamp: activityContext.now,
+            ...eventOverrides,
+            payload: {
+              stallId: activityContext.activityInstanceId,
+              visitorResidentId: 'resident-2',
+              ...payloadOverrides,
+            },
+          }),
+        ],
+        validateResultEvent: (event, _state, activityContext) =>
+          event.type === 'stall.visited' &&
+          event.zoneId === activityContext.zoneId &&
+          event.payload.stallId === activityContext.activityInstanceId &&
+          event.payload.visitorResidentId === 'resident-2' &&
+          event.participantIds.includes(activityContext.participantIds[0]!) &&
+          event.participantIds.includes(event.payload.visitorResidentId),
+      });
 
-    expect(() =>
-      registry.resultEvents('counter', { count: 0 }, context()),
-    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    expect(
+      new TownActivityRegistry()
+        .register(stallDefinition())
+        .resultEvents('counter', { count: 0 }, context()),
+    ).toHaveLength(1);
+
+    for (const invalid of [
+      stallDefinition({ participantIds: ['resident-3', 'resident-2'] }),
+      stallDefinition(
+        { participantIds: ['resident-1', 'resident-3'] },
+        { visitorResidentId: 'resident-3' },
+      ),
+      stallDefinition({}, { stallId: 'other-stall' }),
+      stallDefinition({ zoneId: 'garden' }),
+    ]) {
+      expect(() =>
+        new TownActivityRegistry()
+          .register(invalid)
+          .resultEvents('counter', { count: 0 }, context()),
+      ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    }
   });
 
   it('rejects undeclared result types and wraps ownership validator failures', () => {
@@ -462,6 +495,14 @@ describe('TownActivityRegistry execution boundary', () => {
     expect(() =>
       throwing.resultEvents('counter', { count: 0 }, context()),
     ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+  });
+
+  it('requires a result ownership validator at runtime', () => {
+    expect(() =>
+      new TownActivityRegistry().register(
+        definition({ validateResultEvent: undefined as never }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-definition' }));
   });
 
   it('exports the registry error as an Error subtype', () => {

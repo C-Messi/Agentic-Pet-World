@@ -572,6 +572,86 @@ describe('fortune result events', () => {
     expect(new Set(events.map(({ id }) => id)).size).toBe(2);
   });
 
+  it('owns exact fortune participant, zone, activity, and selected facts', () => {
+    const { activityContext, revealed } = advanceToRevealed();
+    const fortune = FORTUNE_POOL.fortunes.find(
+      ({ id }) => id === revealed.fortuneId,
+    )!;
+    const interpreted = FORTUNE_ACTIVITY_DEFINITION.transition(
+      revealed,
+      { type: 'interpret', ...createFallbackFortuneInterpretation(fortune) },
+      activityContext,
+    );
+    const completed = inPhase(
+      FORTUNE_ACTIVITY_DEFINITION.transition(
+        interpreted,
+        { type: 'complete' },
+        activityContext,
+      ),
+      'completed',
+    );
+    const [revealedEvent, interpretedEvent] =
+      FORTUNE_ACTIVITY_DEFINITION.resultEvents(completed, activityContext);
+    const validate = FORTUNE_ACTIVITY_DEFINITION.validateResultEvent;
+
+    expect(validate(revealedEvent!, completed, activityContext)).toBe(true);
+    expect(
+      validate(
+        TownEventSchema.parse({
+          ...revealedEvent!,
+          participantIds: ['resident-2', 'resident-1'],
+        }),
+        completed,
+        activityContext,
+      ),
+    ).toBe(true);
+
+    const invalidEvents = [
+      { ...revealedEvent!, participantIds: ['resident-1'] },
+      {
+        ...revealedEvent!,
+        participantIds: ['resident-1', 'resident-2', 'resident-3'],
+      },
+      { ...revealedEvent!, zoneId: 'garden' },
+      {
+        ...revealedEvent!,
+        payload: {
+          ...revealedEvent!.payload,
+          activityInstanceId: 'other-activity',
+        },
+      },
+      {
+        ...revealedEvent!,
+        payload: { ...revealedEvent!.payload, fortuneId: 'other-fortune' },
+      },
+      {
+        ...revealedEvent!,
+        payload: {
+          ...revealedEvent!.payload,
+          rank: fortune.rank === 'great' ? 'good' : 'great',
+        },
+      },
+      {
+        ...interpretedEvent!,
+        payload: { ...interpretedEvent!.payload, interpretation: 'Other text' },
+      },
+    ].map((event) => TownEventSchema.parse(event));
+
+    for (const event of invalidEvents) {
+      expect(validate(event, completed, activityContext)).toBe(false);
+    }
+    expect(
+      validate(
+        TownEventSchema.parse({
+          ...revealedEvent!,
+          payload: { ...revealedEvent!.payload, fortuneId: 'other-fortune' },
+        }),
+        { ...completed, fortuneId: 'other-fortune' },
+        activityContext,
+      ),
+    ).toBe(false);
+  });
+
   it('emits reveal once, then only interpretation after the persisted cursor advances', () => {
     const { activityContext, drawing, revealed } = advanceToRevealed();
     expect(

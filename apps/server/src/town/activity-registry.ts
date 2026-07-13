@@ -54,6 +54,7 @@ export interface TownActivityDefinition<
   ): readonly TownEvent[];
   validateResultEvent(
     event: Readonly<TownEvent>,
+    state: Readonly<TState>,
     context: ActivityContext,
   ): void | boolean;
 }
@@ -231,16 +232,6 @@ function parseState(
   }
 }
 
-function sameValues(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-}
-
 export class TownActivityRegistry {
   readonly #definitions = new Map<string, AnyDefinition>();
   readonly #metadata = new Map<string, TownActivityMetadata>();
@@ -406,8 +397,6 @@ export class TownActivityRegistry {
         const expectedBaseVersion = parsedContext.baseVersion + index;
         if (
           event.sessionId !== parsedContext.sessionId ||
-          event.zoneId !== parsedContext.zoneId ||
-          !sameValues(event.participantIds, parsedContext.participantIds) ||
           event.timestamp !== parsedContext.now ||
           event.sequence !== expectedSequence ||
           event.baseVersion !== expectedBaseVersion ||
@@ -416,7 +405,10 @@ export class TownActivityRegistry {
         ) {
           throw new TypeError('Result event does not match activity context');
         }
-        if (definition.validateResultEvent(event, parsedContext) === false) {
+        if (
+          definition.validateResultEvent(event, parsedState, parsedContext) ===
+          false
+        ) {
           throw new TypeError(
             'Result event failed activity ownership validation',
           );

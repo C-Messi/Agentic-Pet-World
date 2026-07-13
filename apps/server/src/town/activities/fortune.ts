@@ -670,18 +670,34 @@ const FortuneActivityDefinition: TownActivityDefinition<
   }),
   transition: transitionFortune,
   resultEvents,
-  validateResultEvent: (event, context) => {
+  validateResultEvent: (event, state, context) => {
     if (
       event.type !== 'fortune.revealed' &&
       event.type !== 'fortune.interpreted'
     ) {
       return false;
     }
-    return (
-      event.payload.activityInstanceId === context.activityInstanceId &&
-      event.zoneId === context.zoneId &&
-      sameIdentifierSet(event.participantIds, context.participantIds)
-    );
+    try {
+      validateDeterministicState(state);
+    } catch {
+      return false;
+    }
+    if (
+      (state.phase !== 'revealed' && state.phase !== 'completed') ||
+      !sameIdentifierSet(state.participantIds, context.participantIds) ||
+      event.payload.activityInstanceId !== context.activityInstanceId ||
+      event.zoneId !== 'fortune-pavilion' ||
+      context.zoneId !== 'fortune-pavilion' ||
+      !sameIdentifierSet(event.participantIds, context.participantIds) ||
+      event.payload.fortuneId !== state.fortuneId
+    ) {
+      return false;
+    }
+    const fortune = selectFortune(FORTUNE_POOL, state.seed);
+    return event.type === 'fortune.revealed'
+      ? event.payload.rank === fortune.rank
+      : state.interpretation !== undefined &&
+          event.payload.interpretation === state.interpretation;
   },
 };
 
