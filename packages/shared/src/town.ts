@@ -563,10 +563,10 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
         if (townEvent.participantIds.length !== 2) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play requires exactly two participants', path: ['events', index, 'participantIds'] });
         if (townEvent.zoneId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play requires an event zone', path: ['events', index, 'zoneId'] });
         townEvent.participantIds.forEach((residentId, participantIndex) => {
-          const resident = residents.get(residentId);
+          const resident = residentStateAtEvent(residents, value.events, index, residentId);
           if (resident === undefined) return;
           if (resident.availability !== 'available') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must be available', path: ['events', index, 'participantIds', participantIndex] });
-          if (resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
+          if (resident.zoneId !== undefined && resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
         });
       } else {
         const { activityInstanceId } = townEvent.payload;
@@ -720,6 +720,85 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
     if (!closed && finalActivity && !activitiesEqual(activity, finalActivity)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Evolved started activity does not match the final projection', path: ['events', eventIndex, 'payload'] });
   });
   validateEventTransitionChain(value, context);
+}
+
+type EventTimeResidentState = {
+  availability: z.infer<typeof TownResidentStateSchema>['availability'];
+  zoneId?: z.infer<typeof TownZoneIdSchema>;
+};
+
+function residentStateAtEvent(
+  residents: Map<string, z.infer<typeof TownResidentStateSchema>>,
+  events: z.infer<typeof TownEventSchema>[],
+  eventIndex: number,
+  residentId: string,
+): EventTimeResidentState | undefined {
+  const resident = residents.get(residentId);
+  if (resident === undefined) return undefined;
+  for (let index = eventIndex - 1; index >= 0; index -= 1) {
+    const availability = residentAvailabilityAfterEvent(events[index]!, residentId);
+    if (availability !== undefined) return {
+      availability,
+      ...residentZoneAtEvent(events, eventIndex, residentId, resident.zoneId),
+    };
+  }
+  for (let index = eventIndex + 1; index < events.length; index += 1) {
+    const availability = residentAvailabilityAfterEvent(events[index]!, residentId);
+    if (availability !== undefined) return {
+      availability: availability === 'available' ? 'busy' : 'available',
+      ...residentZoneAtEvent(events, eventIndex, residentId, resident.zoneId),
+    };
+  }
+  return {
+    availability: resident.availability,
+    ...residentZoneAtEvent(events, eventIndex, residentId, resident.zoneId),
+  };
+}
+
+function residentAvailabilityAfterEvent(
+  townEvent: z.infer<typeof TownEventSchema>,
+  residentId: string,
+): EventTimeResidentState['availability'] | undefined {
+  const startedActivity = activityStartedByEvent(townEvent);
+  if (startedActivity?.participantIds.includes(residentId)) return 'busy';
+  if ((townEvent.type === 'build.completed' || townEvent.type === 'stall.closed')
+    && townEvent.participantIds.includes(residentId)) {
+    return 'available';
+  }
+  return undefined;
+}
+
+function residentZoneAtEvent(
+  events: z.infer<typeof TownEventSchema>[],
+  eventIndex: number,
+  residentId: string,
+  finalZoneId: z.infer<typeof TownZoneIdSchema>,
+): Pick<EventTimeResidentState, 'zoneId'> {
+  for (let index = eventIndex - 1; index >= 0; index -= 1) {
+    const zoneId = residentZoneAfterEvent(events[index]!, residentId);
+    if (zoneId !== undefined) return { zoneId };
+  }
+  for (let index = eventIndex + 1; index < events.length; index += 1) {
+    if (residentZoneAfterEvent(events[index]!, residentId) !== undefined) return {};
+  }
+  return { zoneId: finalZoneId };
+}
+
+function residentZoneAfterEvent(
+  townEvent: z.infer<typeof TownEventSchema>,
+  residentId: string,
+): z.infer<typeof TownZoneIdSchema> | undefined {
+  const startedActivity = activityStartedByEvent(townEvent);
+  if (startedActivity?.participantIds.includes(residentId)) return startedActivity.zoneId;
+  if ((townEvent.type === 'build.completed' || townEvent.type === 'stall.closed')
+    && townEvent.participantIds.includes(residentId)) {
+    return townEvent.zoneId;
+  }
+  if ((townEvent.type === 'resident.moved' || townEvent.type === 'outing.started' || townEvent.type === 'outing.returned')
+    && townEvent.payload.residentId === residentId) {
+    return townEvent.zoneId;
+  }
+  return undefined;
 }
 
 function activityStartedByEvent(
