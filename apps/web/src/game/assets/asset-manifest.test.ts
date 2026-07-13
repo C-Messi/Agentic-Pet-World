@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { inflateSync } from 'node:zlib';
@@ -15,6 +16,73 @@ const spriteIds = [
   'gray-cat',
   'blue-cat',
   'cream-cat',
+] as const;
+
+const townFrameNames = [
+  'gate',
+  'plaza',
+  'fortune-pavilion',
+  'market-stall-1',
+  'market-stall-2',
+  'market-stall-3',
+  'market-stall-4',
+  'garden',
+  'arcade-house',
+  'bench',
+  'flower-arch',
+  'notice-board',
+  'lantern-row',
+  'tiny-stage',
+  'water',
+  'bridge',
+  'path',
+  'sign-gate',
+  'sign-fortune',
+  'sign-market',
+  'sign-garden',
+  'sign-build',
+  'sign-arcade',
+  'sign-plaza',
+  'build-plot',
+  'recipe-board',
+  'fortune-banner',
+  'market-crate',
+  'fortune-roof-left',
+  'fortune-roof-right',
+  'fortune-base-left',
+  'fortune-base-right',
+  'greenhouse-left',
+  'greenhouse-right',
+  'greenhouse-door',
+  'market-awning-red',
+  'market-awning-yellow',
+  'market-awning-blue',
+  'arcade-roof-left',
+  'arcade-roof-right',
+  'arcade-base-left',
+  'arcade-base-right',
+  'workshop-left',
+  'workshop-right',
+  'workshop-yard',
+  'gate-roof-left',
+  'gate-roof-right',
+  'bridge-rail',
+  'tree-green',
+  'tree-blossom',
+  'tree-canopy-foreground',
+  'hedge-horizontal',
+  'hedge-vertical',
+  'fence-horizontal',
+  'fence-vertical',
+  'lamp-post',
+  'bench-detailed',
+  'flower-bed',
+  'planter',
+  'market-crates-detailed',
+  'dock',
+  'plaza-fountain-detailed',
+  'plaza-banner',
+  'shoreline-reeds',
 ] as const;
 
 function pngInfo(path: string) {
@@ -36,6 +104,29 @@ function pngInfo(path: string) {
     bytes,
     pixels,
   };
+}
+
+function pngFramePixels(
+  png: ReturnType<typeof pngInfo>,
+  frameIndex: number,
+  frameWidth: number,
+  frameHeight: number,
+  columns: number,
+) {
+  const frame = Buffer.alloc(frameWidth * frameHeight * 4);
+  const originX = (frameIndex % columns) * frameWidth;
+  const originY = Math.floor(frameIndex / columns) * frameHeight;
+  const stride = png.width * 4 + 1;
+  for (let y = 0; y < frameHeight; y += 1) {
+    const sourceStart = (originY + y) * stride + 1 + originX * 4;
+    png.pixels.copy(
+      frame,
+      y * frameWidth * 4,
+      sourceStart,
+      sourceStart + frameWidth * 4,
+    );
+  }
+  return frame;
 }
 
 describe('generated pixel asset manifests', () => {
@@ -120,15 +211,40 @@ describe('generated pixel asset manifests', () => {
       width: townManifest.atlas.frame.width * townManifest.atlas.columns,
       height: townManifest.atlas.frame.height * townManifest.atlas.rows,
     });
-    expect(Object.keys(townManifest.atlas.frames)).toEqual(
-      expect.arrayContaining([
-        'gate',
-        'fortune-pavilion',
-        'market-stall-4',
-        'arcade-house',
-        'bridge',
-      ]),
+    expect(townManifest.atlas).toMatchObject({
+      frame: { width: 64, height: 64 },
+      columns: 8,
+      rows: 8,
+    });
+    expect(Object.keys(townManifest.atlas.frames)).toEqual(townFrameNames);
+    expect(Object.values(townManifest.atlas.frames)).toEqual(
+      townFrameNames.map((_, index) => index),
     );
+  });
+
+  it('draws every appended town frame as distinct bounded pixel art', () => {
+    const { frame, columns } = townManifest.atlas;
+    const png = pngInfo(`public/assets/town/${townManifest.atlas.image}`);
+    const hashes = townFrameNames.slice(28).map((_, offset) => {
+      const pixels = pngFramePixels(
+        png,
+        offset + 28,
+        frame.width,
+        frame.height,
+        columns,
+      );
+      const alpha = Array.from(
+        { length: frame.width * frame.height },
+        (_, index) => pixels[index * 4 + 3],
+      );
+      const visiblePixels = alpha.filter((value) => value === 255).length;
+      expect(alpha.some((value) => value === 0)).toBe(true);
+      expect(alpha.some((value) => value === 255)).toBe(true);
+      expect(visiblePixels).toBeGreaterThanOrEqual(64);
+      expect(visiblePixels).toBeLessThanOrEqual(3_072);
+      return createHash('sha256').update(pixels).digest('hex');
+    });
+    expect(new Set(hashes).size).toBe(36);
   });
 
   it('uses local manifest image names only', () => {

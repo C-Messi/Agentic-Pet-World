@@ -58,6 +58,55 @@ function canvas(width, height) {
   };
 }
 
+function checker(image, x, y, width, height, first, second, size = 6) {
+  for (let row = 0; row < height; row += size) {
+    for (let column = 0; column < width; column += size) {
+      image.rect(
+        x + column,
+        y + row,
+        Math.min(size, width - column),
+        Math.min(size, height - row),
+        (Math.floor(column / size) + Math.floor(row / size)) % 2 === 0
+          ? first
+          : second,
+      );
+    }
+  }
+}
+
+function roof(image, x, y, width, height, side, fill, outline, highlight) {
+  for (let row = 0; row < height; row += 1) {
+    const inset = Math.floor((height - row - 1) / 4) * 3;
+    const start = side === 'left' ? x + inset : x;
+    const end = side === 'left' ? x + width : x + width - inset;
+    const isEdge = row === 0 || row >= height - 3;
+    image.rect(start, y + row, end - start, 1, isEdge ? outline : fill);
+    if (!isEdge && row % 7 === 2) {
+      const highlightStart = side === 'left' ? start + 3 : start;
+      const highlightWidth = Math.max(0, end - highlightStart - 3);
+      image.rect(highlightStart, y + row, highlightWidth, 2, highlight);
+    }
+  }
+}
+
+function tree(image, x, y, canopy, canopyLight, trunk, outline, blossoms) {
+  image.rect(x + 26, y + 31, 13, 27, outline);
+  image.rect(x + 29, y + 32, 7, 24, trunk);
+  image.rect(x + 12, y + 18, 42, 29, outline);
+  image.rect(x + 18, y + 10, 30, 39, outline);
+  image.rect(x + 8, y + 25, 48, 16, outline);
+  image.rect(x + 15, y + 20, 36, 23, canopy);
+  image.rect(x + 21, y + 13, 24, 32, canopy);
+  image.rect(x + 11, y + 28, 42, 10, canopy);
+  image.rect(x + 21, y + 18, 12, 8, canopyLight);
+  image.rect(x + 14, y + 29, 8, 6, canopyLight);
+  image.rect(x + 39, y + 27, 9, 7, canopyLight);
+  blossoms.forEach(({ offsetX, offsetY, color }) => {
+    image.rect(x + offsetX, y + offsetY, 4, 4, color);
+    image.rect(x + offsetX + 1, y + offsetY - 2, 2, 8, color);
+  });
+}
+
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -503,7 +552,7 @@ function drawTownBackground() {
 }
 
 function drawTownAtlas() {
-  const image = canvas(512, 256);
+  const image = canvas(512, 512);
   const colors = Object.fromEntries(
     Object.entries(palette).map(([key, value]) => [key, rgba(value)]),
   );
@@ -540,6 +589,42 @@ function drawTownAtlas() {
     'recipe-board',
     'fortune-banner',
     'market-crate',
+    'fortune-roof-left',
+    'fortune-roof-right',
+    'fortune-base-left',
+    'fortune-base-right',
+    'greenhouse-left',
+    'greenhouse-right',
+    'greenhouse-door',
+    'market-awning-red',
+    'market-awning-yellow',
+    'market-awning-blue',
+    'arcade-roof-left',
+    'arcade-roof-right',
+    'arcade-base-left',
+    'arcade-base-right',
+    'workshop-left',
+    'workshop-right',
+    'workshop-yard',
+    'gate-roof-left',
+    'gate-roof-right',
+    'bridge-rail',
+    'tree-green',
+    'tree-blossom',
+    'tree-canopy-foreground',
+    'hedge-horizontal',
+    'hedge-vertical',
+    'fence-horizontal',
+    'fence-vertical',
+    'lamp-post',
+    'bench-detailed',
+    'flower-bed',
+    'planter',
+    'market-crates-detailed',
+    'dock',
+    'plaza-fountain-detailed',
+    'plaza-banner',
+    'shoreline-reeds',
   ];
   names.forEach((name, index) => {
     const { x, y } = tile(index);
@@ -626,6 +711,339 @@ function drawTownAtlas() {
       image.rect(x + 20, y + 21, 8, 12, colors.coral);
       image.rect(x + 32, y + 18, 9, 15, colors.sunflower);
       image.rect(x + 42, y + 24, 7, 9, colors.mossLight);
+    } else if (name === 'fortune-roof-left') {
+      roof(
+        image,
+        x + 3,
+        y + 13,
+        61,
+        24,
+        'left',
+        colors.coral,
+        colors.ink,
+        colors.sunflower,
+      );
+      image.rect(x + 4, y + 37, 60, 5, colors.ink);
+      image.rect(x + 11, y + 42, 8, 10, colors.sunflower);
+    } else if (name === 'fortune-roof-right') {
+      roof(
+        image,
+        x,
+        y + 13,
+        61,
+        24,
+        'right',
+        colors.coral,
+        colors.ink,
+        colors.sunflower,
+      );
+      image.rect(x, y + 37, 60, 5, colors.ink);
+      image.rect(x + 44, y + 42, 8, 10, colors.sunflower);
+      image.rect(x + 27, y + 8, 10, 7, colors.white);
+    } else if (name === 'fortune-base-left') {
+      image.rect(x + 5, y + 7, 59, 51, colors.ink);
+      image.rect(x + 9, y + 11, 55, 43, colors.cream);
+      image.rect(x + 18, y + 18, 31, 23, colors.ink);
+      image.rect(x + 21, y + 21, 25, 17, colors.skyLight);
+      image.rect(x + 9, y + 46, 55, 8, colors.wood);
+      image.rect(x + 54, y + 12, 5, 33, colors.coral);
+    } else if (name === 'fortune-base-right') {
+      image.rect(x, y + 7, 59, 51, colors.ink);
+      image.rect(x, y + 11, 55, 43, colors.cream);
+      image.rect(x + 10, y + 18, 25, 36, colors.ink);
+      image.rect(x + 14, y + 22, 17, 32, colors.coral);
+      image.rect(x + 18, y + 30, 4, 4, colors.sunflower);
+      image.rect(x, y + 46, 55, 8, colors.wood);
+      image.rect(x + 42, y + 18, 9, 15, colors.sunflower);
+    } else if (name === 'greenhouse-left') {
+      image.rect(x + 5, y + 24, 59, 34, colors.ink);
+      image.rect(x + 9, y + 27, 55, 27, colors.skyLight);
+      image.rect(x + 19, y + 17, 45, 9, colors.cream);
+      image.rect(x + 27, y + 10, 37, 8, colors.sky);
+      image.rect(x + 18, y + 25, 4, 31, colors.cream);
+      image.rect(x + 40, y + 25, 4, 31, colors.cream);
+      image.rect(x + 10, y + 43, 54, 4, colors.cream);
+      image.rect(x + 13, y + 48, 8, 6, colors.mossLight);
+    } else if (name === 'greenhouse-right') {
+      image.rect(x, y + 24, 59, 34, colors.ink);
+      image.rect(x, y + 27, 55, 27, colors.skyLight);
+      image.rect(x, y + 17, 45, 9, colors.cream);
+      image.rect(x, y + 10, 37, 8, colors.sky);
+      image.rect(x + 18, y + 25, 4, 31, colors.cream);
+      image.rect(x + 40, y + 25, 4, 31, colors.cream);
+      image.rect(x, y + 43, 54, 4, colors.cream);
+      image.rect(x + 35, y + 48, 10, 6, colors.moss);
+    } else if (name === 'greenhouse-door') {
+      image.rect(x + 14, y + 8, 36, 50, colors.ink);
+      image.rect(x + 18, y + 12, 28, 42, colors.skyLight);
+      image.rect(x + 30, y + 12, 4, 42, colors.cream);
+      image.rect(x + 18, y + 30, 28, 4, colors.cream);
+      image.rect(x + 39, y + 37, 4, 4, colors.sunflower);
+      image.rect(x + 10, y + 54, 44, 5, colors.moss);
+    } else if (name.startsWith('market-awning-')) {
+      const awningColor = name.endsWith('red')
+        ? colors.coral
+        : name.endsWith('yellow')
+          ? colors.sunflower
+          : colors.sky;
+      image.rect(x + 4, y + 16, 56, 7, colors.ink);
+      checker(image, x + 7, y + 19, 50, 16, awningColor, colors.cream, 7);
+      image.rect(x + 7, y + 35, 50, 4, colors.ink);
+      for (let offset = 7; offset < 57; offset += 14) {
+        image.rect(x + offset, y + 39, 8, 7, awningColor);
+        image.rect(x + offset + 2, y + 46, 4, 3, colors.ink);
+      }
+    } else if (name === 'arcade-roof-left') {
+      roof(
+        image,
+        x + 4,
+        y + 14,
+        60,
+        25,
+        'left',
+        rgba('#4F5F83'),
+        colors.ink,
+        colors.sky,
+      );
+      image.rect(x + 11, y + 37, 53, 6, colors.ink);
+      image.rect(x + 32, y + 21, 28, 8, colors.sunflower);
+    } else if (name === 'arcade-roof-right') {
+      roof(
+        image,
+        x,
+        y + 14,
+        60,
+        25,
+        'right',
+        rgba('#4F5F83'),
+        colors.ink,
+        colors.sky,
+      );
+      image.rect(x, y + 37, 53, 6, colors.ink);
+      image.rect(x + 4, y + 21, 28, 8, colors.sunflower);
+      image.rect(x + 14, y + 23, 4, 4, colors.coral);
+    } else if (name === 'arcade-base-left') {
+      image.rect(x + 5, y + 7, 59, 51, colors.ink);
+      image.rect(x + 9, y + 11, 55, 43, rgba('#4F5F83'));
+      image.rect(x + 16, y + 18, 40, 23, colors.ink);
+      image.rect(x + 20, y + 22, 32, 15, colors.sky);
+      image.rect(x + 24, y + 25, 24, 9, colors.skyLight);
+      image.rect(x + 9, y + 48, 55, 6, colors.coral);
+    } else if (name === 'arcade-base-right') {
+      image.rect(x, y + 7, 59, 51, colors.ink);
+      image.rect(x, y + 11, 55, 43, rgba('#4F5F83'));
+      image.rect(x + 10, y + 18, 25, 36, colors.ink);
+      image.rect(x + 14, y + 22, 17, 32, colors.shadow);
+      image.rect(x + 17, y + 27, 11, 11, colors.skyLight);
+      image.rect(x + 40, y + 23, 7, 7, colors.sunflower);
+      image.rect(x + 47, y + 33, 5, 5, colors.coral);
+    } else if (name === 'workshop-left') {
+      image.rect(x + 5, y + 11, 59, 47, colors.ink);
+      image.rect(x + 9, y + 15, 55, 39, colors.wood);
+      for (let plank = 19; plank < 54; plank += 10)
+        image.rect(x + 9, y + plank, 55, 2, colors.woodLight);
+      image.rect(x + 17, y + 21, 28, 22, colors.ink);
+      image.rect(x + 21, y + 25, 20, 14, colors.skyLight);
+      image.rect(x + 52, y + 16, 5, 37, colors.shadow);
+    } else if (name === 'workshop-right') {
+      image.rect(x, y + 11, 59, 47, colors.ink);
+      image.rect(x, y + 15, 55, 39, colors.wood);
+      for (let plank = 19; plank < 54; plank += 10)
+        image.rect(x, y + plank, 55, 2, colors.woodLight);
+      image.rect(x + 9, y + 20, 27, 34, colors.ink);
+      image.rect(x + 13, y + 24, 19, 30, colors.shadow);
+      image.rect(x + 18, y + 37, 4, 4, colors.sunflower);
+      image.rect(x + 40, y + 23, 11, 20, colors.cream);
+    } else if (name === 'workshop-yard') {
+      image.rect(x + 5, y + 45, 54, 10, colors.ink);
+      image.rect(x + 8, y + 48, 48, 5, colors.wood);
+      image.rect(x + 12, y + 22, 8, 25, colors.shadow);
+      image.rect(x + 18, y + 18, 27, 7, colors.ink);
+      image.rect(x + 22, y + 20, 19, 3, colors.sunflower);
+      image.rect(x + 39, y + 25, 6, 22, colors.coral);
+      image.rect(x + 46, y + 35, 9, 12, colors.cream);
+    } else if (name === 'gate-roof-left') {
+      roof(
+        image,
+        x + 3,
+        y + 12,
+        61,
+        24,
+        'left',
+        colors.coral,
+        colors.ink,
+        colors.woodLight,
+      );
+      image.rect(x + 4, y + 36, 60, 6, colors.ink);
+      image.rect(x + 11, y + 42, 8, 14, colors.wood);
+    } else if (name === 'gate-roof-right') {
+      roof(
+        image,
+        x,
+        y + 12,
+        61,
+        24,
+        'right',
+        colors.coral,
+        colors.ink,
+        colors.woodLight,
+      );
+      image.rect(x, y + 36, 60, 6, colors.ink);
+      image.rect(x + 45, y + 42, 8, 14, colors.wood);
+      image.rect(x + 23, y + 19, 12, 8, colors.sunflower);
+    } else if (name === 'bridge-rail') {
+      image.rect(x, y + 37, 64, 5, colors.ink);
+      image.rect(x, y + 33, 64, 4, colors.woodLight);
+      image.rect(x, y + 27, 64, 5, colors.ink);
+      image.rect(x, y + 29, 64, 3, colors.wood);
+      for (let post = 3; post < 64; post += 18) {
+        image.rect(x + post, y + 20, 7, 27, colors.ink);
+        image.rect(x + post + 2, y + 23, 3, 21, colors.wood);
+      }
+    } else if (name === 'tree-green') {
+      tree(
+        image,
+        x,
+        y,
+        colors.moss,
+        colors.mossLight,
+        colors.wood,
+        colors.ink,
+        [],
+      );
+    } else if (name === 'tree-blossom') {
+      tree(
+        image,
+        x,
+        y,
+        colors.mossLight,
+        colors.cream,
+        colors.wood,
+        colors.ink,
+        [
+          { offsetX: 18, offsetY: 22, color: colors.coral },
+          { offsetX: 31, offsetY: 16, color: colors.white },
+          { offsetX: 40, offsetY: 29, color: colors.coral },
+        ],
+      );
+    } else if (name === 'tree-canopy-foreground') {
+      image.rect(x + 3, y + 26, 58, 27, colors.ink);
+      image.rect(x + 8, y + 20, 48, 35, colors.ink);
+      image.rect(x + 13, y + 15, 38, 40, colors.moss);
+      image.rect(x + 6, y + 31, 52, 18, colors.moss);
+      image.rect(x + 16, y + 20, 14, 8, colors.mossLight);
+      image.rect(x + 39, y + 28, 11, 7, colors.mossLight);
+      image.rect(x + 20, y + 47, 30, 5, colors.shadow);
+    } else if (name === 'hedge-horizontal') {
+      image.rect(x, y + 23, 64, 25, colors.ink);
+      image.rect(x, y + 27, 64, 17, colors.moss);
+      checker(image, x, y + 29, 64, 11, colors.moss, colors.mossLight, 8);
+    } else if (name === 'hedge-vertical') {
+      image.rect(x + 20, y, 25, 64, colors.ink);
+      image.rect(x + 24, y, 17, 64, colors.moss);
+      checker(image, x + 27, y, 11, 64, colors.moss, colors.mossLight, 8);
+    } else if (name === 'fence-horizontal') {
+      image.rect(x, y + 28, 64, 7, colors.ink);
+      image.rect(x, y + 30, 64, 3, colors.cream);
+      image.rect(x, y + 43, 64, 7, colors.ink);
+      image.rect(x, y + 45, 64, 3, colors.cream);
+      for (let post = 3; post < 64; post += 20) {
+        image.rect(x + post, y + 20, 8, 36, colors.ink);
+        image.rect(x + post + 2, y + 23, 4, 30, colors.woodLight);
+      }
+    } else if (name === 'fence-vertical') {
+      image.rect(x + 20, y, 7, 64, colors.ink);
+      image.rect(x + 22, y, 3, 64, colors.cream);
+      image.rect(x + 38, y, 7, 64, colors.ink);
+      image.rect(x + 40, y, 3, 64, colors.cream);
+      for (let post = 3; post < 64; post += 20) {
+        image.rect(x + 16, y + post, 34, 8, colors.ink);
+        image.rect(x + 19, y + post + 2, 28, 4, colors.woodLight);
+      }
+    } else if (name === 'lamp-post') {
+      image.rect(x + 27, y + 25, 10, 32, colors.ink);
+      image.rect(x + 30, y + 27, 4, 27, colors.wood);
+      image.rect(x + 18, y + 9, 28, 22, colors.ink);
+      image.rect(x + 22, y + 13, 20, 14, colors.sunflower);
+      image.rect(x + 25, y + 15, 14, 10, colors.white);
+      image.rect(x + 21, y + 5, 22, 7, colors.coral);
+      image.rect(x + 20, y + 54, 24, 5, colors.ink);
+    } else if (name === 'bench-detailed') {
+      image.rect(x + 7, y + 25, 50, 8, colors.ink);
+      image.rect(x + 10, y + 27, 44, 4, colors.woodLight);
+      image.rect(x + 5, y + 37, 54, 10, colors.ink);
+      image.rect(x + 9, y + 40, 46, 4, colors.wood);
+      image.rect(x + 11, y + 47, 7, 11, colors.ink);
+      image.rect(x + 46, y + 47, 7, 11, colors.ink);
+      image.rect(x + 13, y + 49, 3, 7, colors.shadow);
+      image.rect(x + 48, y + 49, 3, 7, colors.shadow);
+    } else if (name === 'flower-bed') {
+      image.rect(x + 4, y + 39, 56, 18, colors.ink);
+      image.rect(x + 8, y + 43, 48, 10, colors.wood);
+      for (let flower = 10; flower < 56; flower += 9) {
+        image.rect(x + flower + 1, y + 27, 2, 14, colors.moss);
+        image.rect(
+          x + flower - 1,
+          y + 24 + (flower % 3),
+          6,
+          6,
+          flower % 2 === 0 ? colors.coral : colors.sunflower,
+        );
+        image.rect(x + flower + 1, y + 26 + (flower % 3), 2, 2, colors.white);
+      }
+    } else if (name === 'planter') {
+      image.rect(x + 13, y + 32, 38, 23, colors.ink);
+      image.rect(x + 17, y + 36, 30, 15, colors.coral);
+      image.rect(x + 10, y + 29, 44, 8, colors.ink);
+      image.rect(x + 14, y + 31, 36, 3, colors.cream);
+      image.rect(x + 29, y + 13, 6, 17, colors.moss);
+      image.rect(x + 20, y + 16, 14, 9, colors.mossLight);
+      image.rect(x + 34, y + 10, 13, 11, colors.moss);
+    } else if (name === 'market-crates-detailed') {
+      image.rect(x + 5, y + 35, 32, 23, colors.ink);
+      image.rect(x + 9, y + 39, 24, 15, colors.wood);
+      image.rect(x + 27, y + 27, 32, 31, colors.ink);
+      image.rect(x + 31, y + 31, 24, 23, colors.woodLight);
+      image.rect(x + 13, y + 43, 16, 3, colors.cream);
+      image.rect(x + 35, y + 36, 16, 3, colors.shadow);
+      image.rect(x + 35, y + 43, 6, 6, colors.coral);
+      image.rect(x + 45, y + 42, 6, 7, colors.sunflower);
+    } else if (name === 'dock') {
+      image.rect(x, y + 23, 64, 32, colors.ink);
+      image.rect(x, y + 27, 64, 24, colors.wood);
+      for (let plank = 2; plank < 64; plank += 12)
+        image.rect(x + plank, y + 27, 3, 24, colors.woodLight);
+      image.rect(x, y + 37, 64, 3, colors.shadow);
+      image.rect(x + 7, y + 17, 8, 39, colors.ink);
+      image.rect(x + 49, y + 17, 8, 39, colors.ink);
+    } else if (name === 'plaza-fountain-detailed') {
+      image.rect(x + 6, y + 43, 52, 13, colors.ink);
+      image.rect(x + 10, y + 40, 44, 12, colors.cream);
+      image.rect(x + 16, y + 31, 32, 12, colors.ink);
+      image.rect(x + 20, y + 29, 24, 10, colors.sky);
+      image.rect(x + 28, y + 13, 8, 18, colors.ink);
+      image.rect(x + 30, y + 10, 4, 19, colors.skyLight);
+      image.rect(x + 22, y + 17, 5, 12, colors.sky);
+      image.rect(x + 37, y + 19, 5, 11, colors.sky);
+      image.rect(x + 25, y + 8, 14, 5, colors.white);
+    } else if (name === 'plaza-banner') {
+      image.rect(x + 11, y + 7, 7, 51, colors.ink);
+      image.rect(x + 14, y + 9, 3, 46, colors.wood);
+      image.rect(x + 17, y + 11, 36, 35, colors.ink);
+      image.rect(x + 20, y + 14, 30, 28, colors.coral);
+      image.rect(x + 26, y + 19, 18, 14, colors.sunflower);
+      image.rect(x + 31, y + 23, 8, 7, colors.white);
+      image.rect(x + 20, y + 42, 8, 7, colors.ink);
+      image.rect(x + 42, y + 42, 8, 7, colors.ink);
+    } else if (name === 'shoreline-reeds') {
+      image.rect(x, y + 52, 64, 7, colors.sky);
+      image.rect(x, y + 57, 64, 3, colors.skyLight);
+      for (let reed = 5; reed < 62; reed += 8) {
+        const height = 18 + (reed % 4) * 3;
+        image.rect(x + reed, y + 52 - height, 3, height, colors.moss);
+        image.rect(x + reed - 3, y + 40 - (reed % 5), 6, 3, colors.mossLight);
+        image.rect(x + reed + 1, y + 29 + (reed % 7), 3, 7, colors.wood);
+      }
     } else {
       image.rect(x + 7, y + 16, 50, 42, colors.ink);
       image.rect(
@@ -773,7 +1191,7 @@ writeFileSync(
         image: 'town-atlas.png',
         frame: { width: 64, height: 64 },
         columns: 8,
-        rows: 4,
+        rows: 8,
         frames: Object.fromEntries(
           townAtlas.names.map((name, index) => [name, index]),
         ),
