@@ -68,6 +68,8 @@ export const FortunePoolSchema = z
 export type FortuneRecord = z.infer<typeof FortuneRecordSchema>;
 export type FortunePool = z.infer<typeof FortunePoolSchema>;
 
+const VALIDATED_FORTUNE_POOLS = new WeakSet<object>();
+
 function deepFreeze<T>(value: T): Readonly<T> {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
@@ -78,7 +80,9 @@ function deepFreeze<T>(value: T): Readonly<T> {
 
 export function loadFortunePool(value: unknown): Readonly<FortunePool> {
   const parsed = FortunePoolSchema.parse(structuredClone(value));
-  return deepFreeze(parsed);
+  const frozen = deepFreeze(parsed);
+  VALIDATED_FORTUNE_POOLS.add(frozen);
+  return frozen;
 }
 
 export const FORTUNE_POOL = loadFortunePool(fortunePoolSource);
@@ -99,7 +103,9 @@ export function selectFortune(
   if (!Number.isSafeInteger(seed)) {
     throw new TypeError('Fortune seed must be a safe integer');
   }
-  const parsedPool = FortunePoolSchema.parse(pool);
+  const parsedPool = VALIDATED_FORTUNE_POOLS.has(pool)
+    ? pool
+    : loadFortunePool(pool);
   return parsedPool.fortunes[hashSeed(seed) % parsedPool.fortunes.length]!;
 }
 
@@ -122,44 +128,57 @@ export const FortuneInterpretationSchema = z
 
 export type FortuneInterpretation = z.infer<typeof FortuneInterpretationSchema>;
 
-// This is a deliberately bounded guard, not a general-purpose moderation system.
-const RISK_CATEGORY_PATTERNS = [
-  /\b(?:health|worsen|diagnos\w*|disease|cancer|medical|treatment|doctor|heart attack|cardiac arrest|sick|illness)\b/i,
-  /\b(?:money|rich|bitcoin|finances?|bankrupt\w*|investment|profit|stock|lottery|financial)\b/i,
-  /\b(?:police|arrest|crime|court|lawsuit|lawyer|legal|prison)\b/i,
-  /\b(?:hurricane|disaster|earthquake|flood|destroy your home)\b/i,
-  /\b(?:death|deadly|die|fatal|doom)\b/i,
-  /(?:\u5065\u5eb7|\u6076\u5316|\u751f\u75c5|\u75be\u75c5|\u764c|\u533b\u7597|\u6cbb\u7597|\u533b\u751f|\u5fc3\u810f\u75c5)/u,
-  /(?:\u94b1|\u6bd4\u7279\u5e01|\u53d1\u8d22|\u7834\u4ea7|\u6295\u8d44|\u80a1\u7968|\u5f69\u7968|\u8d22\u52a1)/u,
-  /(?:\u8b66\u5bdf|\u902e\u6355|\u72af\u7f6a|\u6cd5\u9662|\u8bc9\u8bbc|\u5f8b\u5e08|\u6cd5\u5f8b|\u76d1\u72f1)/u,
-  /(?:\u98d3\u98ce|\u707e\u96be|\u5730\u9707|\u6d2a\u6c34|\u6467\u6bc1)/u,
-  /(?:\u6b7b\u4ea1|\u53bb\u4e16|\u5fc5\u6b7b|\u81f4\u547d)/u,
-] as const;
-const PREDICTION_MARKERS = [
-  /\b(?:will|tomorrow|next week|soon|expect|guarantee\w*|inevitable|destined|going to|shall)\b/i,
-  /^\s*(?:buy|sell|invest|bet|avoid|prepare for)\b/i,
-  /(?:\u4f1a|\u5c06|\u660e\u5929|\u4e0b\u5468|\u5f88\u5feb|\u4e00\u5b9a|\u5fc5\u7136|\u6ce8\u5b9a|\u9a6c\u4e0a|\u5373\u5c06)/u,
-  /^\s*(?:\u7acb\u5373|\u9a6c\u4e0a)?(?:\u4e70\u5165|\u8d2d\u4e70|\u5356\u51fa|\u6295\u8d44|\u4e0b\u6ce8|\u907f\u5f00)/u,
-] as const;
-const NON_PREDICTIVE_CONTEXT = [
-  /\blegal pad\b/i,
-  /\bask (?:a )?doctor\b/i,
-  /\b(?:does not|doesn't|do not)\s+predict\s+[^,.!?;]+/i,
-  /\bnot a prediction of\s+[^,.!?;]+/i,
-  /\b(?:years? ago|last year|historical|old story|described)\b/i,
-  /\bmetaphor(?:s|ical)?\b/i,
-  /(?:\u8fd9\u4e0d\u662f\u5bf9[^\uff0c\u3002]+\u7684\u9884\u6d4b|\u53bb\u5e74|\u5386\u53f2|\u6545\u4e8b.*\u63cf\u5199|\u9690\u55bb)/u,
-] as const;
+export interface AllowedFortuneInterpretation {
+  readonly key: string;
+  readonly theme: z.infer<typeof FortuneThemeSchema>;
+  readonly text: string;
+}
 
-function hasPredictiveRisk(text: string): boolean {
-  const riskText = NON_PREDICTIVE_CONTEXT.reduce(
-    (remaining, pattern) => remaining.replace(pattern, ''),
-    text,
-  );
-  return (
-    RISK_CATEGORY_PATTERNS.some((pattern) => pattern.test(riskText)) &&
-    PREDICTION_MARKERS.some((pattern) => pattern.test(riskText))
-  );
+const THEME_INTERPRETATION_TEMPLATES: Record<
+  z.infer<typeof FortuneThemeSchema>,
+  readonly [string, string]
+> = {
+  friendship: [
+    'Make space for a kind conversation and listen with care.',
+    '\u7ed9\u4e00\u6b21\u53cb\u5584\u7684\u4ea4\u8c08\u7559\u51fa\u7a7a\u95f4\uff0c\u4e5f\u7528\u5fc3\u503e\u542c\u3002',
+  ],
+  creativity: [
+    'Give one small creative idea time to take shape.',
+    '\u7ed9\u4e00\u4e2a\u5c0f\u5c0f\u7684\u521b\u610f\u4e00\u4e9b\u6210\u5f62\u7684\u65f6\u95f4\u3002',
+  ],
+  rest: [
+    'Choose a quiet pause and return with renewed attention.',
+    '\u9009\u62e9\u7247\u523b\u5b89\u9759\u4f11\u606f\uff0c\u518d\u5e26\u7740\u66f4\u4e13\u6ce8\u7684\u5fc3\u60c5\u56de\u6765\u3002',
+  ],
+  exploration: [
+    'Notice one inviting path and explore it with curiosity.',
+    '\u7559\u610f\u4e00\u6761\u6709\u8da3\u7684\u8def\uff0c\u5e26\u7740\u597d\u5947\u5fc3\u53bb\u63a2\u7d22\u3002',
+  ],
+  patience: [
+    'Let the next step become clear without rushing it.',
+    '\u4e0d\u5fc5\u50ac\u4fc3\uff0c\u8ba9\u4e0b\u4e00\u6b65\u6162\u6162\u53d8\u5f97\u6e05\u6670\u3002',
+  ],
+  cooperation: [
+    'Share the next small task and make room for each voice.',
+    '\u5206\u4eab\u4e0b\u4e00\u4e2a\u5c0f\u4efb\u52a1\uff0c\u4e5f\u7ed9\u6bcf\u4e2a\u4eba\u8868\u8fbe\u7684\u7a7a\u95f4\u3002',
+  ],
+};
+
+export function allowedFortuneInterpretations(
+  fortune: Readonly<FortuneRecord>,
+): readonly Readonly<AllowedFortuneInterpretation>[] {
+  const parsed = FortuneRecordSchema.parse(fortune);
+  const entries: AllowedFortuneInterpretation[] = [
+    { key: 'base', theme: parsed.themes[0]!, text: parsed.baseInterpretation },
+  ];
+  for (const theme of parsed.themes) {
+    const [english, chinese] = THEME_INTERPRETATION_TEMPLATES[theme];
+    entries.push(
+      { key: `${theme}-en`, theme, text: english },
+      { key: `${theme}-zh`, theme, text: chinese },
+    );
+  }
+  return deepFreeze(entries);
 }
 
 export function validateFortuneInterpretation(
@@ -173,14 +192,18 @@ export function validateFortuneInterpretation(
       'Interpretation fortune ID does not match selected fortune',
     );
   }
-  if (parsed.themes.some((theme) => !parsedFortune.themes.includes(theme))) {
+  const entry = allowedFortuneInterpretations(parsedFortune).find(
+    ({ text }) => text === parsed.text,
+  );
+  const expectedThemes =
+    entry?.key === 'base' ? parsedFortune.themes : entry ? [entry.theme] : [];
+  if (
+    entry === undefined ||
+    parsed.themes.length !== expectedThemes.length ||
+    !parsed.themes.every((theme) => expectedThemes.includes(theme))
+  ) {
     throw new TypeError(
-      'Interpretation contains a theme not allowed by the selected fortune',
-    );
-  }
-  if (hasPredictiveRisk(parsed.text)) {
-    throw new TypeError(
-      'Interpretation contains prohibited prediction language',
+      'Interpretation text and themes must match the finite allowlist',
     );
   }
   return deepFreeze(parsed);
@@ -538,9 +561,10 @@ function resultEvents(
   context: ActivityContext,
 ): readonly TownEvent[] {
   try {
-    validateParticipants(state, context, true);
+    validateParticipants(state, context, false);
     validateDeterministicState(state);
     if (state.phase !== 'revealed' && state.phase !== 'completed') return [];
+    validateParticipants(state, context, true);
     const fortuneCursor = context.emittedResults.filter(
       ({ factKey }) =>
         factKey === 'fortune-revealed' || factKey === 'fortune-interpreted',

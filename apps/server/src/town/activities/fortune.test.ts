@@ -1,4 +1,4 @@
-import { TownEventSchema } from '@cat-house/shared';
+import { IdentifierSchema, TownEventSchema } from '@cat-house/shared';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,6 +7,7 @@ import {
   type EmittedActivityResult,
 } from '../activity-registry.js';
 import {
+  allowedFortuneInterpretations,
   createFallbackFortuneInterpretation,
   FORTUNE_ACTIVITY_DEFINITION,
   FORTUNE_POOL,
@@ -343,6 +344,30 @@ describe('fortune activity transitions', () => {
 });
 
 describe('fortune interpretation safety', () => {
+  it('publishes a finite frozen allowlist with unique stable keys and text', () => {
+    const fortune = FORTUNE_POOL.fortunes[0]!;
+    const entries = allowedFortuneInterpretations(fortune);
+    expect(entries).toHaveLength(1 + fortune.themes.length * 2);
+    expect(Object.isFrozen(entries)).toBe(true);
+    expect(new Set(entries.map(({ key }) => key)).size).toBe(entries.length);
+    expect(new Set(entries.map(({ text }) => text)).size).toBe(entries.length);
+    for (const entry of entries) {
+      expect(IdentifierSchema.parse(entry.key)).toBe(entry.key);
+      expect(Object.isFrozen(entry)).toBe(true);
+      expect(entry.text).not.toMatch(
+        /(?:bankrupt|heart attack|arrest|hurricane|\u7834\u4ea7|\u5fc3\u810f\u75c5|\u902e\u6355|\u98d3\u98ce)/iu,
+      );
+      const themes = entry.key === 'base' ? fortune.themes : [entry.theme];
+      expect(
+        validateFortuneInterpretation(fortune, {
+          fortuneId: fortune.id,
+          text: entry.text,
+          themes,
+        }).text,
+      ).toBe(entry.text);
+    }
+  });
+
   it('creates a deterministic valid fallback from the authored interpretation', () => {
     const fortune = FORTUNE_POOL.fortunes[0]!;
     const first = createFallbackFortuneInterpretation(fortune);
@@ -399,7 +424,7 @@ describe('fortune interpretation safety', () => {
         text,
         themes: fortune.themes,
       }),
-    ).toThrow(/prohibited/i);
+    ).toThrow(/allowlist/i);
   });
 
   it.each([
@@ -427,7 +452,7 @@ describe('fortune interpretation safety', () => {
         text,
         themes: fortune.themes,
       }),
-    ).toThrow(/prohibited/i);
+    ).toThrow(/allowlist/i);
   });
 
   it.each([
@@ -439,16 +464,23 @@ describe('fortune interpretation safety', () => {
     '这不是对破产的预测。',
     '去年的故事描写了洪水。',
   ])(
-    'allows benign, historical, metaphorical, or negated context: %s',
+    'rejects arbitrary benign, historical, metaphorical, or negated text: %s',
     (text) => {
       const fortune = FORTUNE_POOL.fortunes[0]!;
-      expect(
+      expect(() =>
         validateFortuneInterpretation(fortune, {
           fortuneId: fortune.id,
           text,
           themes: fortune.themes,
-        }).text,
-      ).toBe(text);
+        }),
+      ).toThrow(/allowlist/i);
+      expect(
+        safeFortuneInterpretation(fortune, {
+          fortuneId: fortune.id,
+          text,
+          themes: fortune.themes,
+        }),
+      ).toEqual(createFallbackFortuneInterpretation(fortune));
     },
   );
 
@@ -465,6 +497,29 @@ describe('fortune interpretation safety', () => {
 });
 
 describe('fortune result events', () => {
+  it('returns no facts for valid subset rosters in non-emitting phases', () => {
+    const activityContext = context();
+    const idle =
+      FORTUNE_ACTIVITY_DEFINITION.createInitialState(activityContext);
+    const gathering = FORTUNE_ACTIVITY_DEFINITION.transition(
+      idle,
+      { type: 'ask', question: 'What should we notice?' },
+      activityContext,
+    );
+    const drawing: FortuneState = {
+      version: 'fortune-state.v1',
+      phase: 'drawing',
+      participantIds: ['resident-1'],
+      seed: 42,
+      fortuneId: 'soft-pillow',
+    };
+    for (const state of [idle, gathering, drawing]) {
+      expect(
+        FORTUNE_ACTIVITY_DEFINITION.resultEvents(state, activityContext),
+      ).toEqual([]);
+    }
+  });
+
   it('emits two distinct sequential facts from completed state with an empty cursor', () => {
     const { activityContext, revealed } = advanceToRevealed();
     const fortune = FORTUNE_POOL.fortunes.find(
@@ -714,11 +769,11 @@ describe('fortune result events', () => {
         context({ participantIds: ['resident-1'] }),
       ),
     ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
-    expect(() =>
+    expect(
       FORTUNE_ACTIVITY_DEFINITION.resultEvents(
         { ...drawing, participantIds: ['resident-1'] },
         activityContext,
       ),
-    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    ).toEqual([]);
   });
 });
