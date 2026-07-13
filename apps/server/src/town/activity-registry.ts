@@ -398,7 +398,9 @@ export class TownActivityRegistry {
       const events = sourceEvents.map((event) =>
         TownEventSchema.parse(structuredClone(event)),
       );
-      const ids = new Set<string>();
+      const ids = new Set(
+        parsedContext.emittedResults.map(({ eventId }) => eventId),
+      );
       for (const [index, event] of events.entries()) {
         const expectedSequence = parsedContext.lastEventSequence + index + 1;
         const expectedBaseVersion = parsedContext.baseVersion + index;

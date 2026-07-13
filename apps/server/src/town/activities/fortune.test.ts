@@ -1,9 +1,10 @@
 import { TownEventSchema } from '@cat-house/shared';
 import { describe, expect, it } from 'vitest';
 
-import type {
-  ActivityContext,
-  EmittedActivityResult,
+import {
+  TownActivityRegistry,
+  type ActivityContext,
+  type EmittedActivityResult,
 } from '../activity-registry.js';
 import {
   createFallbackFortuneInterpretation,
@@ -570,6 +571,39 @@ describe('fortune result events', () => {
         fortuneId: revealed.fortuneId,
       },
     });
+
+    const registry = new TownActivityRegistry().register(
+      FORTUNE_ACTIVITY_DEFINITION,
+    );
+    const persistedReveal = persistedResult(
+      'fortune-revealed',
+      'fortune.revealed',
+      'event-1',
+    );
+    expect(() =>
+      registry.resultEvents(
+        'fortune-draw',
+        completed,
+        context({
+          baseVersion: 11,
+          lastEventSequence: 21,
+          emittedResults: [persistedReveal],
+          nextEventId: () => 'event-1',
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+    expect(
+      registry.resultEvents(
+        'fortune-draw',
+        completed,
+        context({
+          baseVersion: 11,
+          lastEventSequence: 21,
+          emittedResults: [persistedReveal],
+          nextEventId: () => 'event-2',
+        }),
+      )[0]?.id,
+    ).toBe('event-2');
     expect(
       FORTUNE_ACTIVITY_DEFINITION.resultEvents(
         completed,
