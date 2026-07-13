@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { TOWN_ZONES } from '../town/town-navigation';
+import { TOWN_ZONES, TownNavigation } from '../town/town-navigation';
 import {
   DEFAULT_TOWN_SPAWNS,
   TOWN_CAMERA_LAYOUT,
@@ -10,11 +10,25 @@ import { TownSceneState } from './town-scene-state';
 
 describe('TownScene state', () => {
   it('provides five stable resident spawn positions', () => {
+    expect(DEFAULT_TOWN_SPAWNS).toEqual({
+      'player-cat': { x: 10, y: 9 },
+      'resident-mikan': { x: 10, y: 6 },
+      'resident-huihui': { x: 4, y: 3 },
+      'resident-lanlan': { x: 15, y: 4 },
+      'resident-doubao': { x: 15, y: 7 },
+    });
     expect(Object.keys(DEFAULT_TOWN_SPAWNS)).toHaveLength(5);
     expect(
       new Set(Object.values(DEFAULT_TOWN_SPAWNS).map(({ x, y }) => `${x}:${y}`))
         .size,
     ).toBe(5);
+  });
+
+  it('keeps every default resident spawn walkable', () => {
+    const navigation = new TownNavigation();
+    for (const position of Object.values(DEFAULT_TOWN_SPAWNS)) {
+      expect(navigation.isBlocked(position)).toBe(false);
+    }
   });
 
   it('provides a distinct visual presentation for every town zone', () => {
