@@ -99,7 +99,6 @@ function assertStandalonePlayEncounter(
   projection: TownProjection,
   event: Extract<TownEvent, { type: 'residents.played' }>,
 ): void {
-  requireFreshActivityId(projection, event.payload.activityInstanceId);
   if (event.participantIds.length !== 2) {
     domainError('standalone play requires exactly two participants');
   }

@@ -197,7 +197,7 @@ describe('reduceTownEvent', () => {
       input,
       event(
         'residents.played',
-        { activityInstanceId: 'standalone-play-1', standalone: true },
+        { standalone: true, interactionId: 'standalone-play-1' },
         {
           id: 'standalone-play-1',
           participants: ['player', 'huihui'],
@@ -226,7 +226,7 @@ describe('reduceTownEvent', () => {
           projection(),
           event(
             'residents.played',
-            { activityInstanceId: 'standalone-play-1', standalone: true },
+            { standalone: true, interactionId: 'standalone-play-1' },
             {
               id: 'standalone-play-1',
               participants: [...participantIds],
@@ -246,7 +246,7 @@ describe('reduceTownEvent', () => {
   it('rejects a standalone play encounter without a zone', () => {
     const withoutZone = event(
       'residents.played',
-      { activityInstanceId: 'standalone-play-1', standalone: true },
+      { standalone: true, interactionId: 'standalone-play-1' },
       {
         id: 'standalone-play-1',
         participants: ['player', 'huihui'],
@@ -278,7 +278,7 @@ describe('reduceTownEvent', () => {
         input,
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1', standalone: true },
+          { standalone: true, interactionId: 'standalone-play-1' },
           {
             id: 'standalone-play-1',
             participants: ['player', 'huihui'],
@@ -300,7 +300,7 @@ describe('reduceTownEvent', () => {
         projection(),
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1', standalone: true },
+          { standalone: true, interactionId: 'standalone-play-1' },
           {
             id: 'standalone-play-1',
             participants: ['player', 'missing'],
@@ -316,7 +316,7 @@ describe('reduceTownEvent', () => {
     );
   });
 
-  it('rejects a standalone play encounter ID that collides with a live modification', () => {
+  it('allows a standalone interaction ID to overlap a live modification ID', () => {
     const input = TownProjectionSchema.parse({
       ...projection(),
       modifications: [
@@ -331,12 +331,12 @@ describe('reduceTownEvent', () => {
       ],
     });
 
-    expect(() =>
+    expect(
       reduceTownEvent(
         input,
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1', standalone: true },
+          { standalone: true, interactionId: 'standalone-play-1' },
           {
             id: 'standalone-play-1',
             participants: ['player', 'huihui'],
@@ -344,12 +344,7 @@ describe('reduceTownEvent', () => {
           },
         ),
       ),
-    ).toThrow(
-      expect.objectContaining({
-        code: 'conflict',
-        message: expect.stringMatching(/already exists/i),
-      }),
-    );
+    ).toEqual({ ...input, version: 3, lastEventSequence: 5 });
   });
 
   it('rejects a standalone play encounter when a participant is in another zone', () => {
@@ -367,7 +362,7 @@ describe('reduceTownEvent', () => {
         input,
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1', standalone: true },
+          { standalone: true, interactionId: 'standalone-play-1' },
           {
             id: 'standalone-play-1',
             participants: ['player', 'huihui'],
@@ -394,27 +389,27 @@ describe('reduceTownEvent', () => {
         zoneId: 'plaza',
         participantIds: ['player', 'player'],
         timestamp,
-        payload: { activityInstanceId: 'standalone-play-1', standalone: true },
+        payload: { standalone: true, interactionId: 'standalone-play-1' },
       }),
     ).toThrow();
   });
 
-  it('rejects a standalone play interaction ID colliding with a live activity', () => {
+  it('allows a standalone interaction ID to overlap a live activity ID', () => {
     const input = projectionWithActivity({
       id: 'standalone-play-1',
       activityId: 'social-play',
       zoneId: 'plaza',
-      participantIds: ['player', 'huihui'],
+      participantIds: ['doubao'],
       version: 1,
       state: {},
     });
 
-    expect(() =>
+    expect(
       reduceTownEvent(
         input,
         event(
           'residents.played',
-          { activityInstanceId: 'standalone-play-1', standalone: true },
+          { standalone: true, interactionId: 'standalone-play-1' },
           {
             id: 'standalone-play-1',
             participants: ['player', 'huihui'],
@@ -422,12 +417,7 @@ describe('reduceTownEvent', () => {
           },
         ),
       ),
-    ).toThrow(
-      expect.objectContaining({
-        code: 'conflict',
-        message: expect.stringMatching(/already exists/i),
-      }),
-    );
+    ).toEqual({ ...input, version: 3, lastEventSequence: 5 });
   });
 
   it('keeps legacy played events dependent on a live social-play activity', () => {

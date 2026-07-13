@@ -246,7 +246,7 @@ const event = <T extends TownEventType, S extends z.ZodTypeAny>(type: T, payload
 const ResidentIdPayload = z.object({ residentId: IdentifierSchema }).strict();
 const ResidentsPlayedPayload = z.union([
   z.object({ activityInstanceId: IdentifierSchema }).strict(),
-  z.object({ activityInstanceId: IdentifierSchema, standalone: z.literal(true) }).strict(),
+  z.object({ standalone: z.literal(true), interactionId: IdentifierSchema }).strict(),
 ]);
 const FortunePayload = z.object({ activityInstanceId: IdentifierSchema }).strict();
 const BuildPayload = z.object({ modificationId: IdentifierSchema, recipeId: IdentifierSchema, plotId: IdentifierSchema }).strict();
@@ -302,8 +302,8 @@ export const TownEventSchema = z.discriminatedUnion('type', [
     if (!sameIdentifierSet(value.participantIds, value.payload.activity.participantIds)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity start participants must exactly match the activity', path: ['participantIds'] });
     if (value.zoneId !== value.payload.activity.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity start zone must match the activity', path: ['zoneId'] });
   }
-  if (value.type === 'residents.played' && 'standalone' in value.payload && value.payload.activityInstanceId !== value.id) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play interaction ID must match the event ID', path: ['payload', 'activityInstanceId'] });
+  if (value.type === 'residents.played' && 'standalone' in value.payload && value.payload.interactionId !== value.id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play interaction ID must match the event ID', path: ['payload', 'interactionId'] });
   }
 });
 export type TownEvent = z.infer<typeof TownEventSchema>;
@@ -527,6 +527,7 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
   const completedOccupiedCells = new Set<string>();
   const startedActivityIds = new Set<string>();
   const previouslyReferencedActivityIds = new Set<string>();
+  const standaloneInteractionIds = new Set<string>();
   const closedActivityIds = new Map<string, number>();
   const unresolvedStallVisits = new Map<string, number[]>();
   const fortuneFacts = new Map<string, {
@@ -555,10 +556,10 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
       startedActivityIds.add(startedActivity.id);
     }
     if (townEvent.type === 'residents.played') {
-      const interactionId = townEvent.payload.activityInstanceId;
       if ('standalone' in townEvent.payload) {
-        if (activities.has(interactionId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play interaction collides with a final activity', path: ['events', index, 'payload', 'activityInstanceId'] });
-        if (finalModifications.has(interactionId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play interaction collides with a final modification', path: ['events', index, 'payload', 'activityInstanceId'] });
+        const { interactionId } = townEvent.payload;
+        if (standaloneInteractionIds.has(interactionId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate standalone interaction ID', path: ['events', index, 'payload', 'interactionId'] });
+        standaloneInteractionIds.add(interactionId);
         if (townEvent.participantIds.length !== 2) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play requires exactly two participants', path: ['events', index, 'participantIds'] });
         if (townEvent.zoneId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play requires an event zone', path: ['events', index, 'zoneId'] });
         townEvent.participantIds.forEach((residentId, participantIndex) => {
@@ -568,18 +569,19 @@ function validateProjectionEventsResponse(value: { projection: z.infer<typeof To
           if (resident.zoneId !== townEvent.zoneId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Standalone play participants must match the event zone', path: ['events', index, 'participantIds', participantIndex] });
         });
       } else {
-        const lifecycle = activityLifecycles.get(interactionId);
-        if (closedActivityIds.has(interactionId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
+        const { activityInstanceId } = townEvent.payload;
+        const lifecycle = activityLifecycles.get(activityInstanceId);
+        if (closedActivityIds.has(activityInstanceId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
         if (lifecycle?.closed) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Activity transition occurs after closure', path: ['events', index, 'payload', 'activityInstanceId'] });
-        const activity = lifecycle?.activity ?? activities.get(interactionId);
+        const activity = lifecycle?.activity ?? activities.get(activityInstanceId);
         if (!activity) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Event references an unknown activity', path: ['events', index, 'payload', 'activityInstanceId'] });
         else {
           validateExactActivityTransition(activity, townEvent, index, context);
           if (activity.activityId !== 'social-play') context.addIssue({ code: z.ZodIssueCode.custom, message: 'Played event requires social-play', path: ['events', index, 'payload', 'activityInstanceId'] });
           if (lifecycle) activity.version += 1;
         }
+        previouslyReferencedActivityIds.add(activityInstanceId);
       }
-      previouslyReferencedActivityIds.add(interactionId);
     }
     if (townEvent.type === 'fortune.revealed' || townEvent.type === 'fortune.interpreted') {
       const { activityInstanceId, fortuneId } = townEvent.payload;

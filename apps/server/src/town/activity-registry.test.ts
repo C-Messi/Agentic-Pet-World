@@ -75,6 +75,7 @@ function definition(
     ],
     validateResultEvent: (event, _state, activityContext) =>
       event.type === 'residents.played' &&
+      !('standalone' in event.payload) &&
       event.payload.activityInstanceId === activityContext.activityInstanceId &&
       event.zoneId === activityContext.zoneId &&
       event.participantIds.length === activityContext.participantIds.length &&
