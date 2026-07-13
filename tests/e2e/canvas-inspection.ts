@@ -1,8 +1,5 @@
 import type { Page } from '@playwright/test';
 
-// Five resident walk frames vary by 1,117 pixels; keep limited headroom below layout-scale changes.
-export const MAX_TOWN_SPRITE_FRAME_DIFF = 1_500;
-
 export interface PixelBounds {
   minX: number;
   minY: number;

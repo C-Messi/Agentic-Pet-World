@@ -5,11 +5,9 @@ import {
   type Page,
 } from '@playwright/test';
 
-import {
-  inspectCanvas,
-  inspectTownCanvas,
-  MAX_TOWN_SPRITE_FRAME_DIFF,
-} from './canvas-inspection';
+import { inspectCanvas, inspectTownCanvas } from './canvas-inspection';
+
+const MAX_TOWN_SPRITE_FRAME_DIFF = 1_500;
 
 interface Metadata {
   primaryApiUrl: string;

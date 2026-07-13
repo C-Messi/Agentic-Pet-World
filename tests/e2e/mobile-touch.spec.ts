@@ -4,8 +4,9 @@ import {
   hasRenderedRoom,
   inspectCanvas,
   inspectTownCanvas,
-  MAX_TOWN_SPRITE_FRAME_DIFF,
 } from './canvas-inspection';
+
+const MAX_TOWN_SPRITE_FRAME_DIFF = 1_500;
 
 test('touch user can command the cat and operate the memory drawer', async ({
   page,
@@ -98,6 +99,33 @@ test('touch user can release and follow a town resident without obscuring the vi
       (contentBounds.maxX - contentBounds.minX + 1) * contentScale,
       (contentBounds.maxY - contentBounds.minY + 1) * contentScale,
     );
+    const interactiveControls = [
+      ...topButtons.map((button, index) => ({
+        label: `top:${button.getAttribute('aria-label') ?? index}`,
+        rect: button.getBoundingClientRect(),
+      })),
+      { label: 'top:follow-control', rect: followControlRect },
+      ...townToolButtons.map((button, index) => ({
+        label: `town-tool:${button.getAttribute('aria-label') ?? index}`,
+        rect: button.getBoundingClientRect(),
+      })),
+    ];
+    const overlappingControlPairs: string[] = [];
+    for (let first = 0; first < interactiveControls.length; first += 1) {
+      for (
+        let second = first + 1;
+        second < interactiveControls.length;
+        second += 1
+      ) {
+        const firstControl = interactiveControls[first]!;
+        const secondControl = interactiveControls[second]!;
+        if (overlaps(firstControl.rect, secondControl.rect)) {
+          overlappingControlPairs.push(
+            `${firstControl.label} <> ${secondControl.label}`,
+          );
+        }
+      }
+    }
     return {
       canvas: {
         left: rect.left,
@@ -131,6 +159,8 @@ test('touch user can release and follow a town resident without obscuring the vi
         townControlsRect,
         townToolStripRect,
       ),
+      interactiveControlLabels: interactiveControls.map(({ label }) => label),
+      overlappingControlPairs,
       controlsWithinViewport: [
         townControlsRect,
         townToolStripRect,
@@ -157,6 +187,19 @@ test('touch user can release and follow a town resident without obscuring the vi
   expect(layout.townToolButtonOverlapsCommandDock).toBe(false);
   expect(layout.followOverlapsTopButton).toBe(false);
   expect(layout.townControlsOverlapTownToolStrip).toBe(false);
+  expect(layout.interactiveControlLabels).toEqual([
+    'top:让桌宠回家',
+    'top:Open conversation',
+    'top:Open memories',
+    'top:Open settings',
+    'top:Mute sound',
+    'top:follow-control',
+    'town-tool:小镇动态',
+    'town-tool:居民关系',
+    'town-tool:旅行见闻',
+    'town-tool:个性展摊',
+  ]);
+  expect(layout.overlappingControlPairs).toEqual([]);
   expect(layout.controlsWithinViewport).toBe(true);
   expect(['pixelated', 'crisp-edges']).toContain(layout.imageRendering);
   for (const control of layout.controls) {
