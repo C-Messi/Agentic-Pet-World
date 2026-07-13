@@ -459,4 +459,21 @@ describe('fortune result events', () => {
       }),
     ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
   });
+
+  it('ignores unrelated cursor types but rejects an invalid fortune prefix', () => {
+    const { activityContext, revealed } = advanceToRevealed();
+    expect(
+      FORTUNE_ACTIVITY_DEFINITION.resultEvents(revealed, {
+        ...activityContext,
+        emittedEventTypes: ['stall.opened'],
+      }).map(({ type }) => type),
+    ).toEqual(['fortune.revealed']);
+
+    expect(() =>
+      FORTUNE_ACTIVITY_DEFINITION.resultEvents(revealed, {
+        ...activityContext,
+        emittedEventTypes: ['stall.opened', 'fortune.interpreted'],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-result-event' }));
+  });
 });

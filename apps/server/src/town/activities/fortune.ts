@@ -431,6 +431,14 @@ function resultEvents(
   if (state.phase !== 'revealed' && state.phase !== 'completed') return [];
   try {
     const emitted = new Set(context.emittedEventTypes);
+    if (
+      emitted.has('fortune.interpreted') &&
+      !emitted.has('fortune.revealed')
+    ) {
+      throw new TypeError(
+        'A fortune interpretation cannot be emitted before its reveal',
+      );
+    }
     const fortune = findFortune(state.fortuneId);
     const facts: Array<
       | {

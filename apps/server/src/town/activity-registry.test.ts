@@ -186,11 +186,59 @@ describe('TownActivityRegistry execution boundary', () => {
     context({ zoneId: 'garden' }),
     context({ now: 'today' }),
     context({ emittedEventTypes: ['fortune.revealed', 'fortune.revealed'] }),
-    context({ emittedEventTypes: ['resident.spoke' as 'fortune.revealed'] }),
-    context({ emittedEventTypes: ['fortune.interpreted'] }),
+    context({ emittedEventTypes: ['not.an-event' as 'fortune.revealed'] }),
   ])('rejects invalid activity context (%s)', (value) => {
     const registry = new TownActivityRegistry().register(definition());
     expect(() => registry.createInitialState('counter', value)).toThrowError(
+      expect.objectContaining({ code: 'invalid-context' }),
+    );
+  });
+
+  it('keeps the emission cursor domain-neutral for other activities', () => {
+    let received: ActivityContext | undefined;
+    const registry = new TownActivityRegistry().register(
+      definition({
+        createInitialState: (activityContext) => {
+          received = activityContext;
+          return { count: 0 };
+        },
+      }),
+    );
+
+    registry.createInitialState(
+      'counter',
+      context({ emittedEventTypes: ['stall.opened'] }),
+    );
+
+    expect(received?.emittedEventTypes).toEqual(['stall.opened']);
+    expect(Object.isFrozen(received?.emittedEventTypes)).toBe(true);
+  });
+
+  it.each([
+    null,
+    { ...context(), participantIds: null },
+    { ...context(), participantIds: 'resident-1' },
+    { ...context(), emittedEventTypes: null },
+    { ...context(), emittedEventTypes: {} },
+    { ...context(), nextEventId: null },
+    { ...context(), nextEventId: 'event-1' },
+  ])('translates malformed raw context to a typed error: %s', (raw) => {
+    const registry = new TownActivityRegistry().register(definition());
+    expect(() =>
+      registry.createInitialState('counter', raw as ActivityContext),
+    ).toThrowError(expect.objectContaining({ code: 'invalid-context' }));
+  });
+
+  it('translates a throwing context getter to a typed error', () => {
+    const registry = new TownActivityRegistry().register(definition());
+    const raw = context() as ActivityContext & Record<string, unknown>;
+    Object.defineProperty(raw, 'participantIds', {
+      get: () => {
+        throw new TypeError('participant getter failed');
+      },
+    });
+
+    expect(() => registry.createInitialState('counter', raw)).toThrowError(
       expect.objectContaining({ code: 'invalid-context' }),
     );
   });
@@ -205,14 +253,19 @@ describe('TownActivityRegistry execution boundary', () => {
         },
       }),
     );
-    const source = context({ emittedEventTypes: ['fortune.revealed'] });
+    const source = context({
+      emittedEventTypes: ['stall.opened', 'resident.spoke'],
+    });
     const callback = source.nextEventId;
 
     registry.createInitialState('counter', source);
     source.emittedEventTypes = [];
     source.nextEventId = () => 'changed-event';
 
-    expect(received?.emittedEventTypes).toEqual(['fortune.revealed']);
+    expect(received?.emittedEventTypes).toEqual([
+      'stall.opened',
+      'resident.spoke',
+    ]);
     expect(received?.nextEventId).not.toBe(callback);
     expect(Object.isFrozen(received)).toBe(true);
     expect(Object.isFrozen(received?.emittedEventTypes)).toBe(true);

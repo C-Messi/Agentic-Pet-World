@@ -1,8 +1,10 @@
 import {
   IdentifierSchema,
   TownEventSchema,
+  TownEventTypeSchema,
   TownZoneIdSchema,
   type TownEvent,
+  type TownEventType,
   type TownZoneId,
 } from '@cat-house/shared';
 import { z } from 'zod';
@@ -10,8 +12,6 @@ import { z } from 'zod';
 export interface TownActivityTool {
   type: string;
 }
-
-export type FortuneResultEventType = 'fortune.revealed' | 'fortune.interpreted';
 
 export interface ActivityContext {
   sessionId: string;
@@ -21,7 +21,7 @@ export interface ActivityContext {
   participantIds: readonly string[];
   zoneId: TownZoneId;
   now: string;
-  emittedEventTypes: readonly FortuneResultEventType[];
+  emittedEventTypes: readonly TownEventType[];
   nextEventId(): string;
 }
 
@@ -93,8 +93,8 @@ const ContextSchema = z
     zoneId: TownZoneIdSchema,
     now: z.string().datetime({ offset: true }),
     emittedEventTypes: z
-      .array(z.enum(['fortune.revealed', 'fortune.interpreted']))
-      .max(2),
+      .array(TownEventTypeSchema)
+      .max(TownEventTypeSchema.options.length),
     nextEventId: z.custom<() => string>((value) => typeof value === 'function'),
   })
   .strict();
@@ -118,17 +118,15 @@ function registryError(
 }
 
 function parseContext(
-  value: ActivityContext,
+  value: unknown,
   definition: AnyDefinition,
 ): ActivityContext {
-  const sourceNextEventId = value.nextEventId;
-  const nextEventId = Object.freeze(() => sourceNextEventId());
-  const result = ContextSchema.safeParse({
-    ...value,
-    participantIds: [...value.participantIds],
-    emittedEventTypes: [...value.emittedEventTypes],
-    nextEventId,
-  });
+  let result: ReturnType<typeof ContextSchema.safeParse>;
+  try {
+    result = ContextSchema.safeParse(value);
+  } catch (error) {
+    throw registryError('invalid-context', 'Invalid activity context', error);
+  }
   if (!result.success) {
     throw registryError(
       'invalid-context',
@@ -151,17 +149,6 @@ function parseContext(
       'Emitted activity event types must be unique',
     );
   }
-  if (
-    (parsed.emittedEventTypes.length >= 1 &&
-      parsed.emittedEventTypes[0] !== 'fortune.revealed') ||
-    (parsed.emittedEventTypes.length === 2 &&
-      parsed.emittedEventTypes[1] !== 'fortune.interpreted')
-  ) {
-    throw registryError(
-      'invalid-context',
-      'Emitted activity event types must follow semantic order',
-    );
-  }
   if (parsed.participantIds.length > definition.capacity) {
     throw registryError('invalid-context', 'Activity capacity exceeded');
   }
@@ -171,7 +158,14 @@ function parseContext(
       'Activity context zone does not match definition',
     );
   }
-  return deepFreeze(parsed) as ActivityContext;
+  const sourceNextEventId = parsed.nextEventId;
+  const context = {
+    ...parsed,
+    participantIds: [...parsed.participantIds],
+    emittedEventTypes: [...parsed.emittedEventTypes],
+    nextEventId: Object.freeze(() => sourceNextEventId()),
+  };
+  return deepFreeze(context) as ActivityContext;
 }
 
 function parseState(
