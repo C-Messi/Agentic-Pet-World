@@ -63,6 +63,7 @@ test('pet town vertical slice persists activities, recovery, and a sourced first
   page,
   request,
 }, testInfo) => {
+  testInfo.snapshotSuffix = '';
   const pageErrors: string[] = [];
   page.on('pageerror', (error) =>
     pageErrors.push(error.stack ?? error.message),

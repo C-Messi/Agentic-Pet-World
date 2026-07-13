@@ -6,7 +6,7 @@ import {
   inspectTownCanvas,
 } from './canvas-inspection';
 
-const MAX_TOWN_SPRITE_FRAME_DIFF = 1_500;
+const MAX_TOWN_SPRITE_FRAME_DIFF = 500;
 
 test('touch user can command the cat and operate the memory drawer', async ({
   page,
@@ -40,14 +40,35 @@ test('touch user can command the cat and operate the memory drawer', async ({
 test('touch user can release and follow a town resident without obscuring the viewport', async ({
   page,
 }, testInfo) => {
+  testInfo.snapshotSuffix = '';
   await page.goto('/');
   await expect(page.getByRole('status')).toContainText('Ready', {
     timeout: 15_000,
   });
+  await expect.poll(() => inspectCanvas(page).then(hasRenderedRoom)).toBe(true);
+  const room = await inspectTownCanvas(page);
+  const releaseResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/town/release'),
+  );
   await page.getByRole('button', { name: '放桌宠去小镇' }).tap();
+  expect((await releaseResponse).status()).toBe(200);
   await expect(page.getByLabel('跟随桌宠')).toBeVisible();
   await page.getByLabel('跟随桌宠').selectOption('resident-mikan');
   await expect(page.getByLabel('跟随桌宠')).toHaveValue('resident-mikan');
+  await expect
+    .poll(() => inspectTownCanvas(page).then((result) => result.hash))
+    .not.toBe(room.hash);
+  await expect
+    .poll(async () => {
+      const rendered = await inspectTownCanvas(page);
+      return (
+        rendered.opaqueRatio > 0.95 &&
+        rendered.variedRatio > 0.55 &&
+        rendered.distinctColorBuckets > 28 &&
+        rendered.variedBounds !== null
+      );
+    })
+    .toBe(true);
   const canvas = await inspectTownCanvas(page);
   expect(canvas.opaqueRatio).toBeGreaterThan(0.95);
   expect(canvas.variedRatio).toBeGreaterThan(0.55);
@@ -126,6 +147,9 @@ test('touch user can release and follow a town resident without obscuring the vi
         }
       }
     }
+    const safeContentOverlappingControls = interactiveControls
+      .filter(({ rect: controlRect }) => overlaps(safeContent, controlRect))
+      .map(({ label }) => label);
     return {
       canvas: {
         left: rect.left,
@@ -161,6 +185,7 @@ test('touch user can release and follow a town resident without obscuring the vi
       ),
       interactiveControlLabels: interactiveControls.map(({ label }) => label),
       overlappingControlPairs,
+      safeContentOverlappingControls,
       controlsWithinViewport: [
         townControlsRect,
         townToolStripRect,
@@ -200,6 +225,7 @@ test('touch user can release and follow a town resident without obscuring the vi
     'town-tool:个性展摊',
   ]);
   expect(layout.overlappingControlPairs).toEqual([]);
+  expect(layout.safeContentOverlappingControls).toEqual([]);
   expect(layout.controlsWithinViewport).toBe(true);
   expect(['pixelated', 'crisp-edges']).toContain(layout.imageRendering);
   for (const control of layout.controls) {
