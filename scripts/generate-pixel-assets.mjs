@@ -34,13 +34,28 @@ function rgba(hex, alpha = 255) {
 
 function canvas(width, height) {
   const pixels = new Uint8Array(width * height * 4);
+  let writeBoundary;
   return {
     width,
     height,
     pixels,
     pixel(x, y, color) {
-      if (x < 0 || y < 0 || x >= width || y >= height) return;
-      const offset = (Math.floor(y) * width + Math.floor(x)) * 4;
+      const pixelX = Math.floor(x);
+      const pixelY = Math.floor(y);
+      if (
+        writeBoundary &&
+        (pixelX < writeBoundary.x ||
+          pixelY < writeBoundary.y ||
+          pixelX >= writeBoundary.x + writeBoundary.width ||
+          pixelY >= writeBoundary.y + writeBoundary.height)
+      ) {
+        throw new Error(
+          `Town frame "${writeBoundary.name}" attempted to draw outside its cell at ${pixelX},${pixelY}`,
+        );
+      }
+      if (pixelX < 0 || pixelY < 0 || pixelX >= width || pixelY >= height)
+        return;
+      const offset = (pixelY * width + pixelX) * 4;
       pixels.set(color, offset);
     },
     rect(x, y, rectangleWidth, rectangleHeight, color) {
@@ -54,6 +69,20 @@ function canvas(width, height) {
       this.rect(x, y + rectangleHeight - 1, rectangleWidth, 1, color);
       this.rect(x, y, 1, rectangleHeight, color);
       this.rect(x + rectangleWidth - 1, y, 1, rectangleHeight, color);
+    },
+    beginWriteBoundary(x, y, boundaryWidth, boundaryHeight, name) {
+      if (writeBoundary)
+        throw new Error('Canvas write boundary is already active');
+      writeBoundary = {
+        x,
+        y,
+        width: boundaryWidth,
+        height: boundaryHeight,
+        name,
+      };
+    },
+    endWriteBoundary() {
+      writeBoundary = undefined;
     },
   };
 }
@@ -105,25 +134,6 @@ function tree(image, x, y, canopy, canopyLight, trunk, outline, blossoms) {
     image.rect(x + offsetX, y + offsetY, 4, 4, color);
     image.rect(x + offsetX + 1, y + offsetY - 2, 2, 8, color);
   });
-}
-
-function assertFrameOwnership(image, before, x, y, width, height, name) {
-  for (let py = 0; py < image.height; py += 1) {
-    for (let px = 0; px < image.width; px += 1) {
-      if (px >= x && px < x + width && py >= y && py < y + height) continue;
-      const offset = (py * image.width + px) * 4;
-      if (
-        image.pixels[offset] !== before[offset] ||
-        image.pixels[offset + 1] !== before[offset + 1] ||
-        image.pixels[offset + 2] !== before[offset + 2] ||
-        image.pixels[offset + 3] !== before[offset + 3]
-      ) {
-        throw new Error(
-          `Town frame "${name}" drew outside its cell at ${px},${py}`,
-        );
-      }
-    }
-  }
 }
 
 const crcTable = Array.from({ length: 256 }, (_, index) => {
@@ -647,7 +657,7 @@ function drawTownAtlas() {
   ];
   names.forEach((name, index) => {
     const { x, y } = tile(index);
-    const before = index >= 28 ? image.pixels.slice() : undefined;
+    image.beginWriteBoundary(x, y, 64, 64, name);
     if (name === 'water') image.rect(x, y, 64, 64, colors.sky);
     else if (name === 'path') image.rect(x, y, 64, 64, colors.cream);
     else if (name.startsWith('sign-')) {
@@ -1058,7 +1068,7 @@ function drawTownAtlas() {
     } else if (name === 'shoreline-reeds') {
       image.rect(x, y + 52, 64, 7, colors.sky);
       image.rect(x, y + 57, 64, 3, colors.skyLight);
-      for (let reed = 5; reed < 62; reed += 8) {
+      for (let reed = 5; reed + 4 <= 63; reed += 8) {
         const height = 18 + (reed % 4) * 3;
         image.rect(x + reed, y + 52 - height, 3, height, colors.moss);
         image.rect(x + reed - 3, y + 40 - (reed % 5), 6, 3, colors.mossLight);
@@ -1079,7 +1089,7 @@ function drawTownAtlas() {
       );
       image.rect(x + 20, y + 7, 24, 14, colors.sunflower);
     }
-    if (before) assertFrameOwnership(image, before, x, y, 64, 64, name);
+    image.endWriteBoundary();
   });
   return { image, names };
 }

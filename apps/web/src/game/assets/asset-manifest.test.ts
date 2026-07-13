@@ -85,6 +85,10 @@ const townFrameNames = [
   'shoreline-reeds',
 ] as const;
 
+// Decoded RGBA for the original frame contract (indices 0-27) at b3ab761.
+const originalTownFramesSha256 =
+  '4edf04fda911d61e5f124adc29a9f18103bdf4f2221fa5656cb85b0c5e70aaff';
+
 function pngInfo(path: string) {
   const bytes = readFileSync(resolve(process.cwd(), path));
   const idat: Buffer[] = [];
@@ -96,10 +100,18 @@ function pngInfo(path: string) {
     offset += length + 12;
   }
   const pixels = inflateSync(Buffer.concat(idat));
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  const stride = width * 4 + 1;
+  for (let y = 0; y < height; y += 1) {
+    const filter = pixels[y * stride];
+    if (filter !== 0)
+      throw new Error(`Unsupported PNG filter ${filter} on row ${y}: ${path}`);
+  }
   return {
     signature: bytes.subarray(0, 8).toString('hex'),
-    width: bytes.readUInt32BE(16),
-    height: bytes.readUInt32BE(20),
+    width,
+    height,
     colorType: bytes[25],
     bytes,
     pixels,
@@ -244,6 +256,19 @@ describe('generated pixel asset manifests', () => {
     );
   });
 
+  it('keeps original town frames pixel-identical', () => {
+    const { frame, columns } = townManifest.atlas;
+    const png = pngInfo(`public/assets/town/${townManifest.atlas.image}`);
+    const pixels = Buffer.concat(
+      Array.from({ length: 28 }, (_, frameIndex) =>
+        pngFramePixels(png, frameIndex, frame.width, frame.height, columns),
+      ),
+    );
+    expect(createHash('sha256').update(pixels).digest('hex')).toBe(
+      originalTownFramesSha256,
+    );
+  });
+
   it('draws every appended town frame as distinct bounded pixel art', () => {
     const { frame, columns } = townManifest.atlas;
     const png = pngInfo(`public/assets/town/${townManifest.atlas.image}`);
@@ -284,6 +309,11 @@ describe('generated pixel asset manifests', () => {
       name: 'dock into plaza-fountain-detailed',
       frameIndex: 61,
       region: { x: 0, y: 27, width: 2, height: 24 },
+    },
+    {
+      name: 'shoreline reeds past the atlas edge',
+      frameIndex: 63,
+      region: { x: 63, y: 20, width: 1, height: 32 },
     },
   ])('does not spill $name', ({ frameIndex, region }) => {
     const { frame, columns } = townManifest.atlas;
