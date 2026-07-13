@@ -1,7 +1,15 @@
-import type { Emotion, Interaction, WorldObjectId, WorldSnapshot } from '@cat-house/shared';
+import type {
+  Emotion,
+  Interaction,
+  WorldObjectId,
+  WorldSnapshot,
+} from '@cat-house/shared';
 import Phaser from 'phaser';
 
-import { AmbientBehaviorSystem, type AmbientAction } from '../behavior/ambient-behavior';
+import {
+  AmbientBehaviorSystem,
+  type AmbientAction,
+} from '../behavior/ambient-behavior';
 import { evaluateAmbientBehavior } from '../behavior/ambient-evaluation';
 import { gameBubbles } from '../bubble-coordinator';
 import { gameEvents } from '../events';
@@ -11,7 +19,10 @@ import {
   type MiniGameInteractionLauncher,
 } from '../minigames/open-interaction';
 import { NavigationSystem } from '../navigation/navigation-system';
-import { bottomDepthFromCenter, bottomDepthFromTopLeft } from '../render/render-depth';
+import {
+  bottomDepthFromCenter,
+  bottomDepthFromTopLeft,
+} from '../render/render-depth';
 import {
   ROOM_GRID,
   ROOM_OBJECTS,
@@ -21,7 +32,12 @@ import {
   type GridPoint,
 } from '../world/object-registry';
 import { WorldRuntimeState } from './world-runtime-state';
-import { fitBubbleText, positionBubble, type BubbleLayout, type RenderedTextMeasurement } from './bubble-layout';
+import {
+  fitBubbleText,
+  positionBubble,
+  type BubbleLayout,
+  type RenderedTextMeasurement,
+} from './bubble-layout';
 
 const DISPLAY_SCALE = 2;
 const DISPLAY_TILE_SIZE = ROOM_GRID.tileSize * DISPLAY_SCALE;
@@ -69,19 +85,29 @@ export class WorldScene extends Phaser.Scene {
   });
   private readonly runtime = new WorldRuntimeState();
   private movementCompletion:
-    | { resolve: () => void; reject: (error: Error) => void; removeAbortListener: () => void }
+    | {
+        resolve: () => void;
+        reject: (error: Error) => void;
+        removeAbortListener: () => void;
+      }
     | undefined;
 
-  constructor(private readonly miniGames: MiniGameInteractionLauncher = miniGameRegistry) {
+  constructor(
+    private readonly miniGames: MiniGameInteractionLauncher = miniGameRegistry,
+  ) {
     super(WorldScene.key);
   }
 
   preload(): void {
     this.load.image('room-background', '/assets/room/room-background.png');
-    this.load.spritesheet('room-furniture', '/assets/room/furniture-atlas.png', {
-      frameWidth: 64,
-      frameHeight: 64,
-    });
+    this.load.spritesheet(
+      'room-furniture',
+      '/assets/room/furniture-atlas.png',
+      {
+        frameWidth: 64,
+        frameHeight: 64,
+      },
+    );
     this.load.spritesheet('cat', '/assets/cat/cat-atlas.png', {
       frameWidth: 32,
       frameHeight: 32,
@@ -92,7 +118,11 @@ export class WorldScene extends Phaser.Scene {
     this.resetSceneState();
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
     this.cameras.main.setBackgroundColor('#3a3029');
-    this.add.image(0, 0, 'room-background').setOrigin(0).setScale(DISPLAY_SCALE).setDepth(0);
+    this.add
+      .image(0, 0, 'room-background')
+      .setOrigin(0)
+      .setScale(DISPLAY_SCALE)
+      .setDepth(0);
 
     for (const object of ROOM_OBJECTS) {
       if (object.renderFromAtlas === false) continue;
@@ -121,7 +151,10 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(bottomDepthFromCenter(start.y, 32 * DISPLAY_SCALE));
     this.createBubble();
     this.removeBubbleListener?.();
-    this.removeBubbleListener = gameEvents.on('bubble-changed', this.handleBubbleChanged);
+    this.removeBubbleListener = gameEvents.on(
+      'bubble-changed',
+      this.handleBubbleChanged,
+    );
     this.playEmotion('idle');
     gameEvents.emit('world-ready', this.getSnapshot());
   }
@@ -132,7 +165,11 @@ export class WorldScene extends Phaser.Scene {
       this.advanceMovement(delta);
       return;
     }
-    if (this.runtime.agentBusy || this.time.now < this.runtime.ambientSettledUntil) return;
+    if (
+      this.runtime.agentBusy ||
+      this.time.now < this.runtime.ambientSettledUntil
+    )
+      return;
 
     const action = evaluateAmbientBehavior(
       this.ambient,
@@ -144,11 +181,13 @@ export class WorldScene extends Phaser.Scene {
           blockedObjectIds: new Set(
             ROOM_OBJECTS.filter(
               ({ walkTarget }) =>
-                this.navigation.findPath(catTile, walkTarget, 'ambient').length === 0,
+                this.navigation.findPath(catTile, walkTarget, 'ambient')
+                  .length === 0,
             ).map(({ id }) => id),
           ),
           wanderTiles: WANDER_TILES.filter(
-            (tile) => this.navigation.findPath(catTile, tile, 'ambient').length > 0,
+            (tile) =>
+              this.navigation.findPath(catTile, tile, 'ambient').length > 0,
           ),
         };
       },
@@ -158,16 +197,21 @@ export class WorldScene extends Phaser.Scene {
 
   setAgentBusy(busy: boolean): void {
     this.runtime.agentBusy = busy;
-    if (busy && this.runtime.movementOwner === 'ambient') this.cancelMovement('ambient');
+    if (busy && this.runtime.movementOwner === 'ambient')
+      this.cancelMovement('ambient');
   }
 
   hasActionTarget(targetId: WorldObjectId): boolean {
     return ROOM_OBJECTS.some(({ id }) => id === targetId);
   }
 
-  async moveToActionTarget(targetId: WorldObjectId, signal: AbortSignal): Promise<void> {
+  async moveToActionTarget(
+    targetId: WorldObjectId,
+    signal: AbortSignal,
+  ): Promise<void> {
     throwIfAborted(signal);
-    if (!this.hasActionTarget(targetId)) throw new Error(`Unknown target: ${targetId}`);
+    if (!this.hasActionTarget(targetId))
+      throw new Error(`Unknown target: ${targetId}`);
     if (!this.moveCatTo(targetId, 'agent', 'idle')) {
       throw new Error(`Unable to reach target: ${targetId}`);
     }
@@ -243,24 +287,44 @@ export class WorldScene extends Phaser.Scene {
     return abortableDelay(durationMs, signal);
   }
 
-  async speakForAction(text: string, ownerId: string, signal: AbortSignal): Promise<void> {
+  async speakForAction(
+    text: string,
+    ownerId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     gameBubbles.showAction(ownerId, text);
     try {
-      await abortableDelay(Math.min(2_500, Math.max(600, text.length * 35)), signal);
+      await abortableDelay(
+        Math.min(2_500, Math.max(600, text.length * 35)),
+        signal,
+      );
     } finally {
       gameBubbles.clearOwner(ownerId);
     }
   }
 
-  moveCatTo(targetId: WorldObjectId, owner = 'agent', arrivalEmotion: Emotion = 'idle'): boolean {
+  moveCatTo(
+    targetId: WorldObjectId,
+    owner = 'agent',
+    arrivalEmotion: Emotion = 'idle',
+  ): boolean {
     const target = getWorldObject(targetId);
-    const started = this.moveCatToTile(target.walkTarget, owner, arrivalEmotion);
+    const started = this.moveCatToTile(
+      target.walkTarget,
+      owner,
+      arrivalEmotion,
+    );
     if (started) this.runtime.currentTargetId = targetId;
     return started;
   }
 
-  moveCatToTile(target: GridPoint, owner = 'agent', arrivalEmotion: Emotion = 'idle'): boolean {
-    if (this.runtime.movementOwner && this.runtime.movementOwner !== owner) return false;
+  moveCatToTile(
+    target: GridPoint,
+    owner = 'agent',
+    arrivalEmotion: Emotion = 'idle',
+  ): boolean {
+    if (this.runtime.movementOwner && this.runtime.movementOwner !== owner)
+      return false;
     this.navigation.release(owner);
     if (!this.navigation.reserve(target, owner)) return false;
     const path = this.navigation.findPath(this.getCatTile(), target, owner);
@@ -279,7 +343,8 @@ export class WorldScene extends Phaser.Scene {
   playEmotion(emotion: Emotion): void {
     this.runtime.currentEmotion = emotion;
     const animationKey = `cat-${emotion}`;
-    if (this.cat && this.anims.exists(animationKey)) this.cat.play(animationKey, true);
+    if (this.cat && this.anims.exists(animationKey))
+      this.cat.play(animationKey, true);
   }
 
   getSnapshot(): WorldSnapshot {
@@ -293,7 +358,8 @@ export class WorldScene extends Phaser.Scene {
           },
       emotion: this.runtime.currentEmotion,
     };
-    if (this.runtime.currentTargetId) catState.currentTargetId = this.runtime.currentTargetId;
+    if (this.runtime.currentTargetId)
+      catState.currentTargetId = this.runtime.currentTargetId;
     return {
       cat: catState,
       objects: ROOM_OBJECTS.map((object) => ({
@@ -315,7 +381,10 @@ export class WorldScene extends Phaser.Scene {
       if (this.anims.exists(key)) return;
       this.anims.create({
         key,
-        frames: this.anims.generateFrameNumbers('cat', { start: row * 4, end: row * 4 + 3 }),
+        frames: this.anims.generateFrameNumbers('cat', {
+          start: row * 4,
+          end: row * 4 + 3,
+        }),
         frameRate: state === 'walk' ? 9 : 5,
         repeat: -1,
       });
@@ -329,7 +398,11 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     const pendingEmotion =
-      action.type === 'rest' ? (action.targetId === 'bed' ? 'sleep' : 'sit') : 'curious';
+      action.type === 'rest'
+        ? action.targetId === 'bed'
+          ? 'sleep'
+          : 'sit'
+        : 'curious';
     this.moveCatTo(action.targetId, 'ambient', pendingEmotion);
   }
 
@@ -342,7 +415,12 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     const target = tileCenter(nextTile);
-    const distance = Phaser.Math.Distance.Between(cat.x, cat.y, target.x, target.y);
+    const distance = Phaser.Math.Distance.Between(
+      cat.x,
+      cat.y,
+      target.x,
+      target.y,
+    );
     const step = (96 * delta) / 1_000;
     if (distance <= step) {
       cat.setPosition(target.x, target.y);
@@ -358,7 +436,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private finishMovement(): void {
-    if (this.runtime.movementOwner) this.navigation.release(this.runtime.movementOwner);
+    if (this.runtime.movementOwner)
+      this.navigation.release(this.runtime.movementOwner);
     const wasAmbient = this.runtime.movementOwner === 'ambient';
     this.runtime.path = [];
     this.runtime.movementOwner = null;
@@ -387,7 +466,6 @@ export class WorldScene extends Phaser.Scene {
 
   private resetSceneState(): void {
     this.rejectMovementCompletion(new Error('World scene reset'));
-    this.cat?.stop();
     this.runtime.reset(this.navigation, this.ambient);
   }
 
@@ -405,15 +483,18 @@ export class WorldScene extends Phaser.Scene {
 
   private createBubble(): void {
     this.bubbleBackground = this.add.graphics();
-    this.bubbleText = this.add.text(-98, -59, '', {
-      color: '#2d2528',
-      fontFamily: '"Courier New", monospace',
-      fontSize: '14px',
-      lineSpacing: 2,
-      wordWrap: { width: 196, useAdvancedWrap: false },
-      align: 'center',
-    }).setOrigin(0.5);
-    this.bubble = this.add.container(0, 0, [this.bubbleBackground, this.bubbleText])
+    this.bubbleText = this.add
+      .text(-98, -59, '', {
+        color: '#2d2528',
+        fontFamily: '"Courier New", monospace',
+        fontSize: '14px',
+        lineSpacing: 2,
+        wordWrap: { width: 196, useAdvancedWrap: false },
+        align: 'center',
+      })
+      .setOrigin(0.5);
+    this.bubble = this.add
+      .container(0, 0, [this.bubbleBackground, this.bubbleText])
       .setDepth(20_000)
       .setVisible(false);
   }
@@ -429,7 +510,8 @@ export class WorldScene extends Phaser.Scene {
   }): void => {
     if (!this.bubble || !this.bubbleBackground || !this.bubbleText) return;
     if (!text) {
-      if (ownerId && this.bubbleOwnerId && ownerId !== this.bubbleOwnerId) return;
+      if (ownerId && this.bubbleOwnerId && ownerId !== this.bubbleOwnerId)
+        return;
       this.bubble.setVisible(false);
       this.bubbleOwnerId = undefined;
       this.bubbleLayout = undefined;
@@ -443,21 +525,40 @@ export class WorldScene extends Phaser.Scene {
     this.bubbleBackground.clear();
     this.bubbleBackground.fillStyle(fill, 0.97);
     this.bubbleBackground.lineStyle(3, border, 1);
-    this.bubbleBackground.fillRoundedRect(-layout.width / 2, -layout.height - 14, layout.width, layout.height, 8);
-    this.bubbleBackground.strokeRoundedRect(-layout.width / 2, -layout.height - 14, layout.width, layout.height, 8);
+    this.bubbleBackground.fillRoundedRect(
+      -layout.width / 2,
+      -layout.height - 14,
+      layout.width,
+      layout.height,
+      8,
+    );
+    this.bubbleBackground.strokeRoundedRect(
+      -layout.width / 2,
+      -layout.height - 14,
+      layout.width,
+      layout.height,
+      8,
+    );
     this.bubbleBackground.fillTriangle(-12, -14, 12, -14, 0, 0);
     this.bubbleText
-      .setFixedSize(Math.max(1, layout.width - 16), Math.max(1, layout.height - 12))
+      .setFixedSize(
+        Math.max(1, layout.width - 16),
+        Math.max(1, layout.height - 12),
+      )
       .setPosition(0, -14 - layout.height / 2)
       .setText(layout.text);
     this.bubble.setVisible(true);
     this.positionBubble();
   };
 
-  private readonly measureBubbleText = (text: string): RenderedTextMeasurement => {
+  private readonly measureBubbleText = (
+    text: string,
+  ): RenderedTextMeasurement => {
     if (!this.bubbleText) return { width: 0, height: 0, lines: 0 };
     this.bubbleText.setFixedSize(0, 0);
-    const wrappedLines = text.split('\n').flatMap((line) => this.bubbleText?.getWrappedText(line) ?? []);
+    const wrappedLines = text
+      .split('\n')
+      .flatMap((line) => this.bubbleText?.getWrappedText(line) ?? []);
     this.bubbleText.setText(wrappedLines);
     return {
       width: this.bubbleText.width,
@@ -468,7 +569,10 @@ export class WorldScene extends Phaser.Scene {
 
   private positionBubble(): void {
     if (!this.bubble?.visible || !this.cat || !this.bubbleLayout) return;
-    const position = positionBubble(this.cat, this.bubbleLayout, { width: 768, height: 512 });
+    const position = positionBubble(this.cat, this.bubbleLayout, {
+      width: 768,
+      height: 512,
+    });
     this.bubble.setPosition(position.x, position.y);
   }
 
@@ -487,7 +591,10 @@ export class WorldScene extends Phaser.Scene {
   }
 }
 
-function abortableDelay(durationMs: number, signal: AbortSignal): Promise<void> {
+function abortableDelay(
+  durationMs: number,
+  signal: AbortSignal,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     throwIfAborted(signal);
     const timeoutId = setTimeout(() => {

@@ -18,6 +18,8 @@ export const KNOWLEDGE_DOCUMENT_IDS = [
   'object:toy-basket',
   'object:window',
   'minigame:arcade',
+  'town:world',
+  'town:activities',
 ] as const;
 
 export type KnowledgeDocumentId = (typeof KNOWLEDGE_DOCUMENT_IDS)[number];
@@ -30,6 +32,7 @@ export const MAX_KNOWLEDGE_CONTENT_CHARACTERS = Object.freeze({
   world: 2_000,
   object: 800,
   minigame: 800,
+  town: 1_200,
 });
 export const MAX_TOTAL_KNOWLEDGE_CHARACTERS = 10_000;
 
@@ -50,8 +53,8 @@ const WorldMetadataSchema = BaseMetadataSchema.extend({
 }).strict();
 
 const ObjectMetadataSchema = BaseMetadataSchema.extend({
-  id: z.custom<ObjectKnowledgeDocumentId>((value) =>
-    typeof value === 'string' && value.startsWith('object:'),
+  id: z.custom<ObjectKnowledgeDocumentId>(
+    (value) => typeof value === 'string' && value.startsWith('object:'),
   ),
   kind: z.literal('object'),
   objectId: WorldObjectIdSchema,
@@ -75,11 +78,17 @@ const MinigameMetadataSchema = BaseMetadataSchema.extend({
   availability: z.literal('coming-soon'),
 }).strict();
 
+const TownMetadataSchema = BaseMetadataSchema.extend({
+  id: z.enum(['town:world', 'town:activities']),
+  kind: z.literal('town'),
+}).strict();
+
 const KnowledgeMetadataSchema = z.union([
   CharacterMetadataSchema,
   WorldMetadataSchema,
   ObjectMetadataSchema,
   MinigameMetadataSchema,
+  TownMetadataSchema,
 ]);
 
 export type KnowledgeMetadata = z.infer<typeof KnowledgeMetadataSchema>;
@@ -144,15 +153,17 @@ export class KnowledgeService {
       const frontmatterCharacters = countFrontmatterCharacters(source);
       if (frontmatterCharacters > MAX_KNOWLEDGE_FRONTMATTER_CHARACTERS) {
         throw new Error(
-          'Knowledge frontmatter exceeds '
-            + `${MAX_KNOWLEDGE_FRONTMATTER_CHARACTERS} characters: ${sourcePath}`,
+          'Knowledge frontmatter exceeds ' +
+            `${MAX_KNOWLEDGE_FRONTMATTER_CHARACTERS} characters: ${sourcePath}`,
         );
       }
       const parsed = matter(source);
       const rawId = parsed.data.id;
       const idResult = KnowledgeDocumentIdSchema.safeParse(rawId);
       if (!idResult.success) {
-        throw new Error(`Unknown knowledge document ID in ${sourcePath}: ${String(rawId)}`);
+        throw new Error(
+          `Unknown knowledge document ID in ${sourcePath}: ${String(rawId)}`,
+        );
       }
       if (documents.has(idResult.data)) {
         throw new Error(`Duplicate knowledge document ID: ${idResult.data}`);
@@ -168,11 +179,12 @@ export class KnowledgeService {
       if (content.length === 0) {
         throw new Error(`Knowledge document content is empty: ${sourcePath}`);
       }
-      const contentLimit = MAX_KNOWLEDGE_CONTENT_CHARACTERS[metadataResult.data.kind];
+      const contentLimit =
+        MAX_KNOWLEDGE_CONTENT_CHARACTERS[metadataResult.data.kind];
       if (countCharacters(content) > contentLimit) {
         throw new Error(
-          `Knowledge content exceeds ${contentLimit} characters for `
-            + `${metadataResult.data.kind}: ${sourcePath}`,
+          `Knowledge content exceeds ${contentLimit} characters for ` +
+            `${metadataResult.data.kind}: ${sourcePath}`,
         );
       }
 
@@ -187,7 +199,9 @@ export class KnowledgeService {
       );
     }
 
-    const missingIds = KNOWLEDGE_DOCUMENT_IDS.filter((id) => !documents.has(id));
+    const missingIds = KNOWLEDGE_DOCUMENT_IDS.filter(
+      (id) => !documents.has(id),
+    );
     if (missingIds.length > 0) {
       throw new Error(`Missing knowledge documents: ${missingIds.join(', ')}`);
     }
@@ -229,9 +243,8 @@ function countFrontmatterCharacters(source: string): number {
     return 0;
   }
   const closingDelimiter = source.indexOf('\n---', 3);
-  const frontmatter = closingDelimiter === -1
-    ? source
-    : source.slice(3, closingDelimiter);
+  const frontmatter =
+    closingDelimiter === -1 ? source : source.slice(3, closingDelimiter);
   return countCharacters(frontmatter);
 }
 

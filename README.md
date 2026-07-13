@@ -1,8 +1,8 @@
-# Agent Cat House
+# Agent Cat House And Pet Town
 
 Agent Cat House is a single-player browser demo where a resident pixel-art cat responds to natural-language requests. React provides the application controls, Phaser renders and animates the room, and a Fastify server asks an OpenAI-compatible model for a strictly validated decision before the client executes any action.
 
-The first demo contains one room, persistent conversation and memory, eight interactable objects, and an arcade cabinet that opens a placeholder mini-game scene.
+The demo contains a private room and a persistent pixel-art Pet Town. Releasing the player's pet opens an observer view with four resident pets, follow-camera controls, fortune activities, safe predefined town builds, public personality stalls, and evidence-bound return stories.
 
 ## Controls
 
@@ -12,8 +12,12 @@ The first demo contains one room, persistent conversation and memory, eight inte
 - Toggle sound from the speaker control or the settings drawer.
 - Close a drawer with its close button or Escape.
 - In the arcade placeholder, use its return button, Enter, or Escape to return to the room.
+- Use the map/home button to release the pet to town or recall it. The resident selector changes the camera follow target; there are no direct movement controls.
+- In town, open the history, relationship, experience, and showcase drawers from the observation controls. The single subtitle line reports key events without pausing the simulation.
 
 There are no direct movement controls. The cat navigates and interacts through validated agent actions and local ambient behavior.
+
+The four town residents are deterministic local demo residents. The interface presents them as town residents so the demo reads naturally, but it must not claim that real users are online. There is no multiplayer transport or account discovery in this milestone.
 
 ## Architecture
 
@@ -87,16 +91,43 @@ Authored agent knowledge lives in `apps/server/content/`:
 
 Files use validated YAML frontmatter followed by Markdown. IDs must match the allowlists in `KnowledgeService`, every required document must exist, and per-file/total character budgets are enforced. Restart the server after editing knowledge so it reloads the documents. Chat cannot modify these files.
 
+Pet Town adds `town_events`, `town_projections`, `town_residents`, `town_relationships`, `town_world_modifications`, `town_activity_instances`, `town_outings`, `town_recovery_windows`, `town_experience_cards`, `town_experience_card_events`, and `public_showcase_items` through migration `003-pet-town`. Events are authoritative, projections are compare-and-swap snapshots, and experience cards retain explicit source-event links.
+
+Offline town behavior is bounded catch-up, not a continuously running background process. Reopening an active outing submits one idempotent recovery window based on the last confirmed timestamp. A window returns zero to five events, permits at most one build, never opens or publishes a showcase stall automatically, and replays the same stored result when retried. Return narration and cards are generated only from persisted town events; degraded narration uses the same evidence and does not invent experiences.
+
+Showcase items are personality display only. They have no price, inventory, currency, purchase, or profit fields. An item is available to a stall only after the owner explicitly enters it, checks the public confirmation, and saves it. Do not derive showcase content from private conversation, memories, provider prompts, or hidden owner data.
+
+## Pet Town API
+
+All routes are scoped below `/api/sessions/:id/town` and require an existing session:
+
+| Method and path            | Purpose                                                                |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `GET /`                    | Projection, active outing, public showcase items, and experience cards |
+| `POST /release`            | Release the player pet into town; idempotent while already out         |
+| `POST /recall`             | Recall an interruptible player pet                                     |
+| `POST /advance`            | Validate one to sixteen town intents and append deterministic events   |
+| `POST /event-results`      | Idempotently acknowledge client playback results                       |
+| `POST /recover`            | Execute or replay one bounded offline recovery window                  |
+| `GET /history`             | Recent source events and linked experience cards                       |
+| `GET /relationships`       | Current resident affinity projection                                   |
+| `GET /experience-cards`    | Evidence-bound first-person return cards                               |
+| `GET /showcase`            | Public personality items only                                          |
+| `PUT /showcase/:itemId`    | Explicitly publish a schema-valid showcase item                        |
+| `DELETE /showcase/:itemId` | Remove a published showcase item                                       |
+
+Town intents never accept arbitrary map coordinates or raw event payloads. Builds use only `stone-path`, `flower-patch`, `street-lamp`, `showcase-stall`, and `wish-corner`, and placement must use an allowed plot while preserving reachability to every activity entrance.
+
 ## Scripts
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev` | Build shared types, then run the web and server watchers |
-| `pnpm lint` | Run ESLint in every workspace package |
-| `pnpm typecheck` | Run project-reference TypeScript checks |
-| `pnpm test` | Build shared types and run all Vitest suites |
-| `pnpm build` | Produce the shared, server, and web production builds |
-| `pnpm test:e2e` | Start isolated fake/degraded servers and run Playwright tests |
+| Command          | Purpose                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| `pnpm dev`       | Build shared types, then run the web and server watchers      |
+| `pnpm lint`      | Run ESLint in every workspace package                         |
+| `pnpm typecheck` | Run project-reference TypeScript checks                       |
+| `pnpm test`      | Build shared types and run all Vitest suites                  |
+| `pnpm build`     | Produce the shared, server, and web production builds         |
+| `pnpm test:e2e`  | Start isolated fake/degraded servers and run Playwright tests |
 
 Playwright uses its bundled Chromium by default. Install it once with `pnpm exec playwright install chromium` if it is not already present. To use a locally installed Google Chrome instead, run:
 
@@ -138,6 +169,23 @@ The existing `OpenAICompatibleProvider` should be configured rather than replace
 5. Add the corresponding mini-game knowledge ID/schema entry in `KnowledgeService` and its Markdown file under `apps/server/content/minigames/` when the agent needs authored rules.
 6. Add shared manifest validation, registry, lifecycle, scene, interaction, and E2E tests. Keep mini-game state JSON-compatible and validated at every tool boundary.
 
+### Add A Town Activity
+
+1. Implement a `TownActivityDefinition` in `apps/server/src/town/activities/` with a stable ID, zone, capacity, declared result-event types, bounded Zod state/tool schemas, and a deterministic initial state.
+2. Implement pure `transition`, `resultEvents`, and `validateResultEvent` functions. Result events must use the provided context IDs, versions, sequence, participants, zone, timestamp, and emitted-result cursor; never construct unvalidated free-form events.
+3. Register the definition with `TownActivityRegistry`, add its availability metadata to the simulation allowlist, and expose only a validated high-level intent. Models never receive raw activity tools.
+4. Add lifecycle tests covering invalid tools, capacity, replay/idempotency, event ordering, result validation, and reducer compatibility. Add client playback only for event types that need a visible scene effect.
+
+### Add A Pet
+
+Every generated or authored pet uses the same two versioned contracts before catalog registration:
+
+1. Add a schema-valid `pet-definition.v1` record with a stable pet ID, display name, source, species, sprite ID, three-color palette, bounded personality traits, voice, interests, and public bio. Keep private owner data outside this record.
+2. Produce a `128x224` RGBA PNG atlas: fixed `32x32` frames, exactly four columns, and seven required animation rows in contract order (`idle`, `walk`, `sit`, `sleep`, `happy`, `curious`, `play`). Unused pixels must remain transparent and visible body pixels must stay inside the safe frame bounds.
+3. Add a schema-valid `pet-sprite.v1` `manifest.json` beside `pet-atlas.png`, with the exact atlas size, frame geometry, animation row/frame mapping, alpha mode, and safe body bounds.
+4. Put web assets under `apps/web/public/assets/pets/<sprite-id>/`, register the validated definition in the server and web catalogs, and add its sprite ID to the town scene preload allowlist.
+5. Run the shared pet schema tests and `apps/web/src/game/assets/asset-manifest.test.ts`. Do not register an atlas that fails dimensions, transparency, frame mapping, or manifest validation.
+
 ## Demo Scope
 
-This milestone intentionally has one room, one resident cat, one local player, and an arcade placeholder rather than a complete mini-game. It has no accounts, authentication, voice input/output, multiplayer, vector search, user-authored tools, or production operations layer.
+This milestone intentionally uses one local player pet plus four deterministic town residents and an arcade placeholder rather than real multiplayer or a complete agentic-game catalog. It has no accounts, authentication, voice input/output, networked residents, commerce, vector search, user-authored tools, or production operations layer.

@@ -1,3 +1,9 @@
+---
+id: town:activities
+kind: town
+title: Pet Town Activities
+---
+
 # Town Activities
 
 - `fortune-draw`: invite up to three visible residents to draw and interpret a

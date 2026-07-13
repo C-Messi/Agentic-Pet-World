@@ -1,3 +1,9 @@
+---
+id: town:world
+kind: town
+title: Pet Town
+---
+
 # Pet Town
 
 Pet Town is a shared pixel neighborhood with a plaza, fortune pavilion, market,
