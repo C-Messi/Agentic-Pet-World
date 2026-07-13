@@ -184,6 +184,20 @@ describe('experience card grounding', () => {
       ),
     ).toEqual(['play-1', 'rel-1']);
   });
+  it('rejects unsupported open-prose claims even without reserved keywords', () => {
+    expect(() =>
+      validateExperienceCardDraft(
+        {
+          title: 'A dragon appeared',
+          body: 'I discovered a dragon beneath the arcade.',
+          location: 'arcade-house',
+          participantIds: ['player'],
+          sourceEventIds: ['play-1'],
+        },
+        context,
+      ),
+    ).toThrow();
+  });
 });
 
 describe('TownNarrator', () => {
@@ -220,6 +234,33 @@ describe('TownNarrator', () => {
     expect(
       (await narrator.returnHome({ ...context, events: [moved] })).card,
     ).toBeUndefined();
+  });
+  it('falls back when the provider recap is not first-person', async () => {
+    const narrator = new TownNarrator(
+      { generate: async () => ({ recap: 'We played together.' }) },
+      { nextId: () => 'card-1', now: () => '2026-07-13T10:00:00.000Z' },
+    );
+    expect((await narrator.returnHome(context)).recap).toBe(
+      fallbackReturnHomeRecap(context),
+    );
+  });
+  it('requires the card to cite at least one worthy event', async () => {
+    const narrator = new TownNarrator(
+      {
+        generate: async () => ({
+          recap: 'I walked and played.',
+          card: {
+            title: 'A walk',
+            body: 'I visited garden.',
+            location: 'garden',
+            participantIds: ['player'],
+            sourceEventIds: ['move-1'],
+          },
+        }),
+      },
+      { nextId: () => 'card-1', now: () => '2026-07-13T10:00:00.000Z' },
+    );
+    expect((await narrator.returnHome(context)).card).toBeUndefined();
   });
   it('accepts an event-grounded first-person card and does not mutate frozen input', async () => {
     const frozen = Object.freeze({

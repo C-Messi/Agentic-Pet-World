@@ -86,7 +86,7 @@ function harness(
             type: 'build.completed',
             zoneId: 'build-plots',
             participantIds: ['player'],
-            timestamp: `2026-07-13T0${calls}:00:00.000Z`,
+            timestamp: `2026-07-13T00:0${calls}:00.000Z`,
             payload: {
               modification: {
                 id: `mod-${calls}`,
@@ -108,7 +108,7 @@ function harness(
           type: 'resident.moved',
           zoneId: intent.type === 'visit-zone' ? intent.zoneId : 'garden',
           participantIds: ['player'],
-          timestamp: `2026-07-13T0${calls}:00:00.000Z`,
+          timestamp: `2026-07-13T00:0${calls}:00.000Z`,
           payload: { residentId: 'player', position: { x: calls, y: 0 } },
         }),
       ];
@@ -204,6 +204,69 @@ describe('OfflineRecoveryService', () => {
     ]);
     expect(h.service.recover(input(60)).events).toEqual([]);
     expect(h.calls).toBe(0);
+  });
+  it('treats an invalid selected intent as a bounded failed attempt', () => {
+    const valid: TownIntent = {
+      type: 'visit-zone',
+      actorId: 'player',
+      zoneId: 'garden',
+    };
+    const invalid: TownIntent = {
+      type: 'open-stall',
+      actorId: 'player',
+      stallId: 'stall-1',
+      showcaseItemIds: ['private-item'],
+    };
+    let generated = 0;
+    const service = new OfflineRecoveryService(
+      {
+        candidates: () => [valid, invalid],
+        select: () => invalid,
+        createEvents: () => {
+          generated++;
+          return [];
+        },
+      },
+      {
+        claimRecoveryWindow: () => ({ claimed: true }),
+        loadRecoveryResult: () => undefined,
+        saveRecoveryResult: () => undefined,
+      },
+    );
+    expect(service.recover(input(30)).events).toEqual([]);
+    expect(generated).toBe(0);
+  });
+  it('rejects generated events outside the recovery time window', () => {
+    const valid: TownIntent = {
+      type: 'visit-zone',
+      actorId: 'player',
+      zoneId: 'garden',
+    };
+    const service = new OfflineRecoveryService(
+      {
+        candidates: () => [valid],
+        select: () => valid,
+        createEvents: (state) => [
+          TownEventSchema.parse({
+            id: 'late-event',
+            sessionId: state.sessionId,
+            sequence: state.lastEventSequence + 1,
+            baseVersion: state.version,
+            type: 'resident.moved',
+            zoneId: 'garden',
+            participantIds: ['player'],
+            timestamp: '2026-07-13T01:00:00.000Z',
+            payload: { residentId: 'player', position: { x: 1, y: 0 } },
+          }),
+        ],
+      },
+      {
+        claimRecoveryWindow: () => ({ claimed: true }),
+        loadRecoveryResult: () => undefined,
+        saveRecoveryResult: () => undefined,
+      },
+    );
+    expect(service.recover(input(30)).events).toEqual([]);
   });
   it('returns a persisted duplicate without a second simulation and surfaces claim conflict', () => {
     const h = harness();

@@ -13,6 +13,9 @@ import { z } from 'zod';
 import { buildShowcasePromotion } from './activities/showcase-stall.js';
 
 const Text = z.string().trim().min(1).max(280);
+const FirstPersonText = Text.refine((text) => /^I(?:\b|['’])/i.test(text), {
+  message: 'Narration must be first-person',
+});
 const CardDraftSchema = z
   .object({
     title: z.string().trim().min(1).max(80),
@@ -31,7 +34,7 @@ const CardDraftSchema = z
   })
   .strict();
 const ProviderReturnSchema = z
-  .object({ recap: Text, card: CardDraftSchema.optional() })
+  .object({ recap: FirstPersonText, card: CardDraftSchema.optional() })
   .strict();
 const ProviderDialogueSchema = z.object({ dialogue: Text }).strict();
 
@@ -147,6 +150,8 @@ export function validateExperienceCardDraft(
   if (!events.some((event) => event.zoneId === draft.location))
     throw new Error('Experience card location is not sourced by its events');
   const types = new Set(events.map((event) => event.type));
+  if (!events.some((event) => WORTHY_PRIORITY[event.type] !== undefined))
+    throw new Error('Experience card must cite a card-worthy event');
   for (const [pattern, required] of claimRules)
     if (
       pattern.test(`${draft.title} ${draft.body}`) &&
@@ -155,6 +160,9 @@ export function validateExperienceCardDraft(
       throw new Error('Experience card contains an unsupported claim');
   if (!/^I(?:\b|['’])/i.test(draft.body))
     throw new Error('Experience card body must be first-person');
+  const deterministic = deterministicCardProse(events);
+  if (draft.title !== deterministic.title || draft.body !== deterministic.body)
+    throw new Error('Experience card prose must be derived from source events');
   return Object.freeze(draft);
 }
 
@@ -181,6 +189,16 @@ function eventPhrase(event: TownEvent): string {
     default:
       return 'spent time in town';
   }
+}
+function deterministicCardProse(events: readonly TownEvent[]): {
+  title: string;
+  body: string;
+} {
+  const worthy = deterministicEventSelection(events);
+  return {
+    title: worthy.length === 1 ? 'A town memory' : 'Town memories',
+    body: `I ${worthy.map(eventPhrase).join(' and ')}.`,
+  };
 }
 export function fallbackReturnHomeRecap(source: NarratorContext): string {
   const context = parseContext(source);
@@ -232,7 +250,14 @@ export class TownNarrator {
       );
       const worthy = deterministicEventSelection(context.events);
       if (!output.card || worthy.length === 0) return { recap: output.recap };
-      const card = validateExperienceCardDraft(output.card, context);
+      const draft = CardDraftSchema.parse(output.card);
+      const cited = context.events.filter((event) =>
+        draft.sourceEventIds.includes(event.id),
+      );
+      const card = validateExperienceCardDraft(
+        { ...draft, ...deterministicCardProse(cited) },
+        context,
+      );
       const completed = z
         .object({
           id: IdentifierSchema,

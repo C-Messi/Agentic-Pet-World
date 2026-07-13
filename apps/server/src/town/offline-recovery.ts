@@ -161,14 +161,15 @@ export class OfflineRecoveryService {
             intent.type !== 'open-stall' && (!built || intent.type !== 'build'),
         );
       if (candidates.length === 0) break;
-      let intent = this.simulation.select(state, playerId);
+      const intent = this.simulation.select(state, playerId);
       if (
         intent === undefined ||
         !candidates.some(
           (candidate) => JSON.stringify(candidate) === JSON.stringify(intent),
         )
-      )
-        intent = candidates[attempt % candidates.length]!;
+      ) {
+        continue;
+      }
       try {
         const generated = this.simulation.createEvents(state, intent);
         for (const raw of generated) {
@@ -185,9 +186,11 @@ export class OfflineRecoveryService {
             event.sequence !== state.lastEventSequence + 1
           )
             continue;
+          const eventTime = Date.parse(event.timestamp);
+          if (eventTime < start || eventTime > end) continue;
           if (
             events.length > 0 &&
-            Date.parse(event.timestamp) < Date.parse(events.at(-1)!.timestamp)
+            eventTime < Date.parse(events.at(-1)!.timestamp)
           )
             continue;
           state = reduceTownEvent(state, event);
