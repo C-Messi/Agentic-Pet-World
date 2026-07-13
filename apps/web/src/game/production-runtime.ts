@@ -1,4 +1,4 @@
-import type { MemoryRecord, MessageRecord, SessionResponse, WorldSnapshot } from '@cat-house/shared';
+import type { MemoryRecord, MessageRecord, PublicShowcaseItem, SessionResponse, TownSnapshotResponse, WorldSnapshot } from '@cat-house/shared';
 
 import type { GameUiRuntime, RuntimeSnapshot } from '../App';
 import { ActionRunner } from './actions/action-runner';
@@ -8,6 +8,8 @@ import { gameBubbles } from './bubble-coordinator';
 import { createGame } from './create-game';
 import { gameEvents } from './events';
 import { WorldScene } from './scenes/world-scene';
+import { TownScene } from './scenes/town-scene';
+import { TownApiClient } from './town/town-api-client';
 
 export function createProductionRuntime(parent: HTMLElement): GameUiRuntime {
   return new ProductionGameRuntime(parent, import.meta.env.VITE_API_URL ?? '');
@@ -18,11 +20,13 @@ class ProductionGameRuntime implements GameUiRuntime {
   private readonly game: ReturnType<typeof createGame>;
   private readonly api: AgentApiClient;
   private readonly bridge: AgentBridge;
+  private readonly townApi: TownApiClient;
   private readonly worldReady: Promise<void>;
   private removeWorldReadyListener: (() => void) | undefined;
   private removeWorldSnapshotListener: (() => void) | undefined;
   private sessionId: string | undefined;
   private latestSnapshot: WorldSnapshot | undefined;
+  private townSnapshot: TownSnapshotResponse | undefined;
 
   constructor(parent: HTMLElement, readonly apiUrl: string) {
     this.worldReady = new Promise((resolve) => {
@@ -42,6 +46,7 @@ class ProductionGameRuntime implements GameUiRuntime {
     );
     const runner = new ActionRunner(adapter, this.events);
     this.api = new AgentApiClient({ baseUrl: apiUrl });
+    this.townApi = new TownApiClient({ baseUrl: apiUrl });
     this.bridge = new AgentBridge(
       this.api,
       runner,
@@ -57,8 +62,15 @@ class ProductionGameRuntime implements GameUiRuntime {
         ? await this.loadOrReplaceMissingSession(storedSessionId)
         : await this.createSessionSnapshot();
       this.sessionId = session.session.id;
+      this.townSnapshot = await this.townApi.snapshot(session.session.id);
       await this.worldReady;
-      return { sessionId: session.session.id, messages: session.messages };
+      await this.recoverActiveOuting();
+      const playerId = this.playerResidentId();
+      if (this.townSnapshot.outings.some((outing) => outing.residentId === playerId && outing.status !== 'home')) {
+        this.game.scene.stop(WorldScene.key);
+        this.game.scene.start(TownScene.key, { snapshot: this.townSnapshot.projection });
+      }
+      return { sessionId: session.session.id, messages: session.messages, town: this.townSnapshot };
     } catch (error) {
       this.events.emit('connection-status', {
         status: error instanceof AgentHttpError ? 'provider-error' : 'offline',
@@ -86,6 +98,37 @@ class ProductionGameRuntime implements GameUiRuntime {
     if (!this.sessionId) return [];
     return this.api.listMemories(this.sessionId);
   }
+
+  async releasePet(): Promise<TownSnapshotResponse> {
+    const sessionId = this.requireSessionId();
+    const residentId = this.playerResidentId();
+    const response = await this.townApi.release(sessionId, residentId);
+    this.townSnapshot = { ...(this.townSnapshot ?? await this.townApi.snapshot(sessionId)), projection: response.projection, outings: [response.outing] };
+    this.game.scene.stop(WorldScene.key);
+    this.game.scene.start(TownScene.key, { snapshot: response.projection });
+    return this.townSnapshot;
+  }
+
+  async recallPet(): Promise<TownSnapshotResponse> {
+    const sessionId = this.requireSessionId();
+    const response = await this.townApi.recall(sessionId, this.playerResidentId());
+    this.game.scene.stop(TownScene.key);
+    this.game.scene.start(WorldScene.key);
+    this.townSnapshot = await this.townApi.snapshot(sessionId);
+    return this.townSnapshot;
+  }
+
+  followTownResident(residentId: string): void {
+    if (!this.game.scene.isActive(TownScene.key)) return;
+    (this.game.scene.getScene(TownScene.key) as TownScene).followResident(residentId);
+  }
+
+  async loadTownHistory() { const response = await this.townApi.history(this.requireSessionId()); return { events: response.events, experienceCards: response.experienceCards }; }
+  async loadTownRelationships() { return (await this.townApi.relationships(this.requireSessionId())).relationships; }
+  async loadExperienceCards() { return (await this.townApi.experienceCards(this.requireSessionId())).experienceCards; }
+  async loadShowcase() { return (await this.townApi.listShowcase(this.requireSessionId())).items; }
+  async saveShowcase(item: PublicShowcaseItem) { await this.townApi.upsertShowcase(this.requireSessionId(), item); return this.loadShowcase(); }
+  async deleteShowcase(itemId: string) { await this.townApi.deleteShowcase(this.requireSessionId(), itemId); return this.loadShowcase(); }
 
   setMuted(muted: boolean): void {
     this.game.sound.mute = muted;
@@ -119,4 +162,35 @@ class ProductionGameRuntime implements GameUiRuntime {
     return this.latestSnapshot;
   }
 
+  private requireSessionId(): string {
+    if (!this.sessionId) throw new Error('Session is unavailable');
+    return this.sessionId;
+  }
+
+  private playerResidentId(): string {
+    const resident = this.townSnapshot?.projection.residents.find(({ pet }) => pet.source === 'player-pet');
+    if (!resident) throw new Error('Player pet is unavailable');
+    return resident.residentId;
+  }
+
+  private async recoverActiveOuting(): Promise<void> {
+    const snapshot = this.townSnapshot;
+    if (!snapshot) return;
+    const player = snapshot.projection.residents.find(({ pet }) => pet.source === 'player-pet');
+    const outing = snapshot.outings.find((item) => item.residentId === player?.residentId && item.status !== 'home');
+    if (!outing?.lastConfirmedAt) return;
+    const key = `agent-cat-house.town-recovery.${snapshot.projection.sessionId}.${outing.residentId}`;
+    const recoveryWindowId = safeStorageGet(key) ?? `recovery-${crypto.randomUUID()}`;
+    safeStorageSet(key, recoveryWindowId);
+    const result = await this.townApi.recover({ sessionId: snapshot.projection.sessionId, residentId: outing.residentId, lastConfirmedAt: outing.lastConfirmedAt, recoveryWindowId });
+    this.townSnapshot = { ...snapshot, projection: result.projection, outings: snapshot.outings.map((item) => item.residentId === result.outing.residentId ? result.outing : item), experienceCards: [...snapshot.experienceCards, ...result.experienceCards] };
+    safeStorageRemove(key);
+    const latest = result.events.at(-1);
+    if (latest) this.events.emit('town-subtitle', { eventId: latest.id, text: '桌宠在小镇里又有了新经历' });
+  }
+
 }
+
+function safeStorageGet(key: string): string | undefined { try { return localStorage.getItem(key) ?? undefined; } catch { return undefined; } }
+function safeStorageSet(key: string, value: string): void { try { localStorage.setItem(key, value); } catch { /* keep the active recovery in memory */ } }
+function safeStorageRemove(key: string): void { try { localStorage.removeItem(key); } catch { /* a repeated idempotent recovery remains safe */ } }

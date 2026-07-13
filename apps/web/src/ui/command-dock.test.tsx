@@ -134,7 +134,7 @@ describe('natural language game interface', () => {
     expect(factory).toHaveBeenCalledOnce();
     view.rerender(<App runtimeFactory={factory} />);
     expect(factory).toHaveBeenCalledOnce();
-    expect(subscribe).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledTimes(3);
     view.unmount();
     expect(runtime.destroy).toHaveBeenCalledOnce();
   });

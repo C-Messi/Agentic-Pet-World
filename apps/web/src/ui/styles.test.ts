@@ -17,4 +17,10 @@ describe('responsive interface styles', () => {
     expect(css).not.toMatch(/border-radius:\s*(?:[9-9]|[1-9][0-9])px/i);
     expect(css).not.toMatch(/\borb\b/i);
   });
+
+  it('keeps the town canvas unobstructed and subtitles to one line', () => {
+    expect(css).toMatch(/\.town-tool-strip\s*\{[^}]*position:\s*absolute/s);
+    expect(css).toMatch(/\.town-subtitle\s*\{[^}]*white-space:\s*nowrap/s);
+    expect(css).not.toContain('town-sidebar');
+  });
 });

@@ -74,6 +74,8 @@ button {
 
 .top-rail,
 .tool-strip,
+.town-tool-strip,
+.town-controls,
 .status-strip,
 .command-dock {
   display: flex;
@@ -127,6 +129,73 @@ button {
   gap: 6px;
   pointer-events: auto;
 }
+
+.town-controls { gap: 6px; }
+
+.town-tool-strip {
+  position: absolute;
+  inset-block-start: 72px;
+  inset-inline-end: max(12px, env(safe-area-inset-right));
+  display: grid;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.follow-control {
+  min-block-size: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: #fff8e9;
+  background: rgb(49 38 40 / 92%);
+  border: 1px solid rgb(255 239 194 / 28%);
+  border-radius: 8px;
+}
+
+.follow-control svg { inline-size: 18px; }
+.follow-control select { max-inline-size: 120px; color: inherit; background: #211b1c; border: 1px solid #765d62; }
+
+.town-subtitle {
+  position: absolute;
+  inset-inline: 12px;
+  inset-block-end: 84px;
+  max-inline-size: min(680px, calc(100vw - 24px));
+  align-self: center;
+  padding: 8px 12px;
+  overflow: hidden;
+  color: #fff8e9;
+  background: rgb(39 31 34 / 90%);
+  border: 1px solid #c9a85f;
+  border-radius: 6px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.town-list,
+.experience-list,
+.showcase-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.town-list li,
+.experience-list li,
+.showcase-list li { display: grid; gap: 6px; padding-block-end: 12px; border-block-end: 1px solid #574649; }
+.town-list span,
+.town-list time,
+.experience-list span { color: #cbb9ad; font-size: 12px; }
+.experience-list h3,
+.experience-list p,
+.showcase-list p { margin: 0; }
+.showcase-editor { display: grid; gap: 12px; }
+.showcase-editor > label { display: grid; gap: 6px; }
+.showcase-editor input[type="text"],
+.showcase-editor input:not([type]),
+.showcase-editor textarea { inline-size: 100%; padding: 9px; color: #fff8e9; background: #211b1c; border: 1px solid #765d62; border-radius: 6px; }
+.showcase-editor textarea { min-block-size: 84px; resize: vertical; }
+.showcase-editor .public-confirm { display: flex; grid-template-columns: none; align-items: center; }
+.showcase-editor button { min-block-size: 40px; color: #2d2528; background: #f0c96d; border: 1px solid #fff0bd; border-radius: 6px; }
+.showcase-editor button:disabled { opacity: .45; }
+.showcase-note,
+.selection-count { margin: 0; color: #cbb9ad; font-size: 13px; line-height: 1.45; }
 
 .retry-button,
 .panel-retry-button {
@@ -391,6 +460,8 @@ button {
     display: grid;
     grid-template-columns: repeat(2, 44px);
   }
+
+  .town-tool-strip { inset-block-start: 112px; }
 
   .command-dock {
     inline-size: calc(100vw - 16px);
