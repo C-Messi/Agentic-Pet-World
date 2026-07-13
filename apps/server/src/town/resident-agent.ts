@@ -28,6 +28,7 @@ const SpeechSchema = z
   .string()
   .trim()
   .min(1)
+  .max(280)
   .refine((value) => graphemeCount(value) <= 80, {
     message: 'Speech must contain at most 80 grapheme clusters',
   });
@@ -215,7 +216,8 @@ export class ResidentAgent {
     if (!this.provider) return { decision: fallback, degraded: true };
 
     try {
-      const output = await this.provider.complete(
+      const output = await completeProvider(
+        this.provider,
         providerRequest(
           context,
           pet,
@@ -285,7 +287,8 @@ export class ResidentAgent {
     if (!this.provider) return { reply: fallback, degraded: true };
 
     try {
-      const output = await this.provider.complete(
+      const output = await completeProvider(
+        this.provider,
         providerRequest(
           context,
           pet,
@@ -502,21 +505,34 @@ function deterministicReply(
 function fallbackSpeech(pet: PetDefinition, followUp: boolean): string {
   const catchphrase = pet.voice.catchphrases[followUp ? 1 : 0]?.trim();
   const residentSpecific = `${pet.displayName} pauses to consider the next step.`;
-  const bounded = truncateGraphemes(catchphrase || residentSpecific, 80);
-  return SpeechSchema.parse(bounded || truncateGraphemes(residentSpecific, 80));
+  const bounded = truncateGraphemes(catchphrase || residentSpecific, 80, 280);
+  return SpeechSchema.parse(
+    bounded || truncateGraphemes(residentSpecific, 80, 280),
+  );
 }
 
 function boundPromptText(value: string): string {
-  return truncateGraphemes(value, 80);
+  return truncateGraphemes(value, 80, 80);
 }
 
-function truncateGraphemes(value: string, maximum: number): string {
-  return Array.from(
-    GraphemeSegmenter.segment(value.trim()),
-    ({ segment }) => segment,
-  )
-    .slice(0, maximum)
-    .join('');
+function truncateGraphemes(
+  value: string,
+  maximumGraphemes: number,
+  maximumCodeUnits: number,
+): string {
+  let bounded = '';
+  let graphemes = 0;
+  for (const { segment } of GraphemeSegmenter.segment(value.trim())) {
+    if (
+      graphemes >= maximumGraphemes ||
+      bounded.length + segment.length > maximumCodeUnits
+    ) {
+      break;
+    }
+    bounded += segment;
+    graphemes += 1;
+  }
+  return bounded;
 }
 
 function graphemeCount(value: string): number {
@@ -541,8 +557,54 @@ function parseJson(output: unknown): unknown {
   }
 }
 
+function completeProvider(
+  provider: ProviderAdapter,
+  request: ProviderCompletionRequest,
+): Promise<unknown> {
+  throwIfAborted(request.signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      request.signal.removeEventListener('abort', onAbort);
+    };
+    const resolveOnce = (value: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      rejectOnce(abortError());
+    };
+
+    request.signal.addEventListener('abort', onAbort, { once: true });
+    if (request.signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    let completion: Promise<unknown>;
+    try {
+      completion = Promise.resolve(provider.complete(request));
+    } catch (error) {
+      completion = Promise.reject(error);
+    }
+    completion.then(resolveOnce, rejectOnce);
+  });
+}
+
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted', 'AbortError');
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) {
-    throw new DOMException('The operation was aborted', 'AbortError');
+    throw abortError();
   }
 }

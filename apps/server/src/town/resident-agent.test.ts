@@ -247,6 +247,48 @@ describe('buildResidentSystemPrompt', () => {
     expect(prompt).not.toContain(longInterest);
     expect(prompt.length).toBeLessThan(2_000);
   });
+
+  it('keeps maximum authored emoji lists inside a raw prompt budget without broken graphemes', () => {
+    const family = '👨‍👩‍👧‍👦';
+    const pet = PetDefinitionSchema.parse({
+      ...mikan,
+      voice: {
+        ...mikan.voice,
+        catchphrases: Array.from(
+          { length: 3 },
+          (_, index) => `${family.repeat(80)}-${index}`,
+        ),
+      },
+      interests: Array.from(
+        { length: 5 },
+        (_, index) => `${family.repeat(80)}-${index}`,
+      ),
+    });
+
+    const prompt = buildResidentSystemPrompt(pet);
+    const catchphrases = JSON.parse(
+      prompt
+        .split('\n')
+        .find((line) => line.startsWith('Catchphrases: '))!
+        .slice('Catchphrases: '.length),
+    ) as string[];
+    const interests = JSON.parse(
+      prompt
+        .split('\n')
+        .find((line) => line.startsWith('Interests: '))!
+        .slice('Interests: '.length),
+    ) as string[];
+
+    expect(prompt.length).toBeLessThan(2_000);
+    expect(catchphrases).toHaveLength(3);
+    expect(interests).toHaveLength(5);
+    expect([...catchphrases, ...interests]).toEqual(
+      Array.from({ length: 8 }, () => family.repeat(7)),
+    );
+    expect(
+      [...catchphrases, ...interests].every((value) => value.length <= 80),
+    ).toBe(true);
+  });
 });
 
 describe('ResidentAgent.decide', () => {
@@ -546,22 +588,40 @@ describe('ResidentAgent.decide', () => {
     expect(source.residents).toHaveLength(3);
   });
 
-  it('counts provider speech by grapheme clusters', async () => {
-    const emoji = '👨‍👩‍👧‍👦';
-    const eighty = emoji.repeat(80);
-    const valid = await new ResidentAgent({
-      complete: async () => ({ kind: 'rest', speech: eighty }),
-    }).decide(decisionContext());
-    const invalid = await new ResidentAgent({
-      complete: async () => ({ kind: 'rest', speech: emoji.repeat(81) }),
-    }).decide(decisionContext());
+  it('bounds provider speech by graphemes and TownEvent raw length', async () => {
+    const family = '👨‍👩‍👧‍👦';
+    const accepted = [`${'a'.repeat(79)}${family}`, family.repeat(25)];
+    const rejected = [family.repeat(26), family.repeat(80)];
 
-    expect(valid).toEqual({
-      decision: { kind: 'rest', speech: eighty },
-      degraded: false,
-    });
-    expect(invalid.degraded).toBe(true);
-    expect(invalid.decision.speech).not.toBe(emoji.repeat(81));
+    for (const speech of accepted) {
+      const result = await new ResidentAgent({
+        complete: async () => ({ kind: 'rest', speech }),
+      }).decide(decisionContext());
+      expect(result).toEqual({
+        decision: { kind: 'rest', speech },
+        degraded: false,
+      });
+      expect(() =>
+        TownEventSchema.parse({
+          ...event(1),
+          payload: { residentId: mikan.id, text: result.decision.speech },
+        }),
+      ).not.toThrow();
+    }
+
+    for (const speech of rejected) {
+      const result = await new ResidentAgent({
+        complete: async () => ({ kind: 'rest', speech }),
+      }).decide(decisionContext());
+      expect(result.degraded).toBe(true);
+      expect(result.decision.speech).not.toBe(speech);
+      expect(() =>
+        TownEventSchema.parse({
+          ...event(1),
+          payload: { residentId: mikan.id, text: result.decision.speech },
+        }),
+      ).not.toThrow();
+    }
   });
 
   it('grapheme-safely truncates fallback speech from the authored registry', async () => {
@@ -795,4 +855,59 @@ describe('ResidentAgent encounter dialogue', () => {
       }
     },
   );
+
+  it('aborts never-settling providers promptly and consumes a late rejection', async () => {
+    const operations = [
+      (agent: ResidentAgent, signal: AbortSignal) =>
+        agent.decide(decisionContext({ signal })),
+      (agent: ResidentAgent, signal: AbortSignal) =>
+        agent.respond(responseContext({ signal })),
+      (agent: ResidentAgent, signal: AbortSignal) =>
+        agent.followUp(followUpContext({ signal })),
+    ];
+
+    for (const invoke of operations) {
+      const controller = new AbortController();
+      const pending = invoke(
+        new ResidentAgent({ complete: () => new Promise(() => undefined) }),
+        controller.signal,
+      );
+      const startedAt = Date.now();
+      controller.abort();
+      const outcome = await Promise.race([
+        pending.then(
+          () => 'resolved',
+          (error: unknown) =>
+            error instanceof Error ? error.name : 'unknown-error',
+        ),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve('timeout'), 100),
+        ),
+      ]);
+
+      expect(outcome).toBe('AbortError');
+      expect(Date.now() - startedAt).toBeLessThan(100);
+    }
+
+    let rejectProvider!: (reason: unknown) => void;
+    const controller = new AbortController();
+    const pending = new ResidentAgent({
+      complete: () =>
+        new Promise((_resolve, reject) => {
+          rejectProvider = reject;
+        }),
+    }).decide(decisionContext({ signal: controller.signal }));
+    controller.abort();
+    await expect(
+      Promise.race([
+        pending,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('abort timeout')), 100),
+        ),
+      ]),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    rejectProvider(new Error('late provider rejection'));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  });
 });
