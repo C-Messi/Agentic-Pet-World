@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { openDatabase } from '../storage/database.js';
 import { SessionRepository } from '../storage/repositories/index.js';
-import { TownService, TownServiceError } from './town-service.js';
+import { TownService } from './town-service.js';
 
 describe('TownService', () => {
   it('initializes a persistent town and manages the player outing', () => {
@@ -66,7 +66,13 @@ describe('TownService', () => {
           { type: 'visit-zone', actorId: 'player-cat', zoneId: 'garden' },
         ],
       }),
-    ).toThrowError(TownServiceError);
+    ).toThrowError(
+      expect.objectContaining({
+        name: 'TownServiceError',
+        kind: 'conflict',
+        message: 'Stale town projection version',
+      }),
+    );
     database.close();
   });
 
@@ -137,19 +143,23 @@ describe('TownService', () => {
     const result = service.advance({
       sessionId: 'session-1',
       baseVersion: 0,
-      intents: [{
-        type: 'start-activity',
-        actorId: 'player-cat',
-        activityId: 'fortune-draw',
-        invitedResidentIds: ['resident-huihui', 'resident-mikan'],
-      }],
+      intents: [
+        {
+          type: 'start-activity',
+          actorId: 'player-cat',
+          activityId: 'fortune-draw',
+          invitedResidentIds: ['resident-huihui', 'resident-mikan'],
+        },
+      ],
     });
     expect(result.events.map(({ type }) => type)).toEqual([
       'fortune.started',
       'fortune.revealed',
       'fortune.interpreted',
     ]);
-    expect(result.events.every(({ participantIds }) => participantIds.length === 3)).toBe(true);
+    expect(
+      result.events.every(({ participantIds }) => participantIds.length === 3),
+    ).toBe(true);
     database.close();
   });
 
@@ -228,17 +238,38 @@ describe('TownService', () => {
     const fortune = service.advance({
       sessionId: 'session-1',
       baseVersion: 0,
-      intents: [{ type: 'start-activity', actorId: 'resident-huihui', activityId: 'fortune-draw', invitedResidentIds: ['resident-mikan'] }],
+      intents: [
+        {
+          type: 'start-activity',
+          actorId: 'resident-huihui',
+          activityId: 'fortune-draw',
+          invitedResidentIds: ['resident-mikan'],
+        },
+      ],
     });
     const build = service.advance({
       sessionId: 'session-1',
       baseVersion: fortune.projection.version,
-      intents: [{ type: 'build', actorId: 'resident-lanlan', recipeId: 'street-lamp', plotId: 'plaza-north' }],
+      intents: [
+        {
+          type: 'build',
+          actorId: 'resident-lanlan',
+          recipeId: 'street-lamp',
+          plotId: 'plaza-north',
+        },
+      ],
     });
     const stall = service.advance({
       sessionId: 'session-1',
       baseVersion: build.projection.version,
-      intents: [{ type: 'open-stall', actorId: 'player-cat', stallId: 'stall-player-cat', showcaseItemIds: ['showcase-player'] }],
+      intents: [
+        {
+          type: 'open-stall',
+          actorId: 'player-cat',
+          stallId: 'stall-player-cat',
+          showcaseItemIds: ['showcase-player'],
+        },
+      ],
     });
     expect(stall.events.map(({ type }) => type)).toEqual([
       'stall.opened',

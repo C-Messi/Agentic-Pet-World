@@ -8,7 +8,6 @@ import {
   ShowcaseUpsertRequestSchema,
   ShowcaseUpsertResponseSchema,
   TownAdvanceRequestSchema,
-  TownAdvanceResponseSchema,
   TownEventResultsRequestSchema,
   TownEventResultsResponseSchema,
   TownHistoryResponseSchema,
@@ -79,6 +78,10 @@ import {
   TownSimulationService,
   type TownSimulationPorts,
 } from './simulation-service.js';
+import {
+  TownEventCommitError,
+  TownEventCommitter,
+} from './town-event-committer.js';
 
 export class TownServiceError extends Error {
   constructor(
@@ -113,6 +116,7 @@ export class TownService implements TownServicePort {
   readonly #projections: TownProjectionRepository;
   readonly #events: TownEventRepository;
   readonly #simulation: TownSimulationService;
+  readonly #committer: TownEventCommitter;
 
   constructor(
     private readonly database: StorageDatabase,
@@ -120,6 +124,9 @@ export class TownService implements TownServicePort {
   ) {
     this.#projections = new TownProjectionRepository(database);
     this.#events = new TownEventRepository(database);
+    this.#committer = new TownEventCommitter(database, (sessionId) =>
+      this.#createInitialProjection(sessionId),
+    );
     this.#simulation = new TownSimulationService(ports, {
       buildPlots: BUILD_PLOTS.map(({ id }) => id),
       publicShowcaseItemIds: (_actorId, projection) =>
@@ -182,43 +189,40 @@ export class TownService implements TownServicePort {
 
   advance(source: TownAdvanceRequest): TownAdvanceResponse {
     const request = TownAdvanceRequestSchema.parse(source);
-    return this.database
-      .transaction(() => {
-        let projection = this.#loadOrCreate(request.sessionId);
-        if (projection.version !== request.baseVersion)
-          throw new TownServiceError(
-            'conflict',
-            'Stale town projection version',
-          );
-        const events: TownEvent[] = [];
-        const apply = (event: TownEvent) => {
-          if (events.length >= 24) return;
-          this.#events.append(event);
-          const next = reduceTownEvent(projection, event);
-          if (
-            !this.#projections.save(request.sessionId, projection.version, next)
-          )
-            throw new TownServiceError(
-              'conflict',
-              'Town projection changed concurrently',
-            );
-          projection = next;
-          events.push(event);
-        };
-        for (const intent of request.intents) {
-          const primary = this.#simulation.createEvents(projection, intent);
-          for (const event of primary) apply(event);
-          for (const event of this.#completionEvents(
-            intent,
-            projection,
-            primary,
-          ))
-            apply(event);
-          if (events.length >= 24) break;
-        }
-        return TownAdvanceResponseSchema.parse({ projection, events });
-      })
-      .immediate();
+    try {
+      const result = this.#committer.apply(
+        request.sessionId,
+        request.baseVersion,
+        (initialProjection) => {
+          let projection = initialProjection;
+          const events: TownEvent[] = [];
+          const apply = (event: TownEvent) => {
+            if (events.length >= 24) return;
+            projection = reduceTownEvent(projection, event);
+            events.push(event);
+          };
+          for (const intent of request.intents) {
+            const primary = this.#simulation.createEvents(projection, intent);
+            for (const event of primary) apply(event);
+            for (const event of this.#completionEvents(
+              intent,
+              projection,
+              primary,
+            ))
+              apply(event);
+            if (events.length >= 24) break;
+          }
+          return events;
+        },
+      );
+      if (result.status === 'stale')
+        throw new TownServiceError('conflict', 'Stale town projection version');
+      return { projection: result.projection, events: result.events };
+    } catch (error) {
+      if (error instanceof TownEventCommitError)
+        throw new TownServiceError('conflict', error.message);
+      throw error;
+    }
   }
 
   eventResults(source: TownEventResultsRequest): TownEventResultsResponse {
@@ -385,6 +389,13 @@ export class TownService implements TownServicePort {
   #loadOrCreate(sessionId: string): TownProjection {
     const stored = this.#projections.load(sessionId);
     if (stored !== undefined) return stored;
+    const projection = this.#createInitialProjection(sessionId);
+    if (!this.#projections.save(sessionId, -1, projection))
+      return this.#projections.load(sessionId)!;
+    return projection;
+  }
+
+  #createInitialProjection(sessionId: string): TownProjection {
     const residents = createDefaultPetCatalog()
       .list()
       .map((pet, index) => ({
@@ -403,8 +414,6 @@ export class TownService implements TownServicePort {
       modifications: [],
       activities: [],
     });
-    if (!this.#projections.save(sessionId, -1, projection))
-      return this.#projections.load(sessionId)!;
     return projection;
   }
   #requireResident(projection: TownProjection, id: string) {
