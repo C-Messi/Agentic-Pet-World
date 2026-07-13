@@ -24,6 +24,7 @@ import {
   SessionRepository,
 } from './storage/repositories/index.js';
 import { createProductionApp } from './production.js';
+import { TownService } from './town/town-service.js';
 
 const timestamp = '2026-07-12T08:30:00.000Z';
 const world: WorldSnapshot = {
@@ -51,6 +52,21 @@ describe('Fastify BFF production integration', () => {
     }
     database = undefined;
     directory = undefined;
+  });
+
+  it('exposes the persistent pet town snapshot and outing routes', async () => {
+    const fixture = createProductionFixture();
+    const created = await fixture.app.inject({ method: 'POST', url: '/api/sessions', payload: {} });
+    const sessionId = created.json().session.id as string;
+    const snapshot = await fixture.app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/town` });
+    const release = await fixture.app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/town/release`, payload: { residentId: 'player-cat' } });
+    const invalid = await fixture.app.inject({ method: 'PUT', url: `/api/sessions/${sessionId}/town/showcase/item-1`, payload: { item: { id: 'item-1', sessionId, kind: 'text', title: 'Secret', content: 'private', presetIconId: 'star', isPublic: false } } });
+
+    expect(snapshot.statusCode).toBe(200);
+    expect(snapshot.json().projection.residents).toHaveLength(5);
+    expect(release.statusCode).toBe(200);
+    expect(release.json().outing.status).toBe('town');
+    expect(invalid.statusCode).toBe(422);
   });
 
   it('persists a complete session, turn, memory, action result, and world flow', async () => {
@@ -268,6 +284,11 @@ describe('Fastify BFF production integration', () => {
       webOrigin: 'http://127.0.0.1:5173',
       store: new StorageApiStore(database),
       agentService,
+      townService: new TownService(database, {
+        now: () => timestamp,
+        random: () => 0.25,
+        nextId: (prefix) => `${prefix}-integration-${++id}`,
+      }),
       readiness: () => ({ config: true, storage: true, knowledge: true }),
       clock: () => timestamp,
       idFactory: (prefix) => `${prefix}-integration-${++id}`,

@@ -10,7 +10,13 @@ import {
   ErrorResponseSchema,
   HealthResponseSchema,
   MemoriesResponseSchema,
+  OfflineRecoveryRequestSchema,
+  ShowcaseUpsertRequestSchema,
   SessionResponseSchema,
+  TownAdvanceRequestSchema,
+  TownEventResultsRequestSchema,
+  TownRecallRequestSchema,
+  TownReleaseRequestSchema,
   type ActionResult,
   type AgentAction,
   type AgentFallbackReason,
@@ -29,6 +35,7 @@ import Fastify, {
 import { z } from 'zod';
 
 import { worldSnapshotHash } from './world-identity.js';
+import { TownServiceError, type TownServicePort } from './town/town-service.js';
 
 const CorrelationIdSchema = z
   .string()
@@ -36,6 +43,7 @@ const CorrelationIdSchema = z
   .max(96)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const SessionParamsSchema = z.object({ id: z.string().min(1).max(128) }).strict();
+const TownItemParamsSchema = z.object({ id: z.string().min(1).max(128), itemId: z.string().min(1).max(128) }).strict();
 
 export interface ApiStore {
   runInTransaction<T>(operation: () => T): T;
@@ -95,6 +103,7 @@ export interface BuildAppDependencies {
   readonly webOrigin: string;
   readonly store: ApiStore;
   readonly agentService: AppAgentService;
+  readonly townService?: TownServicePort;
   readonly readiness: () => {
     readonly config: boolean;
     readonly storage: boolean;
@@ -210,6 +219,11 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
           ? {}
           : { retryAfterMs: error.retryAfterMs }),
       });
+      return;
+    }
+    if (error instanceof TownServiceError) {
+      const status = error.kind === 'conflict' ? 409 : error.kind === 'not-found' ? 404 : 422;
+      sendError(reply, request.id, status, `TOWN_${error.kind.replace('-', '_').toUpperCase()}`, error.message);
       return;
     }
     const clientError = mapFastifyClientError(error);
@@ -394,6 +408,22 @@ export function buildApp(dependencies: BuildAppDependencies): FastifyInstance {
     }));
   });
 
+  if (dependencies.townService !== undefined) {
+    const town = dependencies.townService;
+    app.get('/api/sessions/:id/town', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.snapshot(sessionId)); });
+    app.post('/api/sessions/:id/town/release', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.release(parseBody(TownReleaseRequestSchema, { ...(request.body as object), sessionId }))); });
+    app.post('/api/sessions/:id/town/recall', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.recall(parseBody(TownRecallRequestSchema, { ...(request.body as object), sessionId }))); });
+    app.post('/api/sessions/:id/town/advance', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.advance(parseBody(TownAdvanceRequestSchema, { ...(request.body as object), sessionId }))); });
+    app.post('/api/sessions/:id/town/event-results', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.code(202).send(town.eventResults(parseBody(TownEventResultsRequestSchema, { ...(request.body as object), sessionId }))); });
+    app.post('/api/sessions/:id/town/recover', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.recover(parseBody(OfflineRecoveryRequestSchema, { ...(request.body as object), sessionId }))); });
+    app.get('/api/sessions/:id/town/history', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.history(sessionId)); });
+    app.get('/api/sessions/:id/town/relationships', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.relationships(sessionId)); });
+    app.get('/api/sessions/:id/town/experience-cards', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.experienceCards(sessionId)); });
+    app.get('/api/sessions/:id/town/showcase', async (request, reply) => { const sessionId = parseSessionId(request.params); requireSession(dependencies.store, sessionId); return reply.send(town.showcase(sessionId)); });
+    app.put('/api/sessions/:id/town/showcase/:itemId', async (request, reply) => { const params = parseTownItemParams(request.params); requireSession(dependencies.store, params.id); return reply.send(town.upsertShowcase(params.id, params.itemId, parseBody(ShowcaseUpsertRequestSchema, request.body))); });
+    app.delete('/api/sessions/:id/town/showcase/:itemId', async (request, reply) => { const params = parseTownItemParams(request.params); requireSession(dependencies.store, params.id); return reply.send(town.deleteShowcase(params.id, params.itemId)); });
+  }
+
   return app;
 }
 
@@ -410,6 +440,12 @@ function parseSessionId(params: unknown): string {
     throw validationError(parsed.error);
   }
   return parsed.data.id;
+}
+
+function parseTownItemParams(params: unknown): z.infer<typeof TownItemParamsSchema> {
+  const parsed = TownItemParamsSchema.safeParse(params);
+  if (!parsed.success) throw validationError(parsed.error);
+  return parsed.data;
 }
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {

@@ -22,6 +22,7 @@ import {
 } from './knowledge/knowledge-service.js';
 import { StorageApiStore } from './storage/api-store.js';
 import { openDatabase } from './storage/database.js';
+import { TownService } from './town/town-service.js';
 import {
   MemoryRepository,
   MessageRepository,
@@ -62,6 +63,11 @@ export function createProductionApp(
       webOrigin: runtimeConfig.webOrigin,
       store: new StorageApiStore(database),
       agentService,
+      townService: new TownService(database, {
+        now: () => new Date().toISOString(),
+        random: Math.random,
+        nextId: (prefix) => `${prefix}-${randomUUID()}`,
+      }),
       readiness: () => ({
         config: providerConfig.llm.kind !== 'unavailable',
         storage: databaseIsReady(database),
