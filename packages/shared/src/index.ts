@@ -4,3 +4,4 @@ export * from './protocol.js';
 export * from './minigame.js';
 export * from './pet.js';
 export * from './town.js';
+export * from './town-layout.js';
