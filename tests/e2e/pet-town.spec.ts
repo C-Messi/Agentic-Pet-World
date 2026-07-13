@@ -153,6 +153,27 @@ test('pet town vertical slice persists activities, recovery, and a sourced first
     `${metadata().primaryApiUrl}/api/sessions/${id}/town/showcase`,
   );
   expect((await showcase.json()).items).toEqual([item]);
+  const stall = await advance(request, id, {
+    baseVersion: build.projection.version,
+    intents: [
+      {
+        type: 'open-stall',
+        actorId: 'player-cat',
+        stallId: 'stall-player-cat',
+        showcaseItemIds: [item.id],
+      },
+    ],
+  });
+  expect(stall.events.map((event: { type: string }) => event.type)).toEqual([
+    'stall.opened',
+    'stall.visited',
+    'stall.closed',
+  ]);
+  expect(
+    stall.events.find(
+      (event: { type: string }) => event.type === 'stall.visited',
+    )?.participantIds,
+  ).toHaveLength(2);
   await page.reload();
   await expect(page.getByRole('status')).toContainText('Ready', {
     timeout: 15_000,
