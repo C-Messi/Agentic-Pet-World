@@ -146,7 +146,8 @@ Use {"kind":"rest","speech":"1-80 characters"} or {"kind":"candidate","candidate
 candidateIndex must identify one of the authoritative allowedCandidates and must never be invented.`;
 
 export const ENCOUNTER_REPLY_OUTPUT_CONTRACT_V1 = `[Output Contract: resident-encounter-reply.v1]
-Return exactly {"speech":"1-80 characters","animation":"curious|happy|sit|confused","followUpRequested":false} as strict JSON with no additional fields.`;
+Return exactly one strict JSON object with speech (1-80 characters), animation (curious, happy, sit, or confused), and followUpRequested (true or false), with no additional fields.
+Set followUpRequested to true only when a short third round would be meaningful; otherwise use false.`;
 
 export function buildResidentSystemPrompt(source: PetDefinition): string {
   const pet = PetDefinitionSchema.parse(source);
@@ -157,8 +158,8 @@ export function buildResidentSystemPrompt(source: PetDefinition): string {
     `Species: ${pet.species}`,
     `Personality: ${JSON.stringify(pet.personality)}`,
     `Voice: ${pet.voice.style}`,
-    `Catchphrases: ${JSON.stringify(pet.voice.catchphrases)}`,
-    `Interests: ${JSON.stringify(pet.interests)}`,
+    `Catchphrases: ${JSON.stringify(pet.voice.catchphrases.map(boundPromptText))}`,
+    `Interests: ${JSON.stringify(pet.interests.map(boundPromptText))}`,
     `Public bio: ${pet.publicBio}`,
     'Choose only an enumerated candidate. Never invent IDs, coordinates, events, tools, or private owner facts.',
   ].join('\n');
@@ -314,7 +315,13 @@ function providerRequest(
       ),
     },
     allowedCandidates: candidates,
-    recentEvents: context.recentEvents,
+    recentEvents: context.recentEvents.slice(-8).map((event) => ({
+      type: event.type,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      participantIds: event.participantIds,
+      ...(event.zoneId === undefined ? {} : { zoneId: event.zoneId }),
+    })),
   };
   return {
     trustedInstructions: [
@@ -366,10 +373,14 @@ function deterministicReply(
 }
 
 function fallbackSpeech(pet: PetDefinition, followUp: boolean): string {
-  const catchphrase = pet.voice.catchphrases[followUp ? 1 : 0];
-  return SpeechSchema.parse(
-    catchphrase ?? `${pet.displayName} pauses to consider the next step.`,
-  );
+  const catchphrase = pet.voice.catchphrases[followUp ? 1 : 0]?.trim();
+  const residentSpecific = `${pet.displayName} pauses to consider the next step.`;
+  const bounded = (catchphrase || residentSpecific).slice(0, 80).trim();
+  return SpeechSchema.parse(bounded || residentSpecific.slice(0, 80));
+}
+
+function boundPromptText(value: string): string {
+  return value.trim().slice(0, 80);
 }
 
 function stableHash(value: string): number {
