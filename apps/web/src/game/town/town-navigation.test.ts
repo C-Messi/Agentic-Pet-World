@@ -45,6 +45,15 @@ describe('TownNavigation', () => {
     expect(TOWN_ZONES).toEqual(EXPECTED_TOWN_ZONES);
   });
 
+  it('deep-freezes every projected zone and its geometry', () => {
+    expect(Object.isFrozen(TOWN_ZONES)).toBe(true);
+    for (const zone of TOWN_ZONES) {
+      expect(Object.isFrozen(zone)).toBe(true);
+      expect(Object.isFrozen(zone.bounds)).toBe(true);
+      expect(Object.isFrozen(zone.entrance)).toBe(true);
+    }
+  });
+
   it('keeps every activity entrance reachable from the gate', () => {
     const navigation = new TownNavigation();
     const gate = TOWN_ZONES[0]!;

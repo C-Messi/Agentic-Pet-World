@@ -1,117 +1,154 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  TOWN_ENCOUNTER_PAIRS,
   TOWN_GRID,
   TOWN_STATIC_BLOCKED_CELLS,
   TOWN_ZONE_LAYOUT,
+  TOWN_ZONE_ORDER,
 } from './town-layout.js';
 
-const EXPECTED_ZONE_LAYOUT = [
-  {
-    id: 'gate',
-    bounds: { x: 8, y: 8, width: 4, height: 3 },
-    entrance: { x: 10, y: 9 },
-    encounterPairs: [
-      [
-        { x: 9, y: 9 },
-        { x: 10, y: 9 },
-      ],
-    ],
-  },
-  {
-    id: 'plaza',
-    bounds: { x: 7, y: 4, width: 6, height: 4 },
-    entrance: { x: 10, y: 6 },
-    encounterPairs: [
-      [
-        { x: 9, y: 6 },
-        { x: 11, y: 6 },
-      ],
-      [
-        { x: 10, y: 5 },
-        { x: 10, y: 7 },
-      ],
-    ],
-  },
-  {
-    id: 'fortune-pavilion',
-    bounds: { x: 1, y: 1, width: 5, height: 3 },
-    entrance: { x: 4, y: 3 },
-    encounterPairs: [
-      [
-        { x: 3, y: 3 },
-        { x: 5, y: 3 },
-      ],
-    ],
-  },
-  {
-    id: 'market',
-    bounds: { x: 14, y: 1, width: 5, height: 4 },
-    entrance: { x: 15, y: 4 },
-    encounterPairs: [
-      [
-        { x: 15, y: 4 },
-        { x: 16, y: 4 },
-      ],
-    ],
-  },
-  {
-    id: 'garden',
-    bounds: { x: 7, y: 1, width: 6, height: 3 },
-    entrance: { x: 10, y: 3 },
-    encounterPairs: [
-      [
-        { x: 9, y: 3 },
-        { x: 11, y: 3 },
-      ],
-    ],
-  },
-  {
-    id: 'build-plots',
-    bounds: { x: 14, y: 5, width: 5, height: 3 },
-    entrance: { x: 15, y: 7 },
-    encounterPairs: [
-      [
-        { x: 15, y: 7 },
-        { x: 16, y: 7 },
-      ],
-    ],
-  },
-  {
-    id: 'arcade-house',
-    bounds: { x: 1, y: 5, width: 5, height: 3 },
-    entrance: { x: 5, y: 7 },
-    encounterPairs: [
-      [
-        { x: 4, y: 7 },
-        { x: 5, y: 7 },
-      ],
-    ],
-  },
+const EXPECTED_ZONE_ORDER = [
+  'gate',
+  'plaza',
+  'fortune-pavilion',
+  'market',
+  'garden',
+  'build-plots',
+  'arcade-house',
 ] as const;
 
+const EXPECTED_ZONE_LAYOUT = {
+  gate: {
+    bounds: { x: 8, y: 8, width: 4, height: 3 },
+    entrance: { x: 10, y: 9 },
+  },
+  plaza: {
+    bounds: { x: 7, y: 4, width: 6, height: 4 },
+    entrance: { x: 10, y: 6 },
+  },
+  'fortune-pavilion': {
+    bounds: { x: 1, y: 1, width: 5, height: 3 },
+    entrance: { x: 4, y: 3 },
+  },
+  market: {
+    bounds: { x: 14, y: 1, width: 5, height: 4 },
+    entrance: { x: 15, y: 4 },
+  },
+  garden: {
+    bounds: { x: 7, y: 1, width: 6, height: 3 },
+    entrance: { x: 10, y: 3 },
+  },
+  'build-plots': {
+    bounds: { x: 14, y: 5, width: 5, height: 3 },
+    entrance: { x: 15, y: 7 },
+  },
+  'arcade-house': {
+    bounds: { x: 1, y: 5, width: 5, height: 3 },
+    entrance: { x: 5, y: 7 },
+  },
+} as const;
+
+const EXPECTED_ENCOUNTER_PAIRS = {
+  gate: [
+    [
+      { x: 9, y: 9 },
+      { x: 10, y: 9 },
+    ],
+  ],
+  plaza: [
+    [
+      { x: 9, y: 6 },
+      { x: 11, y: 6 },
+    ],
+    [
+      { x: 10, y: 5 },
+      { x: 10, y: 7 },
+    ],
+  ],
+  'fortune-pavilion': [
+    [
+      { x: 3, y: 3 },
+      { x: 5, y: 3 },
+    ],
+  ],
+  market: [
+    [
+      { x: 15, y: 4 },
+      { x: 16, y: 4 },
+    ],
+  ],
+  garden: [
+    [
+      { x: 9, y: 3 },
+      { x: 11, y: 3 },
+    ],
+  ],
+  'build-plots': [
+    [
+      { x: 15, y: 7 },
+      { x: 16, y: 7 },
+    ],
+  ],
+  'arcade-house': [
+    [
+      { x: 4, y: 7 },
+      { x: 5, y: 7 },
+    ],
+  ],
+} as const;
+
 describe('town layout', () => {
-  it('defines the approved grid and zone geometry exactly', () => {
+  it('defines the approved grid and keyed zone geometry exactly', () => {
     expect(TOWN_GRID).toEqual({ width: 20, height: 11, tileSize: 32 });
     expect(TOWN_ZONE_LAYOUT).toEqual(EXPECTED_ZONE_LAYOUT);
+    expect(TOWN_ZONE_LAYOUT.gate.entrance).toEqual({ x: 10, y: 9 });
   });
 
-  it('keeps entrances and encounter positions distinct, in bounds, and walkable', () => {
+  it('covers every zone in the approved stable order', () => {
+    expect(TOWN_ZONE_ORDER).toEqual(EXPECTED_ZONE_ORDER);
+    expect(Object.keys(TOWN_ZONE_LAYOUT)).toEqual(EXPECTED_ZONE_ORDER);
+    expect(Object.keys(TOWN_ENCOUNTER_PAIRS)).toEqual(EXPECTED_ZONE_ORDER);
+  });
+
+  it('exports encounter pairs separately and keeps all positions walkable', () => {
     const blocked = new Set(
       TOWN_STATIC_BLOCKED_CELLS.map(({ x, y }) => `${x}:${y}`),
     );
 
-    for (const zone of TOWN_ZONE_LAYOUT) {
+    expect(TOWN_ENCOUNTER_PAIRS).toEqual(EXPECTED_ENCOUNTER_PAIRS);
+    for (const zoneId of TOWN_ZONE_ORDER) {
+      const zone = TOWN_ZONE_LAYOUT[zoneId];
       expect(inBounds(zone.entrance)).toBe(true);
       expect(blocked.has(key(zone.entrance))).toBe(false);
 
-      for (const pair of zone.encounterPairs) {
+      for (const pair of TOWN_ENCOUNTER_PAIRS[zoneId]) {
         expect(pair).toHaveLength(2);
         expect(pair[0]).not.toEqual(pair[1]);
         for (const position of pair) {
           expect(inBounds(position)).toBe(true);
           expect(blocked.has(key(position))).toBe(false);
         }
+      }
+    }
+  });
+
+  it('deep-freezes every shared layout and encounter structure', () => {
+    expect(Object.isFrozen(TOWN_GRID)).toBe(true);
+    expect(Object.isFrozen(TOWN_ZONE_ORDER)).toBe(true);
+    expect(Object.isFrozen(TOWN_ZONE_LAYOUT)).toBe(true);
+    expect(Object.isFrozen(TOWN_ENCOUNTER_PAIRS)).toBe(true);
+
+    for (const zoneId of TOWN_ZONE_ORDER) {
+      const zone = TOWN_ZONE_LAYOUT[zoneId];
+      const encounterPairs = TOWN_ENCOUNTER_PAIRS[zoneId];
+      expect(Object.isFrozen(zone)).toBe(true);
+      expect(Object.isFrozen(zone.bounds)).toBe(true);
+      expect(Object.isFrozen(zone.entrance)).toBe(true);
+      expect(Object.isFrozen(encounterPairs)).toBe(true);
+      for (const pair of encounterPairs) {
+        expect(Object.isFrozen(pair)).toBe(true);
+        expect(pair.every((position) => Object.isFrozen(position))).toBe(true);
       }
     }
   });

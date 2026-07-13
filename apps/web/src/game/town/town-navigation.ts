@@ -2,20 +2,24 @@ import {
   TOWN_GRID,
   TOWN_STATIC_BLOCKED_CELLS,
   TOWN_ZONE_LAYOUT,
+  TOWN_ZONE_ORDER,
   type Position,
   type TownZoneLayout,
+  type TownZoneId,
 } from '@cat-house/shared';
 
-export type TownZone = Pick<TownZoneLayout, 'id' | 'bounds' | 'entrance'>;
+export type TownZone = TownZoneLayout & { readonly id: TownZoneId };
 
 export { TOWN_GRID };
 
 export const TOWN_ZONES: readonly TownZone[] = Object.freeze(
-  TOWN_ZONE_LAYOUT.map(({ id, bounds, entrance }) => ({
-    id,
-    bounds,
-    entrance,
-  })),
+  TOWN_ZONE_ORDER.map((id) =>
+    Object.freeze({
+      id,
+      bounds: TOWN_ZONE_LAYOUT[id].bounds,
+      entrance: TOWN_ZONE_LAYOUT[id].entrance,
+    }),
+  ),
 );
 
 type Occupancy = { occupiedCells: readonly Position[]; collision: boolean };

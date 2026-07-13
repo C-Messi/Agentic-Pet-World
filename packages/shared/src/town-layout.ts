@@ -4,7 +4,6 @@ import type { TownZoneId } from './town.js';
 export type EncounterPair = readonly [Readonly<Position>, Readonly<Position>];
 
 export type TownZoneLayout = {
-  readonly id: TownZoneId;
   readonly bounds: Readonly<{
     x: number;
     y: number;
@@ -12,7 +11,6 @@ export type TownZoneLayout = {
     height: number;
   }>;
   readonly entrance: Readonly<Position>;
-  readonly encounterPairs: readonly EncounterPair[];
 };
 
 export const TOWN_GRID = deepFreeze({
@@ -21,89 +19,98 @@ export const TOWN_GRID = deepFreeze({
   tileSize: 32,
 } as const);
 
-export const TOWN_ZONE_LAYOUT = deepFreeze([
-  {
-    id: 'gate',
-    bounds: { x: 8, y: 8, width: 4, height: 3 },
-    entrance: { x: 10, y: 9 },
-    encounterPairs: [
-      [
-        { x: 9, y: 9 },
-        { x: 10, y: 9 },
-      ],
+export const TOWN_ZONE_ORDER: readonly TownZoneId[] = deepFreeze([
+  'gate',
+  'plaza',
+  'fortune-pavilion',
+  'market',
+  'garden',
+  'build-plots',
+  'arcade-house',
+] satisfies TownZoneId[]);
+
+export const TOWN_ZONE_LAYOUT: Readonly<Record<TownZoneId, TownZoneLayout>> =
+  deepFreeze({
+    gate: {
+      bounds: { x: 8, y: 8, width: 4, height: 3 },
+      entrance: { x: 10, y: 9 },
+    },
+    plaza: {
+      bounds: { x: 7, y: 4, width: 6, height: 4 },
+      entrance: { x: 10, y: 6 },
+    },
+    'fortune-pavilion': {
+      bounds: { x: 1, y: 1, width: 5, height: 3 },
+      entrance: { x: 4, y: 3 },
+    },
+    market: {
+      bounds: { x: 14, y: 1, width: 5, height: 4 },
+      entrance: { x: 15, y: 4 },
+    },
+    garden: {
+      bounds: { x: 7, y: 1, width: 6, height: 3 },
+      entrance: { x: 10, y: 3 },
+    },
+    'build-plots': {
+      bounds: { x: 14, y: 5, width: 5, height: 3 },
+      entrance: { x: 15, y: 7 },
+    },
+    'arcade-house': {
+      bounds: { x: 1, y: 5, width: 5, height: 3 },
+      entrance: { x: 5, y: 7 },
+    },
+  } satisfies Record<TownZoneId, TownZoneLayout>);
+
+export const TOWN_ENCOUNTER_PAIRS: Readonly<
+  Record<TownZoneId, readonly EncounterPair[]>
+> = deepFreeze({
+  gate: [
+    [
+      { x: 9, y: 9 },
+      { x: 10, y: 9 },
     ],
-  },
-  {
-    id: 'plaza',
-    bounds: { x: 7, y: 4, width: 6, height: 4 },
-    entrance: { x: 10, y: 6 },
-    encounterPairs: [
-      [
-        { x: 9, y: 6 },
-        { x: 11, y: 6 },
-      ],
-      [
-        { x: 10, y: 5 },
-        { x: 10, y: 7 },
-      ],
+  ],
+  plaza: [
+    [
+      { x: 9, y: 6 },
+      { x: 11, y: 6 },
     ],
-  },
-  {
-    id: 'fortune-pavilion',
-    bounds: { x: 1, y: 1, width: 5, height: 3 },
-    entrance: { x: 4, y: 3 },
-    encounterPairs: [
-      [
-        { x: 3, y: 3 },
-        { x: 5, y: 3 },
-      ],
+    [
+      { x: 10, y: 5 },
+      { x: 10, y: 7 },
     ],
-  },
-  {
-    id: 'market',
-    bounds: { x: 14, y: 1, width: 5, height: 4 },
-    entrance: { x: 15, y: 4 },
-    encounterPairs: [
-      [
-        { x: 15, y: 4 },
-        { x: 16, y: 4 },
-      ],
+  ],
+  'fortune-pavilion': [
+    [
+      { x: 3, y: 3 },
+      { x: 5, y: 3 },
     ],
-  },
-  {
-    id: 'garden',
-    bounds: { x: 7, y: 1, width: 6, height: 3 },
-    entrance: { x: 10, y: 3 },
-    encounterPairs: [
-      [
-        { x: 9, y: 3 },
-        { x: 11, y: 3 },
-      ],
+  ],
+  market: [
+    [
+      { x: 15, y: 4 },
+      { x: 16, y: 4 },
     ],
-  },
-  {
-    id: 'build-plots',
-    bounds: { x: 14, y: 5, width: 5, height: 3 },
-    entrance: { x: 15, y: 7 },
-    encounterPairs: [
-      [
-        { x: 15, y: 7 },
-        { x: 16, y: 7 },
-      ],
+  ],
+  garden: [
+    [
+      { x: 9, y: 3 },
+      { x: 11, y: 3 },
     ],
-  },
-  {
-    id: 'arcade-house',
-    bounds: { x: 1, y: 5, width: 5, height: 3 },
-    entrance: { x: 5, y: 7 },
-    encounterPairs: [
-      [
-        { x: 4, y: 7 },
-        { x: 5, y: 7 },
-      ],
+  ],
+  'build-plots': [
+    [
+      { x: 15, y: 7 },
+      { x: 16, y: 7 },
     ],
-  },
-] as const satisfies readonly TownZoneLayout[]);
+  ],
+  'arcade-house': [
+    [
+      { x: 4, y: 7 },
+      { x: 5, y: 7 },
+    ],
+  ],
+} satisfies Record<TownZoneId, readonly EncounterPair[]>);
 
 export const TOWN_STATIC_BLOCKED_CELLS: readonly Readonly<Position>[] =
   deepFreeze(createStaticBlockedCells());
