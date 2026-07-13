@@ -13,6 +13,7 @@ import type {
   ProviderAdapter,
   ProviderCompletionRequest,
 } from '../agent/provider.js';
+import { FakeProvider } from '../agent/fake-provider.js';
 import { openDatabase } from '../storage/database.js';
 import {
   SessionRepository,
@@ -164,6 +165,84 @@ describe('TownPulseService', () => {
         .prepare('SELECT status FROM town_agent_pulses WHERE pulse_id = ?')
         .get('pulse-abort'),
     ).toEqual({ status: 'pending' });
+    fixture.close();
+  });
+
+  it('completes a later pulse when prior encounters occupy the current zone', async () => {
+    const fixture = createFixture({ provider: new FakeProvider() });
+    const signal = new AbortController().signal;
+    const first = await fixture.service.pulse(
+      pulseRequest('pulse-first'),
+      signal,
+    );
+
+    const second = await fixture.service.pulse(
+      {
+        sessionId: 'session-1',
+        baseVersion: first.projection.version,
+        pulseId: 'pulse-second',
+      },
+      signal,
+    );
+
+    expect(second.status).toBe('advanced');
+    expect(
+      second.events
+        .filter(({ type }) => type === 'resident.moved')
+        .map((event) =>
+          event.type === 'resident.moved' ? event.payload.residentId : '',
+        ),
+    ).toEqual(expect.arrayContaining(['resident-huihui', 'resident-lanlan']));
+    expect(
+      fixture.database
+        .prepare('SELECT status FROM town_agent_pulses WHERE pulse_id = ?')
+        .get('pulse-second'),
+    ).toEqual({ status: 'complete' });
+    fixture.close();
+  });
+
+  it('completes a pulse when an earlier prepared action occupies its encounter pair', async () => {
+    const fixture = createFixture({
+      provider: {
+        complete: async (request) => {
+          if (!decisionRequest(request)) {
+            return JSON.stringify({
+              speech: 'Hello.',
+              animation: 'happy',
+              followUpRequested: false,
+            });
+          }
+          const residentId = correlationResident(request.correlationId);
+          const targetResidentId =
+            residentId === 'player-cat' ? 'resident-huihui' : 'resident-lanlan';
+          return JSON.stringify({
+            kind: 'candidate',
+            candidateIndex: socializeCandidateIndex(request, targetResidentId),
+            speech: 'Let us meet.',
+          });
+        },
+      },
+    });
+
+    const result = await fixture.service.pulse(
+      pulseRequest('pulse-dynamic-conflict'),
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe('advanced');
+    expect(result.degradedResidentIds).toEqual(['resident-mikan']);
+    expect(
+      result.events
+        .filter(({ type }) => type === 'resident.moved')
+        .map((event) =>
+          event.type === 'resident.moved' ? event.payload.residentId : '',
+        ),
+    ).toEqual(['player-cat', 'resident-huihui']);
+    expect(
+      fixture.database
+        .prepare('SELECT status FROM town_agent_pulses WHERE pulse_id = ?')
+        .get('pulse-dynamic-conflict'),
+    ).toEqual({ status: 'complete' });
     fixture.close();
   });
 
@@ -369,5 +448,25 @@ function visitCandidateIndex(request: ProviderCompletionRequest): number {
   };
   return parsed.allowedCandidates.findIndex(
     ({ type }) => type === 'visit-zone',
+  );
+}
+
+function socializeCandidateIndex(
+  request: ProviderCompletionRequest,
+  targetResidentId: string,
+): number {
+  const state = request.trustedInstructions.find((value) =>
+    value.startsWith('[Authoritative Public Town State]'),
+  );
+  const parsed = JSON.parse(state!.split('\n', 2)[1]!) as {
+    allowedCandidates: Array<{
+      type: string;
+      targetResidentId?: string;
+    }>;
+  };
+  return parsed.allowedCandidates.findIndex(
+    (candidate) =>
+      candidate.type === 'socialize' &&
+      candidate.targetResidentId === targetResidentId,
   );
 }

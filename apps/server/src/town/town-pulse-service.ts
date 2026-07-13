@@ -181,19 +181,25 @@ export class TownPulseService {
     );
     throwIfAborted(signal);
 
-    const degradedResidentIds = outcomes
-      .filter(({ degraded }) => degraded)
-      .map(({ residentId }) => residentId);
+    const degradedResidentIds = new Set(
+      outcomes
+        .filter(({ degraded }) => degraded)
+        .map(({ residentId }) => residentId),
+    );
     let response: TownPulseResponse | undefined;
     const committed = this.options.committer.apply(
       request.sessionId,
       request.baseVersion,
-      (current) => this.#buildEvents(current, outcomes),
+      (current) =>
+        this.#buildEvents(current, outcomes, (residentId) =>
+          degradedResidentIds.add(residentId),
+        ),
       (advanced) => {
+        const degradedIds = [...degradedResidentIds];
         response = TownPulseResponseSchema.parse({
           ...advanced,
-          degraded: degradedResidentIds.length > 0,
-          degradedResidentIds,
+          degraded: degradedIds.length > 0,
+          degradedResidentIds: degradedIds,
         });
         this.#pulses.complete(
           request.sessionId,
@@ -243,6 +249,15 @@ export class TownPulseService {
           TownIntent,
           { type: 'socialize' | 'visit-zone' }
         > => candidate.type === 'socialize' || candidate.type === 'visit-zone',
+      )
+      .filter(
+        (candidate) =>
+          candidate.type !== 'socialize' ||
+          this.options.eventBuilder.canEncounter(
+            projection,
+            residentId,
+            candidate.targetResidentId,
+          ),
       )
       .sort((left, right) =>
         candidateKey(left).localeCompare(candidateKey(right)),
@@ -415,11 +430,23 @@ export class TownPulseService {
   #buildEvents(
     source: TownProjection,
     outcomes: readonly ResidentOutcome[],
+    markDegraded: (residentId: string) => void,
   ): readonly TownEvent[] {
     let projection = source;
     const events: TownEvent[] = [];
-    for (const { action } of outcomes) {
+    for (const { action, residentId } of outcomes) {
       if (action === undefined) continue;
+      if (
+        action.kind === 'encounter' &&
+        !this.options.eventBuilder.canEncounter(
+          projection,
+          action.initiatorId,
+          action.responderId,
+        )
+      ) {
+        markDegraded(residentId);
+        continue;
+      }
       const generated =
         action.kind === 'visit'
           ? this.options.eventBuilder.visit(projection, {

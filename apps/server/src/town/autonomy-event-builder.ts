@@ -63,6 +63,37 @@ export class AutonomyEventBuilderError extends Error {
 export class AutonomyEventBuilder {
   constructor(private readonly ports: AutonomyEventBuilderPorts) {}
 
+  canEncounter(
+    source: Readonly<TownProjection>,
+    initiatorId: string,
+    responderId: string,
+  ): boolean {
+    const projection = parseProjection(source);
+    const initiator = projection.residents.find(
+      (resident) => resident.residentId === initiatorId,
+    );
+    const responder = projection.residents.find(
+      (resident) => resident.residentId === responderId,
+    );
+    if (
+      initiatorId === responderId ||
+      initiator?.availability !== 'available' ||
+      responder?.availability !== 'available'
+    ) {
+      return false;
+    }
+    try {
+      requireEncounterPair(projection, initiator.zoneId, [
+        initiatorId,
+        responderId,
+      ]);
+      return true;
+    } catch (error) {
+      if (error instanceof AutonomyEventBuilderError) return false;
+      throw error;
+    }
+  }
+
   visit(
     source: Readonly<TownProjection>,
     rawInput: AutonomyVisitInput,
