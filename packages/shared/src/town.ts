@@ -378,6 +378,39 @@ export type TownAdvanceRequest = z.infer<typeof TownAdvanceRequestSchema>;
 export const TownAdvanceResponseSchema = z.object({ projection: TownProjectionSchema, events: EventsSchema }).strict().superRefine((value, context) => validateProjectionEventsResponse(value, context));
 export type TownAdvanceResponse = z.infer<typeof TownAdvanceResponseSchema>;
 
+export const TownPulseRequestSchema = z
+  .object({
+    sessionId: IdentifierSchema,
+    baseVersion: VersionSchema,
+    pulseId: IdentifierSchema,
+  })
+  .strict();
+export type TownPulseRequest = z.infer<typeof TownPulseRequestSchema>;
+
+const PulseBase = {
+  projection: TownProjectionSchema,
+  degraded: z.boolean(),
+  degradedResidentIds: z.array(IdentifierSchema).max(2),
+};
+export const TownPulseResponseSchema = z
+  .discriminatedUnion('status', [
+    z
+      .object({
+        status: z.literal('advanced'),
+        ...PulseBase,
+        events: EventsSchema,
+      })
+      .strict(),
+    z
+      .object({ status: z.literal('stale'), ...PulseBase, events: z.tuple([]) })
+      .strict(),
+  ])
+  .superRefine((value, context) => {
+    if (value.status === 'advanced')
+      validateProjectionEventsResponse(value, context);
+  });
+export type TownPulseResponse = z.infer<typeof TownPulseResponseSchema>;
+
 const TownEventResultSchema = z.object({ eventId: IdentifierSchema, status: z.enum(['applied', 'failed']), message: TextSchema.optional() }).strict();
 export const TownEventResultsRequestSchema = z.object({ sessionId: IdentifierSchema, baseVersion: VersionSchema, results: z.array(TownEventResultSchema).min(1).max(24) }).strict().superRefine(({ results }, context) => addDuplicateIssues(results.map(({ eventId }) => eventId), context, ['results']));
 export type TownEventResultsRequest = z.infer<typeof TownEventResultsRequestSchema>;

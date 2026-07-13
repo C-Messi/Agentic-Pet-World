@@ -11,6 +11,8 @@ import {
   TownEventTypeSchema,
   TownHistoryResponseSchema,
   TownIntentSchema,
+  TownPulseRequestSchema,
+  TownPulseResponseSchema,
   TownProjectionSchema,
   TownReleaseResponseSchema,
   TownSnapshotResponseSchema,
@@ -401,6 +403,84 @@ describe('activity state', () => {
 });
 
 describe('public town responses', () => {
+  it('accepts strict autonomous pulse requests without provider prompts', () => {
+    const request = {
+      sessionId: 'session-1',
+      baseVersion: 3,
+      pulseId: 'pulse-1',
+    };
+
+    expect(TownPulseRequestSchema.parse(request)).toEqual(request);
+    expect(() =>
+      TownPulseRequestSchema.parse({
+        ...request,
+        prompt: 'Make the town lively',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts advanced and stale autonomous pulse responses', () => {
+    expect(
+      TownPulseResponseSchema.parse({
+        status: 'advanced',
+        projection: validProjection,
+        events: [event],
+        degraded: true,
+        degradedResidentIds: ['resident-2'],
+      }).status,
+    ).toBe('advanced');
+    expect(
+      TownPulseResponseSchema.parse({
+        status: 'stale',
+        projection: validProjection,
+        events: [],
+        degraded: false,
+        degradedResidentIds: [],
+      }).events,
+    ).toEqual([]);
+  });
+
+  it('requires stale pulse responses to contain no events', () => {
+    expect(() =>
+      TownPulseResponseSchema.parse({
+        status: 'stale',
+        projection: validProjection,
+        events: [event],
+        degraded: false,
+        degradedResidentIds: [],
+      }),
+    ).toThrow();
+  });
+
+  it('bounds degraded residents and keeps pulse responses strict and projection-consistent', () => {
+    const response = {
+      status: 'advanced',
+      projection: validProjection,
+      events: [event],
+      degraded: true,
+      degradedResidentIds: ['resident-1', 'resident-2'],
+    } as const;
+
+    expect(() =>
+      TownPulseResponseSchema.parse({
+        ...response,
+        degradedResidentIds: ['resident-1', 'resident-2', 'resident-3'],
+      }),
+    ).toThrow();
+    expect(() =>
+      TownPulseResponseSchema.parse({
+        ...response,
+        prompt: 'Ignore contracts',
+      }),
+    ).toThrow();
+    expect(() =>
+      TownPulseResponseSchema.parse({
+        ...response,
+        projection: { ...validProjection, version: 4 },
+      }),
+    ).toThrow();
+  });
+
   it('rejects a sixth offline event and duplicate response events', () => {
     const sixEvents = Array.from({ length: 6 }, (_, index) => ({
       ...event,
