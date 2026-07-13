@@ -13,6 +13,13 @@ export interface TownActivityTool {
   type: string;
 }
 
+export interface EmittedActivityResult {
+  activityInstanceId: string;
+  eventType: TownEventType;
+  factKey: string;
+  eventId: string;
+}
+
 export interface ActivityContext {
   sessionId: string;
   activityInstanceId: string;
@@ -21,7 +28,7 @@ export interface ActivityContext {
   participantIds: readonly string[];
   zoneId: TownZoneId;
   now: string;
-  emittedEventTypes: readonly TownEventType[];
+  emittedResults: readonly EmittedActivityResult[];
   nextEventId(): string;
 }
 
@@ -32,6 +39,7 @@ export interface TownActivityDefinition<
   id: string;
   zoneId: TownZoneId;
   capacity: number;
+  resultEventTypes: readonly TownEventType[];
   stateSchema: z.ZodType<TState>;
   toolSchema: z.ZodType<TTool>;
   createInitialState(context: ActivityContext): TState;
@@ -44,12 +52,17 @@ export interface TownActivityDefinition<
     state: Readonly<TState>,
     context: ActivityContext,
   ): readonly TownEvent[];
+  validateResultEvent(
+    event: Readonly<TownEvent>,
+    context: ActivityContext,
+  ): void | boolean;
 }
 
 export interface TownActivityMetadata {
   readonly id: string;
   readonly zoneId: TownZoneId;
   readonly capacity: number;
+  readonly resultEventTypes: readonly TownEventType[];
 }
 
 export type ActivityRegistryErrorCode =
@@ -80,6 +93,27 @@ const DefinitionMetadataSchema = z
     id: IdentifierSchema,
     zoneId: TownZoneIdSchema,
     capacity: z.number().int().min(1).max(4),
+    resultEventTypes: z
+      .array(TownEventTypeSchema)
+      .min(1)
+      .max(TownEventTypeSchema.options.length),
+  })
+  .strict()
+  .superRefine(({ resultEventTypes }, context) => {
+    if (new Set(resultEventTypes).size !== resultEventTypes.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Result event types must be unique',
+      });
+    }
+  });
+
+const EmittedActivityResultSchema = z
+  .object({
+    activityInstanceId: IdentifierSchema,
+    eventType: TownEventTypeSchema,
+    factKey: IdentifierSchema,
+    eventId: IdentifierSchema,
   })
   .strict();
 
@@ -92,9 +126,7 @@ const ContextSchema = z
     participantIds: z.array(IdentifierSchema).min(1).max(4),
     zoneId: TownZoneIdSchema,
     now: z.string().datetime({ offset: true }),
-    emittedEventTypes: z
-      .array(TownEventTypeSchema)
-      .max(TownEventTypeSchema.options.length),
+    emittedResults: z.array(EmittedActivityResultSchema).max(24),
     nextEventId: z.custom<() => string>((value) => typeof value === 'function'),
   })
   .strict();
@@ -141,12 +173,26 @@ function parseContext(
       'Activity participants must be unique',
     );
   }
+  const factKeys = parsed.emittedResults.map(({ factKey }) => factKey);
+  const eventIds = parsed.emittedResults.map(({ eventId }) => eventId);
   if (
-    new Set(parsed.emittedEventTypes).size !== parsed.emittedEventTypes.length
+    new Set(factKeys).size !== factKeys.length ||
+    new Set(eventIds).size !== eventIds.length
   ) {
     throw registryError(
       'invalid-context',
-      'Emitted activity event types must be unique',
+      'Emitted activity result keys and event IDs must be unique',
+    );
+  }
+  if (
+    parsed.emittedResults.some(
+      ({ activityInstanceId }) =>
+        activityInstanceId !== parsed.activityInstanceId,
+    )
+  ) {
+    throw registryError(
+      'invalid-context',
+      'Emitted activity results must match the activity instance',
     );
   }
   if (parsed.participantIds.length > definition.capacity) {
@@ -162,7 +208,7 @@ function parseContext(
   const context = {
     ...parsed,
     participantIds: [...parsed.participantIds],
-    emittedEventTypes: [...parsed.emittedEventTypes],
+    emittedResults: parsed.emittedResults.map((entry) => ({ ...entry })),
     nextEventId: Object.freeze(() => sourceNextEventId()),
   };
   return deepFreeze(context) as ActivityContext;
@@ -171,38 +217,17 @@ function parseContext(
 function parseState(
   definition: AnyDefinition,
   state: unknown,
+  code: 'invalid-transition' | 'invalid-result-event' = 'invalid-transition',
 ): Readonly<unknown> {
-  const result = definition.stateSchema.safeParse(structuredClone(state));
-  if (!result.success) {
-    throw registryError(
-      'invalid-transition',
-      'Invalid activity state',
-      result.error,
-    );
-  }
-  return deepFreeze(result.data);
-}
-
-function referencedActivityId(event: TownEvent): string | undefined {
-  switch (event.type) {
-    case 'activity.started':
-      return event.payload.activity.id;
-    case 'residents.played':
-      return event.payload.activityInstanceId;
-    case 'fortune.started':
-      return event.payload.activityInstanceId;
-    case 'fortune.revealed':
-    case 'fortune.interpreted':
-      return event.payload.activityInstanceId;
-    case 'build.started':
-      return event.payload.modificationId;
-    case 'build.completed':
-      return event.payload.modification.id;
-    case 'stall.opened':
-    case 'stall.closed':
-      return event.payload.stallId;
-    default:
-      return undefined;
+  try {
+    const result = definition.stateSchema.safeParse(structuredClone(state));
+    if (!result.success) {
+      throw registryError(code, 'Invalid activity state', result.error);
+    }
+    return deepFreeze(result.data);
+  } catch (error) {
+    if (error instanceof ActivityRegistryError) throw error;
+    throw registryError(code, 'Invalid activity state', error);
   }
 }
 
@@ -224,52 +249,64 @@ export class TownActivityRegistry {
   register<TState, TTool extends TownActivityTool>(
     source: TownActivityDefinition<TState, TTool>,
   ): this {
-    const metadataResult = DefinitionMetadataSchema.safeParse({
-      id: source.id,
-      zoneId: source.zoneId,
-      capacity: source.capacity,
-    });
-    if (
-      !metadataResult.success ||
-      typeof source.stateSchema?.safeParse !== 'function' ||
-      typeof source.toolSchema?.safeParse !== 'function' ||
-      typeof source.createInitialState !== 'function' ||
-      typeof source.transition !== 'function' ||
-      typeof source.resultEvents !== 'function'
-    ) {
+    try {
+      const metadataResult = DefinitionMetadataSchema.safeParse({
+        id: source.id,
+        zoneId: source.zoneId,
+        capacity: source.capacity,
+        resultEventTypes: source.resultEventTypes,
+      });
+      if (
+        !metadataResult.success ||
+        typeof source.stateSchema?.safeParse !== 'function' ||
+        typeof source.toolSchema?.safeParse !== 'function' ||
+        typeof source.createInitialState !== 'function' ||
+        typeof source.transition !== 'function' ||
+        typeof source.resultEvents !== 'function' ||
+        typeof source.validateResultEvent !== 'function'
+      ) {
+        throw registryError(
+          'invalid-definition',
+          'Invalid activity definition',
+          metadataResult.success ? undefined : metadataResult.error,
+        );
+      }
+      const metadata = deepFreeze(metadataResult.data) as TownActivityMetadata;
+      if (this.#definitions.has(metadata.id)) {
+        throw registryError(
+          'duplicate-activity',
+          `Duplicate activity ID: ${metadata.id}`,
+        );
+      }
+      const zoneOwner = this.#zoneOwners.get(metadata.zoneId);
+      if (zoneOwner !== undefined) {
+        throw registryError(
+          'duplicate-zone',
+          `Zone ${metadata.zoneId} is already owned by ${zoneOwner}`,
+        );
+      }
+
+      const definition = Object.freeze({
+        ...metadata,
+        stateSchema: source.stateSchema,
+        toolSchema: source.toolSchema,
+        createInitialState: source.createInitialState,
+        transition: source.transition,
+        resultEvents: source.resultEvents,
+        validateResultEvent: source.validateResultEvent,
+      }) as unknown as AnyDefinition;
+      this.#definitions.set(metadata.id, definition);
+      this.#metadata.set(metadata.id, metadata);
+      this.#zoneOwners.set(metadata.zoneId, metadata.id);
+      return this;
+    } catch (error) {
+      if (error instanceof ActivityRegistryError) throw error;
       throw registryError(
         'invalid-definition',
         'Invalid activity definition',
-        metadataResult.success ? undefined : metadataResult.error,
+        error,
       );
     }
-    const metadata = deepFreeze(metadataResult.data) as TownActivityMetadata;
-    if (this.#definitions.has(metadata.id)) {
-      throw registryError(
-        'duplicate-activity',
-        `Duplicate activity ID: ${metadata.id}`,
-      );
-    }
-    const zoneOwner = this.#zoneOwners.get(metadata.zoneId);
-    if (zoneOwner !== undefined) {
-      throw registryError(
-        'duplicate-zone',
-        `Zone ${metadata.zoneId} is already owned by ${zoneOwner}`,
-      );
-    }
-
-    const definition = Object.freeze({
-      ...metadata,
-      stateSchema: source.stateSchema,
-      toolSchema: source.toolSchema,
-      createInitialState: source.createInitialState,
-      transition: source.transition,
-      resultEvents: source.resultEvents,
-    }) as unknown as AnyDefinition;
-    this.#definitions.set(metadata.id, definition);
-    this.#metadata.set(metadata.id, metadata);
-    this.#zoneOwners.set(metadata.zoneId, metadata.id);
-    return this;
   }
 
   get(id: string): TownActivityMetadata | undefined {
@@ -315,22 +352,25 @@ export class TownActivityRegistry {
     const definition = this.#requireDefinition(id);
     const parsedContext = parseContext(context, definition);
     const parsedState = parseState(definition, state);
-    const toolResult = definition.toolSchema.safeParse(structuredClone(tool));
-    if (!toolResult.success) {
-      throw registryError(
-        'invalid-tool',
-        'Invalid activity tool',
-        toolResult.error,
-      );
+    let parsedTool: Readonly<TownActivityTool>;
+    try {
+      const toolResult = definition.toolSchema.safeParse(structuredClone(tool));
+      if (!toolResult.success) {
+        throw registryError(
+          'invalid-tool',
+          'Invalid activity tool',
+          toolResult.error,
+        );
+      }
+      parsedTool = deepFreeze(toolResult.data);
+    } catch (error) {
+      if (error instanceof ActivityRegistryError) throw error;
+      throw registryError('invalid-tool', 'Invalid activity tool', error);
     }
     try {
       return parseState(
         definition,
-        definition.transition(
-          parsedState,
-          deepFreeze(toolResult.data),
-          parsedContext,
-        ),
+        definition.transition(parsedState, parsedTool, parsedContext),
       );
     } catch (error) {
       if (error instanceof ActivityRegistryError) throw error;
@@ -349,7 +389,7 @@ export class TownActivityRegistry {
   ): readonly TownEvent[] {
     const definition = this.#requireDefinition(id);
     const parsedContext = parseContext(context, definition);
-    const parsedState = parseState(definition, state);
+    const parsedState = parseState(definition, state, 'invalid-result-event');
     try {
       const sourceEvents = definition.resultEvents(parsedState, parsedContext);
       if (!Array.isArray(sourceEvents)) {
@@ -362,7 +402,6 @@ export class TownActivityRegistry {
       for (const [index, event] of events.entries()) {
         const expectedSequence = parsedContext.lastEventSequence + index + 1;
         const expectedBaseVersion = parsedContext.baseVersion + index;
-        const referencedId = referencedActivityId(event);
         if (
           event.sessionId !== parsedContext.sessionId ||
           event.zoneId !== parsedContext.zoneId ||
@@ -370,11 +409,15 @@ export class TownActivityRegistry {
           event.timestamp !== parsedContext.now ||
           event.sequence !== expectedSequence ||
           event.baseVersion !== expectedBaseVersion ||
-          (referencedId !== undefined &&
-            referencedId !== parsedContext.activityInstanceId) ||
+          !definition.resultEventTypes.includes(event.type) ||
           ids.has(event.id)
         ) {
           throw new TypeError('Result event does not match activity context');
+        }
+        if (definition.validateResultEvent(event, parsedContext) === false) {
+          throw new TypeError(
+            'Result event failed activity ownership validation',
+          );
         }
         ids.add(event.id);
       }
