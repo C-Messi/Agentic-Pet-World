@@ -1,6 +1,5 @@
 import {
   IdentifierSchema,
-  PET_ANIMATION_NAMES,
   TOWN_ENCOUNTER_PAIRS,
   TOWN_GRID,
   TOWN_STATIC_BLOCKED_CELLS,
@@ -15,11 +14,17 @@ import {
 } from '@cat-house/shared';
 import { z } from 'zod';
 
+import {
+  EncounterAnimationSchema,
+  ResidentSpeechSchema,
+} from './resident-agent.js';
+import { autonomousPlayRelationshipChange } from './relationship-rules.js';
+
 const MAX_ID_ATTEMPTS = 8;
 const TimestampSchema = z.string().datetime({ offset: true });
-const AgentSpeechSchema = z.string().trim().min(1).max(80);
-const OptionalAgentSpeechSchema = z.string().trim().max(80).optional();
-const AnimationSchema = z.enum(PET_ANIMATION_NAMES);
+const OptionalResidentSpeechSchema = z
+  .union([ResidentSpeechSchema, z.string().trim().length(0)])
+  .optional();
 
 const VisitInputSchema = z
   .object({ residentId: IdentifierSchema, zoneId: TownZoneIdSchema })
@@ -29,14 +34,14 @@ const EncounterInputSchema = z
     initiatorId: IdentifierSchema,
     responderId: IdentifierSchema,
     zoneId: TownZoneIdSchema.optional(),
-    opening: AgentSpeechSchema,
-    reply: AgentSpeechSchema,
-    followUp: OptionalAgentSpeechSchema,
-    animation: AnimationSchema,
+    opening: ResidentSpeechSchema,
+    reply: ResidentSpeechSchema,
+    followUp: OptionalResidentSpeechSchema,
+    animation: EncounterAnimationSchema,
   })
   .strict();
 
-export type AutonomyAnimation = z.infer<typeof AnimationSchema>;
+export type AutonomyAnimation = z.infer<typeof EncounterAnimationSchema>;
 export type AutonomyVisitInput = z.input<typeof VisitInputSchema>;
 export type AutonomyEncounterInput = z.input<typeof EncounterInputSchema>;
 
@@ -53,16 +58,6 @@ export class AutonomyEventBuilderError extends Error {
     super(message);
     this.name = 'AutonomyEventBuilderError';
   }
-}
-
-export function autonomyRelationshipDelta(
-  currentAffinity: number,
-  animation: AutonomyAnimation,
-): number {
-  const affinity = z.number().finite().min(-1).max(1).parse(currentAffinity);
-  const parsedAnimation = AnimationSchema.parse(animation);
-  if (!['happy', 'curious', 'sit'].includes(parsedAnimation)) return 0;
-  return roundAffinity(Math.min(1, roundAffinity(affinity + 0.05)) - affinity);
 }
 
 export class AutonomyEventBuilder {
@@ -168,12 +163,12 @@ export class AutonomyEventBuilder {
       input.initiatorId,
       input.responderId,
     );
-    const delta = autonomyRelationshipDelta(affinity, input.animation);
-    if (delta !== 0) {
+    const relationshipChange = autonomousPlayRelationshipChange(affinity);
+    if (relationshipChange.delta !== 0) {
       append('relationship.changed', () => ({
         residentIdA: input.initiatorId,
         residentIdB: input.responderId,
-        affinity: roundAffinity(affinity + delta),
+        affinity: relationshipChange.affinity,
       }));
     }
 
@@ -340,10 +335,6 @@ function relationshipAffinity(
           relationship.residentIdB === residentIdA),
     )?.affinity ?? 0
   );
-}
-
-function roundAffinity(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function errorMessage(error: unknown): string {

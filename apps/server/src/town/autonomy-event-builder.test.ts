@@ -13,7 +13,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   AutonomyEventBuilder,
-  autonomyRelationshipDelta,
   type AutonomyEventBuilderPorts,
 } from './autonomy-event-builder.js';
 import { reduceTownEvent } from './event-reducer.js';
@@ -212,11 +211,47 @@ describe('AutonomyEventBuilder', () => {
       'resident.spoke',
       'resident.spoke',
       'residents.played',
+      'relationship.changed',
     ]);
     expect(
       withoutFollowUp.filter(({ type }) => type === 'resident.spoke'),
     ).toHaveLength(2);
-    expect(withoutFollowUp).toHaveLength(5);
+    expect(withoutFollowUp).toHaveLength(6);
+  });
+
+  it('shares the resident-agent raw and grapheme speech budgets', () => {
+    const eventBuilder = new AutonomyEventBuilder(ports());
+    const eightyMultiUnitGraphemes = '😀'.repeat(80);
+    const accepted = eventBuilder.encounter(projection(), {
+      initiatorId: pets[0]!.id,
+      responderId: pets[1]!.id,
+      opening: eightyMultiUnitGraphemes,
+      reply: 'Hi',
+      animation: 'happy',
+    });
+
+    expect(accepted[2]).toMatchObject({
+      type: 'resident.spoke',
+      payload: { text: eightyMultiUnitGraphemes },
+    });
+    expect(() =>
+      eventBuilder.encounter(projection(), {
+        initiatorId: pets[0]!.id,
+        responderId: pets[1]!.id,
+        opening: '😀'.repeat(81),
+        reply: 'Hi',
+        animation: 'happy',
+      }),
+    ).toThrow(/80 grapheme/i);
+    expect(() =>
+      eventBuilder.encounter(projection(), {
+        initiatorId: pets[0]!.id,
+        responderId: pets[1]!.id,
+        opening: `a${'\u0301'.repeat(280)}`,
+        reply: 'Hi',
+        animation: 'happy',
+      }),
+    ).toThrow(/280|opening/i);
   });
 
   it('visits a validated zone entrance with one actor-only moved event', () => {
@@ -304,12 +339,7 @@ describe('AutonomyEventBuilder', () => {
     }
   });
 
-  it('emits an absolute stable affinity only when the deterministic delta is nonzero', () => {
-    expect(autonomyRelationshipDelta(0.4, 'happy')).toBe(0.05);
-    expect(autonomyRelationshipDelta(0.98, 'curious')).toBe(0.02);
-    expect(autonomyRelationshipDelta(1, 'sit')).toBe(0);
-    expect(autonomyRelationshipDelta(0.4, 'confused')).toBe(0);
-
+  it('changes affinity for every accepted play regardless of animation and omits a zero delta', () => {
     const capped = new AutonomyEventBuilder(ports()).encounter(
       projection({ affinity: 1 }),
       {
@@ -331,9 +361,10 @@ describe('AutonomyEventBuilder', () => {
     expect(capped.some(({ type }) => type === 'relationship.changed')).toBe(
       false,
     );
-    expect(confused.some(({ type }) => type === 'relationship.changed')).toBe(
-      false,
-    );
+    expect(confused.at(-1)).toMatchObject({
+      type: 'relationship.changed',
+      payload: { affinity: 0.05 },
+    });
     expect(capped.at(-1)?.type).toBe('residents.played');
   });
 
@@ -347,6 +378,9 @@ describe('AutonomyEventBuilder', () => {
     ['empty reply', { reply: '' }, /reply|text/i],
     ['long reply', { reply: 'x'.repeat(81) }, /reply|80/i],
     ['long follow-up', { followUp: 'x'.repeat(81) }, /follow|80/i],
+    ['idle animation', { animation: 'idle' }, /animation/i],
+    ['walk animation', { animation: 'walk' }, /animation/i],
+    ['sleep animation', { animation: 'sleep' }, /animation/i],
     ['invalid animation', { animation: 'dance' }, /animation/i],
   ])(
     'rejects %s encounter input before using ports',

@@ -24,7 +24,7 @@ import { createAuthoredPetDefinitions } from './residents.js';
 const GraphemeSegmenter = new Intl.Segmenter('en', {
   granularity: 'grapheme',
 });
-const SpeechSchema = z
+export const ResidentSpeechSchema = z
   .string()
   .trim()
   .min(1)
@@ -33,13 +33,20 @@ const SpeechSchema = z
     message: 'Speech must contain at most 80 grapheme clusters',
   });
 
+export const EncounterAnimationSchema = z.enum([
+  'curious',
+  'happy',
+  'sit',
+  'confused',
+]);
+
 export const ResidentDecisionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('rest'), speech: SpeechSchema }).strict(),
+  z.object({ kind: z.literal('rest'), speech: ResidentSpeechSchema }).strict(),
   z
     .object({
       kind: z.literal('candidate'),
       candidateIndex: z.number().int().min(0).max(15),
-      speech: SpeechSchema,
+      speech: ResidentSpeechSchema,
     })
     .strict(),
 ]);
@@ -47,8 +54,8 @@ export type ResidentDecision = z.infer<typeof ResidentDecisionSchema>;
 
 export const EncounterReplySchema = z
   .object({
-    speech: SpeechSchema,
-    animation: z.enum(['curious', 'happy', 'sit', 'confused']),
+    speech: ResidentSpeechSchema,
+    animation: EncounterAnimationSchema,
     followUpRequested: z.boolean(),
   })
   .strict();
@@ -155,15 +162,15 @@ const ResidentDecisionContextSchema = z
 const ResidentResponseContextSchema = z
   .object({
     ...SharedContextFields,
-    opening: SpeechSchema,
+    opening: ResidentSpeechSchema,
     initiatorId: IdentifierSchema,
   })
   .strict();
 const ResidentFollowUpContextSchema = z
   .object({
     ...SharedContextFields,
-    opening: SpeechSchema,
-    reply: SpeechSchema,
+    opening: ResidentSpeechSchema,
+    reply: ResidentSpeechSchema,
     responderId: IdentifierSchema,
   })
   .strict();
@@ -516,7 +523,7 @@ function fallbackSpeech(pet: PetDefinition, followUp: boolean): string {
   const catchphrase = pet.voice.catchphrases[followUp ? 1 : 0]?.trim();
   const residentSpecific = `${pet.displayName} pauses to consider the next step.`;
   const bounded = truncateGraphemes(catchphrase || residentSpecific, 80, 280);
-  return SpeechSchema.parse(
+  return ResidentSpeechSchema.parse(
     bounded || truncateGraphemes(residentSpecific, 80, 280),
   );
 }
