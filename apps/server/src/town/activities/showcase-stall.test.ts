@@ -1,6 +1,7 @@
-import { TownEventSchema } from '@cat-house/shared';
+import { TownEventSchema, TownProjectionSchema } from '@cat-house/shared';
 import { describe, expect, it } from 'vitest';
 import { TownActivityRegistry, type EmittedActivityResult } from '../activity-registry.js';
+import { reduceTownEvent } from '../event-reducer.js';
 import { FORTUNE_ACTIVITY_DEFINITION } from './fortune.js';
 import { buildShowcasePromotion, createShowcaseStallDefinition, type ShowcaseState } from './showcase-stall.js';
 
@@ -82,6 +83,37 @@ describe('showcase stall', () => {
     expect(registry.resultEvents('showcase-stall', state, context(emitted))).toEqual([]);
     state = transition(registry, state, { type: 'close' });
     expect(registry.resultEvents('showcase-stall', state, context(emitted)).at(-1)?.type).toBe('stall.closed');
+  });
+
+  it('preserves missing event prerequisites when closing and reduces the full chain', () => {
+    const definition = createShowcaseStallDefinition({ pet, sessionId: 'session-1', items: [item], availableResidentIds: ['visitor'] });
+    const registry = new TownActivityRegistry().register(definition);
+    let state = registry.createInitialState('showcase-stall', context()) as Readonly<ShowcaseState>;
+    state = transition(registry, state, { type: 'setup', theme: 'cozy', signStyle: 'chalkboard', showcaseItemIds: ['item-1'], openDurationMs: 60_000 });
+    state = transition(registry, state, { type: 'open' });
+    state = transition(registry, state, { type: 'greet', visitorResidentId: 'visitor', interactionId: 'visit-1' });
+    state = transition(registry, state, { type: 'close' });
+
+    const events = registry.resultEvents('showcase-stall', state, context());
+    expect(events.map(event => event.type)).toEqual(['stall.opened', 'stall.visited', 'stall.closed']);
+    expect(events.map(event => event.sequence)).toEqual([1, 2, 3]);
+    expect(events.map(event => event.baseVersion)).toEqual([0, 1, 2]);
+    expect(new Set(events.map(event => event.id)).size).toBe(3);
+
+    const residentPet = (id: string, source: 'player-pet' | 'resident') => ({ ...pet, id: `${id}-pet`, displayName: id, spriteId: `${id}-sprite`, source });
+    let projection = TownProjectionSchema.parse({ sessionId: 'session-1', version: 0, lastEventSequence: 0, residents: [
+      { residentId: 'owner', pet: residentPet('owner', 'player-pet'), position: { x: 1, y: 1 }, zoneId: 'market', availability: 'available' },
+      { residentId: 'visitor', pet: residentPet('visitor', 'resident'), position: { x: 2, y: 1 }, zoneId: 'market', availability: 'available' },
+    ], relationships: [], modifications: [], activities: [] });
+    projection = reduceTownEvent(projection, events[0]!);
+    expect(projection.activities[0]?.participantIds).toEqual(['owner']);
+    const visitor = projection.residents.find(resident => resident.residentId === 'visitor');
+    expect(visitor).toMatchObject({ availability: 'available' });
+    expect(visitor).not.toHaveProperty('activityInstanceId');
+    projection = reduceTownEvent(projection, events[1]!);
+    projection = reduceTownEvent(projection, events[2]!);
+    expect(projection.activities).toEqual([]);
+    expect(registry.resultEvents('showcase-stall', state, context(events.map((event, index) => ({ activityInstanceId: 'stall-1', eventType: event.type, factKey: ['stall-opened', 'stall-visited-visitor-visit-1', 'stall-closed'][index]!, eventId: event.id })) as EmittedActivityResult[]))).toEqual([]);
   });
 
   it('registers independently from fortune in a distinct zone', () => {

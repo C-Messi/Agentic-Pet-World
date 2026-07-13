@@ -56,7 +56,7 @@ export function createShowcaseStallDefinition(source: unknown): TownActivityDefi
     },
     resultEvents: (state, context) => {
       assertContext(state, context); const emitted = new Set(context.emittedResults.map(x => x.factKey)); const facts: { key: string; type: 'stall.opened' | 'stall.visited' | 'stall.closed'; participants: string[]; payload: object }[] = [];
-      if (state.phase === 'open' && !emitted.has('stall-opened')) facts.push({ key: 'stall-opened', type: 'stall.opened', participants: [state.operatorResidentId], payload: { stallId: state.stallId, showcaseItemIds: state.showcaseItemIds } });
+      if ((state.phase === 'open' || state.phase === 'closing') && !emitted.has('stall-opened')) facts.push({ key: 'stall-opened', type: 'stall.opened', participants: [state.operatorResidentId], payload: { stallId: state.stallId, showcaseItemIds: state.showcaseItemIds } });
       for (const interaction of state.interactions) { const key = `stall-visited-${interaction.visitorResidentId}-${interaction.id}`; if (!emitted.has(key)) facts.push({ key, type: 'stall.visited', participants: [state.operatorResidentId, interaction.visitorResidentId], payload: { stallId: state.stallId, visitorResidentId: interaction.visitorResidentId } }); }
       if (state.phase === 'closing' && !emitted.has('stall-closed')) facts.push({ key: 'stall-closed', type: 'stall.closed', participants: [state.operatorResidentId], payload: { stallId: state.stallId } });
       return facts.map((f, i) => TownEventSchema.parse({ id: context.nextEventId(), sessionId: context.sessionId, sequence: context.lastEventSequence + i + 1, baseVersion: context.baseVersion + i, type: f.type, zoneId: 'market', participantIds: f.participants, timestamp: context.now, payload: f.payload }));
@@ -64,9 +64,9 @@ export function createShowcaseStallDefinition(source: unknown): TownActivityDefi
     validateResultEvent: (event, state, context) => {
       if (event.type !== 'stall.opened' && event.type !== 'stall.visited' && event.type !== 'stall.closed') return false;
       if (event.zoneId !== 'market' || event.payload.stallId !== state.stallId || event.sessionId !== context.sessionId) return false;
-      if (event.type === 'stall.opened') return state.phase === 'open' && exact(event.participantIds, [state.operatorResidentId]) && exact(event.payload.showcaseItemIds, state.showcaseItemIds);
+      if (event.type === 'stall.opened') return (state.phase === 'open' || state.phase === 'closing') && exact(event.participantIds, [state.operatorResidentId]) && exact(event.payload.showcaseItemIds, state.showcaseItemIds);
       if (event.type === 'stall.closed') return state.phase === 'closing' && exact(event.participantIds, [state.operatorResidentId]);
-      return state.phase === 'open' && event.payload.visitorResidentId !== state.operatorResidentId && exact(event.participantIds, [state.operatorResidentId, event.payload.visitorResidentId]) && state.interactions.some(interaction => interaction.visitorResidentId === event.payload.visitorResidentId);
+      return (state.phase === 'open' || state.phase === 'closing') && event.payload.visitorResidentId !== state.operatorResidentId && exact(event.participantIds, [state.operatorResidentId, event.payload.visitorResidentId]) && state.interactions.some(interaction => interaction.visitorResidentId === event.payload.visitorResidentId);
     },
   };
   return Object.freeze(definition);
