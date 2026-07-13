@@ -257,6 +257,117 @@ describe('pet town storage', () => {
       now: laterTimestamp,
       leaseExpiresAt: '2026-07-12T08:32:00.000Z',
     })).toEqual({ kind: 'complete', response });
+
+    database.prepare(
+      `UPDATE town_agent_pulses
+       SET result_json = ?
+       WHERE session_id = ? AND pulse_id = ?`,
+    ).run(
+      JSON.stringify({ ...response, projection: projection('session-2') }),
+      'session-1',
+      'pulse-1',
+    );
+    expect(() => repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-3',
+      now: laterTimestamp,
+      leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+    })).toThrow(/session/i);
+  });
+
+  it('binds a completed pulse response to its claimed session', () => {
+    const repository = new TownPulseRepository(database);
+    const response = pulseResponse();
+    repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    });
+
+    expect(() => repository.complete(
+      'session-1',
+      'pulse-1',
+      'lease-1',
+      { ...response, projection: projection('session-2') },
+      laterTimestamp,
+    )).toThrow(/session/i);
+    expect(
+      database.prepare(
+        `SELECT status, result_json FROM town_agent_pulses
+         WHERE session_id = ? AND pulse_id = ?`,
+      ).get('session-1', 'pulse-1'),
+    ).toEqual({ status: 'pending', result_json: null });
+
+    repository.complete('session-1', 'pulse-1', 'lease-1', response, laterTimestamp);
+    expect(repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-2',
+      now: laterTimestamp,
+      leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+    })).toEqual({ kind: 'complete', response });
+  });
+
+  it('requires every new or takeover lease to expire in the future', () => {
+    const repository = new TownPulseRepository(database);
+    const invalidClaims = [
+      { leaseToken: 'lease-equal-1', leaseExpiresAt: timestamp },
+      { leaseToken: 'lease-equal-2', leaseExpiresAt: timestamp },
+      { leaseToken: 'lease-equal-3', leaseExpiresAt: timestamp },
+      { leaseToken: 'lease-past', leaseExpiresAt: '2026-07-12T08:29:00.000Z' },
+    ];
+
+    for (const invalid of invalidClaims) {
+      expect(() => repository.claim({
+        sessionId: 'session-1',
+        pulseId: 'pulse-invalid',
+        baseVersion: 0,
+        now: timestamp,
+        ...invalid,
+      })).toThrow(/future/i);
+    }
+    expect(
+      database.prepare(
+        'SELECT COUNT(*) AS count FROM town_agent_pulses WHERE pulse_id = ?',
+      ).get('pulse-invalid'),
+    ).toEqual({ count: 0 });
+
+    repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-takeover',
+      baseVersion: 0,
+      leaseToken: 'old-lease',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    });
+    expect(() => repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-takeover',
+      baseVersion: 0,
+      leaseToken: 'invalid-takeover',
+      now: laterTimestamp,
+      leaseExpiresAt: laterTimestamp,
+    })).toThrow(/future/i);
+    expect(
+      database.prepare(
+        `SELECT lease_token FROM town_agent_pulses
+         WHERE session_id = ? AND pulse_id = ?`,
+      ).get('session-1', 'pulse-takeover'),
+    ).toEqual({ lease_token: 'old-lease' });
+    expect(repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-takeover',
+      baseVersion: 0,
+      leaseToken: 'valid-takeover',
+      now: laterTimestamp,
+      leaseExpiresAt: '2026-07-12T08:32:00.000Z',
+    })).toEqual({ kind: 'claimed' });
   });
 
   it('atomically takes over an expired pulse lease', () => {
@@ -416,6 +527,32 @@ describe('pet town storage', () => {
        SET result_json = ?
        WHERE session_id = ? AND pulse_id = ?`,
     ).run('{not-json', 'session-1', 'pulse-1')).toThrow();
+  });
+
+  it('rejects corrupt scalar pulse columns before using them', () => {
+    const repository = new TownPulseRepository(database);
+    repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-1',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    });
+    database.prepare(
+      `UPDATE town_agent_pulses
+       SET lease_expires_at = ?
+       WHERE session_id = ? AND pulse_id = ?`,
+    ).run('not-a-timestamp', 'session-1', 'pulse-1');
+
+    expect(() => repository.claim({
+      sessionId: 'session-1',
+      pulseId: 'pulse-1',
+      baseVersion: 0,
+      leaseToken: 'lease-2',
+      now: timestamp,
+      leaseExpiresAt: laterTimestamp,
+    })).toThrow(ZodError);
   });
 
   it('enforces idempotent event IDs and rejects sequence collisions', () => {

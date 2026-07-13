@@ -1,4 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -42,6 +44,33 @@ const eventPayloadSchema = z
     text: z.string().min(1),
   })
   .strict();
+
+async function waitForFiles(
+  paths: readonly string[],
+  children: readonly ChildProcess[],
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!paths.every((path) => existsSync(path))) {
+    const failedChild = children.find(
+      (child) => child.exitCode !== null || child.signalCode !== null,
+    );
+    if (failedChild !== undefined) {
+      throw new Error('Migration child exited before reaching the start barrier');
+    }
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for migration children');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function childResult(child: ChildProcess): Promise<{ code: number | null; stderr: string }> {
+  let stderr = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const [code] = await once(child, 'exit') as [number | null];
+  return { code, stderr };
+}
 
 describe('SQLite storage', () => {
   let directory: string;
@@ -95,6 +124,76 @@ describe('SQLite storage', () => {
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
     ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
   });
+
+  it('serializes concurrent migration runners across processes', async () => {
+    const childScript = `
+      import { existsSync, writeFileSync } from 'node:fs';
+      import Database from 'better-sqlite3';
+      import { runMigrations } from ${JSON.stringify(new URL('./migrations.ts', import.meta.url).href)};
+      writeFileSync(process.env.READY_PATH, '');
+      while (!existsSync(process.env.START_PATH)) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      const database = new Database(process.env.DATABASE_PATH);
+      database.pragma('foreign_keys = ON');
+      runMigrations(database);
+      database.close();
+    `;
+
+    for (let round = 0; round < 3; round += 1) {
+      const concurrentPath = join(directory, `concurrent-${round}.sqlite`);
+      const startPath = join(directory, `start-${round}`);
+      const readyPaths = [
+        join(directory, `ready-${round}-1`),
+        join(directory, `ready-${round}-2`),
+      ];
+      const children = readyPaths.map((readyPath) =>
+        spawn(
+          process.execPath,
+          ['--import', 'tsx', '--input-type=module', '--eval', childScript],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              DATABASE_PATH: concurrentPath,
+              READY_PATH: readyPath,
+              START_PATH: startPath,
+            },
+            stdio: ['ignore', 'ignore', 'pipe'],
+          },
+        ),
+      );
+      const results = children.map((child) => childResult(child));
+
+      try {
+        await waitForFiles(readyPaths, children);
+        writeFileSync(startPath, 'start');
+        expect(await Promise.all(results)).toEqual([
+          { code: 0, stderr: '' },
+          { code: 0, stderr: '' },
+        ]);
+      } finally {
+        for (const child of children) {
+          if (child.exitCode === null && child.signalCode === null) child.kill();
+        }
+      }
+
+      const migrated = new Database(concurrentPath, { readonly: true });
+      try {
+        expect(
+          migrated.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
+        ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+        expect(
+          migrated.prepare(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name = 'town_agent_pulses'`,
+          ).get(),
+        ).toEqual({ name: 'town_agent_pulses' });
+      } finally {
+        migrated.close();
+      }
+    }
+  }, 15_000);
 
   it('upgrades a populated v1 action_runs table without losing data', () => {
     const legacyPath = join(directory, 'legacy-v1.sqlite');

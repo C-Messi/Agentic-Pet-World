@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { StorageDatabase } from '../database.js';
 import {
   IdentifierSchema,
+  TimestampSchema,
   normalizeTimestamp,
   parseJsonCompatible,
   serializeJsonCompatible,
@@ -14,14 +15,19 @@ import {
 
 const VersionSchema = z.number().int().nonnegative();
 
-interface TownPulseRow {
-  session_id: string;
-  pulse_id: string;
-  base_version: number;
-  status: 'pending' | 'complete';
-  lease_expires_at: string;
-  result_json: string | null;
-}
+const TownPulseRowSchema = z
+  .object({
+    session_id: IdentifierSchema,
+    pulse_id: IdentifierSchema,
+    base_version: VersionSchema,
+    status: z.enum(['pending', 'complete']),
+    lease_expires_at: TimestampSchema.transform((value) =>
+      normalizeTimestamp(value),
+    ),
+    result_json: z.string().nullable(),
+  })
+  .strict();
+type TownPulseRow = z.infer<typeof TownPulseRowSchema>;
 
 export interface TownPulseClaim {
   sessionId: string;
@@ -47,6 +53,9 @@ export class TownPulseRepository {
     const leaseToken = IdentifierSchema.parse(claim.leaseToken);
     const now = normalizeTimestamp(claim.now);
     const leaseExpiresAt = normalizeTimestamp(claim.leaseExpiresAt);
+    if (leaseExpiresAt <= now) {
+      throw new Error('Town pulse lease must expire in the future');
+    }
 
     const insert = this.database
       .prepare(
@@ -109,8 +118,12 @@ export class TownPulseRepository {
     const parsedSessionId = IdentifierSchema.parse(sessionId);
     const parsedPulseId = IdentifierSchema.parse(pulseId);
     const parsedLeaseToken = IdentifierSchema.parse(leaseToken);
+    const parsedResponse = TownPulseResponseSchema.parse(response);
+    if (parsedResponse.projection.sessionId !== parsedSessionId) {
+      throw new Error('Town pulse response session does not match its claim');
+    }
     const resultJson = serializeJsonCompatible(
-      response,
+      parsedResponse,
       TownPulseResponseSchema,
     );
     const timestamp = normalizeTimestamp(completedAt);
@@ -145,13 +158,13 @@ export class TownPulseRepository {
          FROM town_agent_pulses
          WHERE session_id = ? AND pulse_id = ?`,
       )
-      .get(sessionId, pulseId) as TownPulseRow | undefined;
+      .get(sessionId, pulseId);
     if (row === undefined) {
       throw new Error(
         `Town pulse disappeared while claiming: ${sessionId}/${pulseId}`,
       );
     }
-    return row;
+    return TownPulseRowSchema.parse(row);
   }
 
   private assertBaseVersion(row: TownPulseRow, baseVersion: number): void {
@@ -171,9 +184,18 @@ export class TownPulseRepository {
         `Completed town pulse is missing its result: ${row.session_id}/${row.pulse_id}`,
       );
     }
+    const response = parseJsonCompatible(
+      row.result_json,
+      TownPulseResponseSchema,
+    );
+    if (response.projection.sessionId !== row.session_id) {
+      throw new Error(
+        'Stored town pulse result session does not match its row',
+      );
+    }
     return {
       kind: 'complete',
-      response: parseJsonCompatible(row.result_json, TownPulseResponseSchema),
+      response,
     };
   }
 }

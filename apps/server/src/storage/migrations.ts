@@ -41,36 +41,35 @@ export function runMigrations(
   database: StorageDatabase,
   pendingMigrations = loadMigrations(),
 ): void {
-  database.transaction(() => {
-    database.exec(`
+  database.pragma('busy_timeout = 5000');
+  database
+    .transaction(() => {
+      database.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         applied_at TEXT NOT NULL
       )
     `);
-  })();
 
-  const appliedVersions = new Set(
-    database
-      .prepare('SELECT version FROM schema_migrations')
-      .all()
-      .map((row) => (row as { version: number }).version),
-  );
+      const appliedVersions = new Set(
+        database
+          .prepare('SELECT version FROM schema_migrations')
+          .all()
+          .map((row) => (row as { version: number }).version),
+      );
 
-  const applyMigration = database.transaction((migration: Migration) => {
-    database.exec(migration.sql);
-    database
-      .prepare(
-        `INSERT INTO schema_migrations (version, name, applied_at)
-         VALUES (?, ?, ?)`,
-      )
-      .run(migration.version, migration.name, new Date().toISOString());
-  });
-
-  for (const migration of pendingMigrations) {
-    if (!appliedVersions.has(migration.version)) {
-      applyMigration(migration);
-    }
-  }
+      for (const migration of pendingMigrations) {
+        if (!appliedVersions.has(migration.version)) {
+          database.exec(migration.sql);
+          database
+            .prepare(
+              `INSERT INTO schema_migrations (version, name, applied_at)
+             VALUES (?, ?, ?)`,
+            )
+            .run(migration.version, migration.name, new Date().toISOString());
+        }
+      }
+    })
+    .immediate();
 }
