@@ -5,7 +5,11 @@ import {
   type Page,
 } from '@playwright/test';
 
-import { inspectCanvas, inspectTownCanvas } from './canvas-inspection';
+import {
+  inspectCanvas,
+  inspectTownCanvas,
+  MAX_TOWN_SPRITE_FRAME_DIFF,
+} from './canvas-inspection';
 
 interface Metadata {
   primaryApiUrl: string;
@@ -85,8 +89,12 @@ test('pet town vertical slice persists activities, recovery, and a sourced first
     .not.toBe(room.hash);
   const visibleTown = await inspectTownCanvas(page);
   expect(visibleTown.opaqueRatio).toBeGreaterThan(0.95);
-  expect(visibleTown.variedRatio).toBeGreaterThan(0.45);
-  expect(visibleTown.distinctColorBuckets).toBeGreaterThan(20);
+  expect(visibleTown.variedRatio).toBeGreaterThan(0.55);
+  expect(visibleTown.distinctColorBuckets).toBeGreaterThan(28);
+  await expect(page.locator('.game-surface canvas')).toHaveScreenshot(
+    'layered-town-desktop.png',
+    { maxDiffPixels: MAX_TOWN_SPRITE_FRAME_DIFF },
+  );
   await page.getByLabel('跟随桌宠').selectOption('resident-huihui');
   await expect(page.getByLabel('跟随桌宠')).toHaveValue('resident-huihui');
   await page.screenshot({

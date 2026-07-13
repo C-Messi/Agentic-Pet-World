@@ -1,5 +1,8 @@
 import type { Page } from '@playwright/test';
 
+// Five resident walk frames vary by 1,117 pixels; keep limited headroom below layout-scale changes.
+export const MAX_TOWN_SPRITE_FRAME_DIFF = 1_500;
+
 export interface PixelBounds {
   minX: number;
   minY: number;
@@ -38,6 +41,7 @@ export interface TownCanvasInspection {
   opaqueRatio: number;
   variedRatio: number;
   distinctColorBuckets: number;
+  variedBounds: PixelBounds | null;
   hash: number;
 }
 
@@ -67,13 +71,25 @@ export async function inspectTownCanvas(
       const buckets = new Set<number>();
       let opaque = 0;
       let varied = 0;
+      let variedMinX = canvas.width;
+      let variedMinY = canvas.height;
+      let variedMaxX = -1;
+      let variedMaxY = -1;
       let hash = 2_166_136_261;
       for (let pixel = 0, offset = 0; pixel < total; pixel += 1, offset += 4) {
         const r = pixels[offset] ?? 0;
         const g = pixels[offset + 1] ?? 0;
         const b = pixels[offset + 2] ?? 0;
         if ((pixels[offset + 3] ?? 0) > 0) opaque += 1;
-        if (r !== first[0] || g !== first[1] || b !== first[2]) varied += 1;
+        if (r !== first[0] || g !== first[1] || b !== first[2]) {
+          const x = pixel % canvas.width;
+          const y = Math.floor(pixel / canvas.width);
+          varied += 1;
+          variedMinX = Math.min(variedMinX, x);
+          variedMinY = Math.min(variedMinY, y);
+          variedMaxX = Math.max(variedMaxX, x);
+          variedMaxY = Math.max(variedMaxY, y);
+        }
         if (pixel % 31 === 0)
           buckets.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
         if (pixel % 97 === 0) {
@@ -87,6 +103,15 @@ export async function inspectTownCanvas(
         opaqueRatio: opaque / total,
         variedRatio: varied / total,
         distinctColorBuckets: buckets.size,
+        variedBounds:
+          varied === 0
+            ? null
+            : {
+                minX: variedMinX,
+                minY: variedMinY,
+                maxX: variedMaxX,
+                maxY: variedMaxY,
+              },
         hash,
       };
     });
